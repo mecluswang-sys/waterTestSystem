@@ -89,12 +89,16 @@ namespace WaterTest
 
             qreal pumpToValveLeadOffset = 100;
             qreal pumpToValveTrailOffset = 80;
-            qreal valveToSensorVerticalStart = 30;
+            qreal valveToSensorVerticalStart = 60;
             qreal valveToSensorVerticalEnd = 40;
             qreal valveToSensor3Horizontal = 60;
-            qreal sensor3BranchStartX = 40;
+            qreal sensor3BranchStartX = 70;
             qreal valveToTankHorizontal = 60;
-            qreal tankEntryOffsetX = 80;
+            qreal tankEntryOffsetX = 100;
+
+            // 室外水池配置
+            QPointF outdoorPoolBase{30, 280};   // 紧靠最左侧
+            qreal outdoorPoolToPumpOffset = 60; // 室外水池到泵的管路偏移
 
             QPointF pump1() const { return pumpBase; }
             QPointF pump2() const { return QPointF(pumpBase.x(), pumpBase.y() + pumpRowSpacing); }
@@ -104,6 +108,7 @@ namespace WaterTest
             QPointF sensor2() const { return QPointF(valve2().x(), valve2().y() + sensorVerticalSpacing); }
             QPointF sensor3() const { return QPointF(valve1().x() + sensor3HorizontalOffset, valve1().y() - sensor3VerticalOffset); }
             QPointF tank() const { return QPointF(sensor3().x() + tankHorizontalDistance, sensor3().y() + tankVerticalOffset); }
+            QPointF outdoorPool() const { return outdoorPoolBase; }
 
             qreal pumpHalfWidth() const { return (kPumpItemWidth * kPumpScale) / 2; }
             qreal valveHalfWidth() const { return (kValveItemWidth * kValveScale) / 2; }
@@ -123,6 +128,20 @@ namespace WaterTest
 
             static constexpr qreal width() { return 110; }
             static constexpr qreal height() { return 140; }
+
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (change == ItemPositionChange && scene())
+                {
+                    // 网格吸附（10像素网格）
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
             qreal x() const { return pos().x(); }
             qreal y() const { return pos().y(); }
 
@@ -145,6 +164,14 @@ namespace WaterTest
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
+
+                // 选中状态高亮边框
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 10, 10);
+                }
 
                 // 对齐 docs/UI-design PumpComponent：扁平深色结构 + #666 描边 + 状态灯
                 const QColor statusColor = m_running ? kUiGreen : kUiBorder;
@@ -253,6 +280,20 @@ namespace WaterTest
             qreal x() const { return pos().x(); }
             qreal y() const { return pos().y(); }
 
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (change == ItemPositionChange && scene())
+                {
+                    // 网格吸附（10像素网格）
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
+
             void setOpen(bool open)
             {
                 if (m_open == open)
@@ -272,6 +313,14 @@ namespace WaterTest
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
+
+                // 选中状态高亮边框
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 10, 10);
+                }
 
                 // 对齐 docs/UI-design ValveComponent：菱形阀体 + 执行器 + 位置指示
                 const QColor borderColor = kUiBorder;
@@ -375,6 +424,20 @@ namespace WaterTest
 
             static constexpr qreal width() { return 104; }
             static constexpr qreal height() { return 104; }
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (change == ItemPositionChange && scene())
+                {
+                    // 网格吸附（10像素网格）
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
+
             qreal x() const { return pos().x(); }
             qreal y() const { return pos().y(); }
 
@@ -389,6 +452,14 @@ namespace WaterTest
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
+
+                // 选中状态高亮边框
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 8, 8);
+                }
 
                 // 对齐 docs/UI-design SensorComponent：卡片式传感器 + 虚线引线 + 类型色圆点
                 const QColor typeColor = kUiPurple; // pressure
@@ -463,6 +534,20 @@ namespace WaterTest
 
             static constexpr qreal width() { return 160; }
             static constexpr qreal height() { return 240; }
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (change == ItemPositionChange && scene())
+                {
+                    // 网格吸附（10像素网格）
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
+
             qreal x() const { return pos().x(); }
             qreal y() const { return pos().y(); }
 
@@ -494,6 +579,14 @@ namespace WaterTest
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
+
+                // 选中状态高亮边框
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 18, 18);
+                }
 
                 // 对齐 docs/UI-design TankComponent：圆柱罐体（顶/壳/底）+ 半透明液位
                 const QColor borderColor = kUiBorder;
@@ -581,6 +674,228 @@ namespace WaterTest
             double m_fillPercent;
             bool m_filling;
             double m_pressureMPa;
+        };
+
+        // ========== 室外水池 ==========
+        class OutdoorPoolItem : public QGraphicsItem
+        {
+        public:
+            explicit OutdoorPoolItem(const QString &name)
+                : m_name(name), m_waterLevel(80.0)
+            {
+                setCacheMode(DeviceCoordinateCache);
+            }
+
+            QRectF boundingRect() const override { return QRectF(-80, -100, 160, 200); }
+
+            static constexpr qreal width() { return 160; }
+            static constexpr qreal height() { return 200; }
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (change == ItemPositionChange && scene())
+                {
+                    // 网格吸附（10像素网格）
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
+
+            void setWaterLevel(double level)
+            {
+                level = std::clamp(level, 0.0, 100.0);
+                if (qFuzzyCompare(m_waterLevel, level))
+                    return;
+                m_waterLevel = level;
+                update();
+            }
+
+            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
+            {
+                p->setRenderHint(QPainter::Antialiasing, true);
+
+                // 选中状态高亮边框
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 12, 12);
+                }
+
+                const QColor borderColor = kUiBorder;
+                const QColor waterColor = QColor("#0af");
+
+                // 轻阴影
+                p->setPen(Qt::NoPen);
+                p->setBrush(QColor(0, 0, 0, 90));
+                p->drawRoundedRect(QRectF(-78, -98, 156, 196).translated(3, 4), 12, 12);
+
+                // 水池主体（矩形池体）
+                const QRectF poolBody(-70, -90, 140, 160);
+                p->setBrush(kUiPanel);
+                p->setPen(QPen(borderColor, 3));
+                p->drawRoundedRect(poolBody, 8, 8);
+
+                // 水位（半透明蓝色）
+                const double level = std::clamp(m_waterLevel, 0.0, 100.0);
+                const double fillH = poolBody.height() * (level / 100.0);
+                QRectF water(poolBody.left() + 3, poolBody.bottom() - fillH, poolBody.width() - 6, fillH);
+                p->save();
+                p->setClipRect(poolBody);
+                p->setBrush(QColor(waterColor.red(), waterColor.green(), waterColor.blue(), 120));
+                p->setPen(Qt::NoPen);
+                p->drawRect(water);
+                // 水面线
+                p->setPen(QPen(waterColor, 2));
+                p->drawLine(QPointF(water.left(), water.top()), QPointF(water.right(), water.top()));
+                p->restore();
+
+                // 出水口（两个出口在右侧）
+                p->setBrush(QColor("#444"));
+                p->setPen(QPen(borderColor, 2));
+                // 上出口（到P1）
+                p->drawRect(QRectF(poolBody.right(), poolBody.top() + 30, 18, 10));
+                // 下出口（到P2）
+                p->drawRect(QRectF(poolBody.right(), poolBody.bottom() - 40, 18, 10));
+
+                // 底座
+                p->setBrush(QColor("#333"));
+                p->setPen(QPen(kUiBorder, 2));
+                p->drawRect(QRectF(-75, poolBody.bottom(), 150, 8));
+
+                // 文本
+                p->setPen(kUiText);
+                QFont f = p->font();
+                f.setPointSize(10);
+                f.setBold(true);
+                p->setFont(f);
+                p->drawText(QRectF(-80, 82, 160, 18), Qt::AlignCenter, m_name);
+
+                QFont f2 = p->font();
+                f2.setPointSize(8);
+                f2.setBold(false);
+                f2.setFamily("Consolas");
+                p->setFont(f2);
+                p->setPen(kUiTextMuted);
+                p->drawText(QRectF(-80, 68, 160, 16), Qt::AlignCenter,
+                            QString("水位:%1%%").arg(QString::number(level, 'f', 0)));
+            }
+
+        private:
+            QString m_name;
+            double m_waterLevel;
+        };
+
+        // ========== 动态管道（跟随图元移动） ==========
+        class DynamicPipe : public QGraphicsItem
+        {
+        public:
+            DynamicPipe(QGraphicsItem *startItem, QPointF startOffset,
+                        QGraphicsItem *endItem, QPointF endOffset,
+                        const QList<QPointF> &waypoints = {})
+                : m_startItem(startItem), m_startOffset(startOffset),
+                  m_endItem(endItem), m_endOffset(endOffset),
+                  m_waypoints(waypoints), m_flowing(false)
+            {
+                setZValue(-1);
+            }
+
+            QRectF boundingRect() const override
+            {
+                QPointF start = getStartPos();
+                QPointF end = getEndPos();
+                qreal minX = qMin(start.x(), end.x()) - 20;
+                qreal minY = qMin(start.y(), end.y()) - 20;
+                qreal maxX = qMax(start.x(), end.x()) + 20;
+                qreal maxY = qMax(start.y(), end.y()) + 20;
+
+                for (const QPointF &wp : m_waypoints)
+                {
+                    minX = qMin(minX, wp.x() - 20);
+                    minY = qMin(minY, wp.y() - 20);
+                    maxX = qMax(maxX, wp.x() + 20);
+                    maxY = qMax(maxY, wp.y() + 20);
+                }
+
+                return QRectF(minX, minY, maxX - minX, maxY - minY);
+            }
+
+            void setFlowing(bool flowing)
+            {
+                if (m_flowing != flowing)
+                {
+                    m_flowing = flowing;
+                    update();
+                }
+            }
+
+            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
+            {
+                p->setRenderHint(QPainter::Antialiasing, true);
+
+                QPointF start = getStartPos();
+                QPointF end = getEndPos();
+
+                QPen borderPen(QColor("#666"), 12.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+                QPen innerPen(QColor("#2a2a2a"), 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+
+                // 构建路径
+                QPainterPath path;
+                path.moveTo(start);
+
+                if (m_waypoints.isEmpty())
+                {
+                    path.lineTo(end);
+                }
+                else
+                {
+                    for (const QPointF &wp : m_waypoints)
+                    {
+                        path.lineTo(wp);
+                    }
+                    path.lineTo(end);
+                }
+
+                // 绘制管道
+                p->setPen(borderPen);
+                p->drawPath(path);
+                p->setPen(innerPen);
+                p->drawPath(path);
+
+                // 流动提示
+                if (m_flowing)
+                {
+                    QPen flowPen(QColor("#0af"), 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+                    flowPen.setDashPattern({4, 4});
+                    p->setPen(flowPen);
+                    p->drawPath(path);
+                }
+            }
+
+        private:
+            QGraphicsItem *m_startItem;
+            QPointF m_startOffset;
+            QGraphicsItem *m_endItem;
+            QPointF m_endOffset;
+            QList<QPointF> m_waypoints;
+            bool m_flowing;
+
+            QPointF getStartPos() const
+            {
+                if (m_startItem)
+                    return m_startItem->pos() + m_startOffset * m_startItem->scale();
+                return m_startOffset;
+            }
+
+            QPointF getEndPos() const
+            {
+                if (m_endItem)
+                    return m_endItem->pos() + m_endOffset * m_endItem->scale();
+                return m_endOffset;
+            }
         };
 
         class SafetyIndicatorItem : public QGraphicsItem
@@ -792,41 +1107,10 @@ namespace WaterTest
         m_itemPS2 = nullptr;
         m_itemPS3 = nullptr;
         m_itemTank = nullptr;
+        m_itemOutdoorPool = nullptr;
 
-        // 管路笔刷（对齐 docs/UI-design：深灰管道 + #666 描边 + #0af 流动提示色）
-        const QPen pipeBorder(QColor("#666"), 12.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-        const QPen pipeInner(QColor("#2a2a2a"), 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-        QPen pipeFlow(QColor("#0af"), 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
-        pipeFlow.setDashPattern({4, 4});
-
-        // 统一绘制两端带外/内描边与流动提示的管道段
-        auto addPipe = [&](const QPointF &a, const QPointF &b, bool flowing = false)
-        {
-            // 外描边
-            m_scene->addLine(QLineF(a, b), pipeBorder)->setZValue(-2);
-            // 内腔
-            auto *line = m_scene->addLine(QLineF(a, b), pipeInner);
-            line->setZValue(-1);
-            // 流动提示（先不做动画；后续可根据泵运行状态动态开关）
-            if (flowing)
-                m_scene->addLine(QLineF(a, b), pipeFlow)->setZValue(0);
-            return line;
-        };
-
-        // 连续点可以组成折线路径，以便描述分支
-        auto addPipePath = [&](std::initializer_list<QPointF> pts, bool branch = false)
-        {
-            if (pts.size() < 2)
-                return;
-            auto it = pts.begin();
-            QPointF prev = *it;
-            ++it;
-            for (; it != pts.end(); ++it)
-            {
-                addPipe(prev, *it, branch);
-                prev = *it;
-            }
-        };
+        // 清空动态管道
+        m_pipes.clear();
 
         // 关键节点位置（严格对齐 docs/测试准备区流程图.mmd 的拓扑）
         // A1[变频泵1] -->B1[电动阀1]
@@ -847,33 +1131,7 @@ namespace WaterTest
 
         const QPointF ps3 = layout.sensor3();
         const QPointF tank = layout.tank();
-
-        // 管路（先画管线，再放设备）：按拓扑画分支
-        // P1 -> V1
-        const QPointF pump1Outlet(p1.x() + layout.pumpHalfWidth() + layout.pumpToValveLeadOffset, p1.y());
-        const QPointF valve1Inlet(v1.x() - layout.valveHalfWidth() - layout.pumpToValveTrailOffset, v1.y());
-        addPipe(pump1Outlet, valve1Inlet);
-        // V1 -> PS1
-        // addPipe(QPointF(v1.x(), v1.y() + layout.valveToSensorVerticalStart), QPointF(ps1.x(), ps1.y() - layout.valveToSensorVerticalEnd));
-
-        // V1 -> PS3 -> Tank
-        // addPipe(QPointF(v1.x() + layout.valveToSensor3Horizontal, v1.y()), QPointF(v1.x() - layout.sensor3BranchStartX, ps3.y()));
-        addPipePath({QPointF(v1.x() + layout.sensor3BranchStartX, v1.y()),
-                     QPointF(tank.x() - layout.tankEntryOffsetX, v1.y()),
-                     QPointF(tank.x() - layout.tankEntryOffsetX, tank.y())});
-
-        // P2 -> V2
-        const QPointF pump2Outlet(p2.x() + layout.pumpHalfWidth() + layout.pumpToValveLeadOffset, p2.y());
-        const QPointF valve2Inlet(v2.x() - layout.valveHalfWidth() - layout.pumpToValveTrailOffset, v2.y());
-        addPipe(pump2Outlet, valve2Inlet);
-        // V2 -> PS2
-
-        // addPipe(QPointF(v2.x(), v2.y() + layout.valveToSensorVerticalStart), QPointF(ps2.x(), ps2.y() - layout.valveToSensorVerticalEnd));
-
-        // V2 -> Tank（直角到罐入口）
-        addPipePath({QPointF(v2.x(), v2.y()),
-                     QPointF(v2.x() + layout.tankEntryOffsetX, v2.y()),
-                     QPointF(tank.x() - layout.tankEntryOffsetX, tank.y())});
+        const QPointF outdoorPool = layout.outdoorPool();
 
         // 设备图元
         auto *pump1 = new PumpItem("P1 变频泵1");
@@ -932,7 +1190,68 @@ namespace WaterTest
         m_scene->addItem(tankItem);
         m_itemTank = tankItem;
 
+        auto *outdoorPoolItem = new OutdoorPoolItem("室外水池");
+        outdoorPoolItem->setPos(outdoorPool);
+        outdoorPoolItem->setZValue(2);
+        outdoorPoolItem->setScale(kTankScale);
+        m_scene->addItem(outdoorPoolItem);
+        m_itemOutdoorPool = outdoorPoolItem;
+        // ========== 创建动态管道（使用相对偏移量） ==========
+        // 室外水池 -> P1
+        auto *pipePool1 = new DynamicPipe(
+            m_itemOutdoorPool, QPointF(OutdoorPoolItem::width() / 2, -55),
+            m_itemPump1, QPointF(-PumpItem::width() / 2 - 60 / kPumpScale, 0),
+            {});
+        m_scene->addItem(pipePool1);
+        m_pipes.append(pipePool1);
+
+        // 室外水池 -> P2
+        auto *pipePool2 = new DynamicPipe(
+            m_itemOutdoorPool, QPointF(OutdoorPoolItem::width() / 2, 50),
+            m_itemPump2, QPointF(-PumpItem::width() / 2 - 60 / kPumpScale, 0),
+            {});
+        m_scene->addItem(pipePool2);
+        m_pipes.append(pipePool2);
+
+        // P1 -> V1
+        auto *pipe1V1 = new DynamicPipe(
+            m_itemPump1, QPointF(PumpItem::width() / 2 + 100 / kPumpScale, 0),
+            m_itemValve1, QPointF(-ValveItem::width() / 2 - 80 / kValveScale, 0),
+            {});
+        m_scene->addItem(pipe1V1);
+        m_pipes.append(pipe1V1);
+
+        // P2 -> V2
+        auto *pipe2V2 = new DynamicPipe(
+            m_itemPump2, QPointF(PumpItem::width() / 2 + 100 / kPumpScale, 0),
+            m_itemValve2, QPointF(-ValveItem::width() / 2 - 80 / kValveScale, 0),
+            {});
+        m_scene->addItem(pipe2V2);
+        m_pipes.append(pipe2V2);
+
+        // V1 -> Tank
+        auto *pipeV1Tank = new DynamicPipe(
+            m_itemValve1, QPointF(70 / kValveScale, 0),
+            m_itemTank, QPointF(-TankItem::width() / 2 - 100 / kTankScale, 0),
+            {});
+        m_scene->addItem(pipeV1Tank);
+        m_pipes.append(pipeV1Tank);
+
+        // V2 -> Tank
+        auto *pipeV2Tank = new DynamicPipe(
+            m_itemValve2, QPointF(0, 0),
+            m_itemTank, QPointF(-TankItem::width() / 2 - 100 / kTankScale, 0),
+            {});
+        m_scene->addItem(pipeV2Tank);
+        m_pipes.append(pipeV2Tank);
+
+        // 启动管道更新定时器
+        QTimer *pipeTimer = new QTimer(this);
+        connect(pipeTimer, &QTimer::timeout, this, &PreparationPanel::onUpdatePipes);
+        pipeTimer->start(50); // 20 FPS更新管道
+
         // ===== 把“属性显示”挂到左侧节点上（标签随节点移动） =====
+
         // 安全阀指示（贴近两路支线）
         // auto *sv1 = new SafetyIndicatorItem("SV1");
         // sv1->setPos(QPointF(ps1.x() + 10, ps1.y() + 100));
@@ -970,6 +1289,16 @@ namespace WaterTest
         if (!m_clockLabel)
             return;
         m_clockLabel->setText(QDateTime::currentDateTime().toString("yyyy-MM-dd  HH:mm:ss"));
+    }
+
+    void PreparationPanel::onUpdatePipes()
+    {
+        // 强制所有管道重绘以跟随图元移动
+        for (auto *pipe : m_pipes)
+        {
+            if (pipe)
+                pipe->update();
+        }
     }
 
     void PreparationPanel::onReliefValveToggled(bool open)

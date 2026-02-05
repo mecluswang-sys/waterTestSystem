@@ -18,6 +18,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QDateTime>
+#include <QList>
 #include <memory>
 
 class QGraphicsView;
@@ -87,8 +88,12 @@ namespace WaterTest
         QGraphicsItem *m_itemPS2;
         QGraphicsItem *m_itemPS3;
         QGraphicsItem *m_itemTank;
+        QGraphicsItem *m_itemOutdoorPool;
+        // 动态管道
+        QList<QGraphicsItem *> m_pipes;
 
         // 顶部/底部固定区
+        void onUpdatePipes();
         QLabel *m_statusBadge;
         QLabel *m_fillingTimeLabel;
         QProgressBar *m_tankLevelBar;
