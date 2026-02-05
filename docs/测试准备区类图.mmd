@@ -1,0 +1,28 @@
+classDiagram
+    class 变频泵{
+      -string 状态
+      -float 频率
+      -float 电压
+      -float 电流
+      -float 功率
+      -open()
+      -close()
+      -set频率(float 频率)
+    }
+
+    class 电动阀{
+      -string 状态
+      -string 开度
+      -open()
+      -close()
+    }
+
+    class 传感器{
+      +float 压力
+      +float 温度
+    }
+
+    class 分水罐{
+      +float 压力
+      +float 温度
+    }
