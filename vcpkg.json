@@ -1,29 +1,29 @@
 {
-    "name": "water-test-system",
-    "version": "1.0.0",
-    "description": "Water Medium Electromagnetic Valve Test System - PC Host",
-    "dependencies": [
-        "snap7",
-        "sqlite3",
-        {
-            "name": "qtbase",
-            "default-features": false,
-            "features": [
-                "gui",
-                "widgets",
-                "network",
-                "sql",
-                "sql-sqlite"
-            ]
-        },
-        {
-            "name": "qtcharts",
-            "default-features": false
-        },
-        {
-            "name": "qtserialport",
-            "default-features": false
-        }
-    ],
-    "builtin-baseline": "903956eff7cb94774a9e805ff573c000afc43e3e"
+  "name": "water-test-system",
+  "version": "1.0.0",
+  "description": "Water Medium Electromagnetic Valve Test System - PC Host",
+  "dependencies": [
+    "snap7",
+    "sqlite3",
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "gui",
+        "widgets",
+        "network",
+        "sql",
+        "sql-sqlite"
+      ]
+    },
+    {
+      "name": "qtcharts",
+      "default-features": false
+    },
+    {
+      "name": "qtserialport",
+      "default-features": false
+    }
+  ],
+  "builtin-baseline": "fb87e2bb3fe69e16c224989acb5a61349166c782"
 }
