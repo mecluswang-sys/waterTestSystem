@@ -5,6 +5,7 @@
 
 #include "gui/PreparationPanel.h"
 #include "DeviceManager.h"
+#include "ConfigManager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,26 +27,103 @@
 #include <QMouseEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QStyle>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
+#include <QTextStream>
 
 namespace WaterTest
 {
 
     namespace
     {
-        // ===== UI-design 视觉 token（与 docs/UI-design 统一） =====
-        static const QColor kUiBg("#1a1a1a");
-        static const QColor kUiPanel("#2a2a2a");
-        static const QColor kUiBody("#333");
-        static const QColor kUiBorder("#666");
-        static const QColor kUiBorderWeak("#444");
-        static const QColor kUiText("#c9d1d9");
-        static const QColor kUiTextMuted("#999");
-        static const QColor kUiTextDim("#6b7280");
-        static const QColor kUiCyan("#0af");
-        static const QColor kUiGreen("#0f0");
-        static const QColor kUiRed("#f00");
-        static const QColor kUiOrange("#fa0");
-        static const QColor kUiPurple("#a0f");
+        static bool hmiDragEnabled()
+        {
+            // 由配置文件控制：config/system.conf
+            // ui.hmi.drag_enabled = true/false
+            return ConfigManager::getInstance().getBool("ui.hmi.drag_enabled", false);
+        }
+
+        static bool hmiShowPressureSensors()
+        {
+            // 由配置文件控制：config/system.conf
+            // ui.hmi.show_pressure_sensors = true/false
+            return ConfigManager::getInstance().getBool("ui.hmi.show_pressure_sensors", true);
+        }
+
+        static QString hmiPositionLogPath()
+        {
+            // 优先写到“文档”目录：更容易让现场直接找到
+            QString baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+            if (!baseDir.isEmpty())
+                baseDir = QDir(baseDir).filePath("WaterTestSystem");
+            else
+                baseDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+
+            if (baseDir.isEmpty())
+                baseDir = QDir::currentPath();
+
+            QDir().mkpath(baseDir);
+            return QDir(baseDir).filePath("hmi_positions.log");
+        }
+
+        static void appendHmiPositionLine(const QString &line)
+        {
+            const QString path = hmiPositionLogPath();
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+            {
+                qWarning().noquote() << QString("[HMI坐标] 无法写入文件: %1").arg(path);
+                return;
+            }
+            QTextStream out(&file);
+            out << line << '\n';
+        }
+
+        static QString formatHmiPositionLine(const QString &tag, const QString &name, const QPointF &pos)
+        {
+            return QString("%1\t%2\t%3\t%4\t%5")
+                .arg(QDateTime::currentDateTime().toString(Qt::ISODateWithMs))
+                .arg(tag)
+                .arg(name)
+                .arg(pos.x(), 0, 'f', 0)
+                .arg(pos.y(), 0, 'f', 0);
+        }
+
+        // ===== UI-design 视觉 token（集中改色：只动这里即可整体生效） =====
+        // 风格：石墨灰简约（低对比），青色/蓝绿强调。
+        static const QColor kUiBg("#242628"); // 背景石墨灰
+        static const QColor kUiBg2 = []() {
+            QColor c = kUiBg;
+            return c.lighter(106);
+        }();
+        static const QColor kUiPanel("#2b2e31");
+        static const QColor kUiBody("#34383b");
+        static const QColor kUiBorder("#666a6e");
+        static const QColor kUiBorderWeak("#45494c");
+        static const QColor kUiText("#d6d9dc");
+        static const QColor kUiTextMuted("#a9adb1");
+        static const QColor kUiTextDim("#80858a");
+
+        // 背景网格：用文字色派生 alpha，避免硬编码到绘制逻辑里
+        static const QColor kUiGridMinor = []() {
+            QColor c = kUiText;
+            c.setAlpha(8);
+            return c;
+        }();
+        static const QColor kUiGridMajor = []() {
+            QColor c = kUiText;
+            c.setAlpha(14);
+            return c;
+        }();
+
+        // 状态/强调色：低饱和、偏灰（石墨灰风格）
+        static const QColor kUiCyan("#4aa7a8");
+        static const QColor kUiGreen("#59a86a");
+        static const QColor kUiRed("#d4605a");
+        static const QColor kUiOrange("#d3a34a");
+        static const QColor kUiPurple("#8a7ec7");
 
         static QString fmtMPa(double pa)
         {
@@ -77,51 +155,96 @@ namespace WaterTest
 
         struct HmiLayoutConfig
         {
-            // 以 pumpBase 为起点，其他节点根据行列间距和偏移量自动计算，避免手动搬坐标
-            QPointF pumpBase{170, 160};
-            qreal pumpRowSpacing = 400;
-            qreal valveHorizontalOffset = 250;
-            qreal sensorVerticalSpacing = 220;
-            qreal sensor3HorizontalOffset = 230;
-            qreal sensor3VerticalOffset = 60;
-            qreal tankHorizontalDistance = 270;
-            qreal tankVerticalOffset = 140;
+            // 基于现场拖拽回填（2026-02-05）
+            // 以这些点位作为“初始位置”，拖拽默认关闭（可在配置打开）。
+            QPointF outdoorPoolPos{110, 340};
+            QPointF pump1Pos{440, 150};
+            QPointF pump2Pos{440, 540};
+            QPointF valve1Pos{800, 132};
+            QPointF valve2Pos{800, 522};
+            QPointF tankPos{1200, 260};
+            // 微调：让 Tank(outlet) 与 V3(inlet) 的端口 y 对齐，从而该段管道为“一条直线”
+            // Tank outlet: tankPos.y + 1.5 * 50 = 260 + 75 = 335
+            // V3 inlet:     valve3Pos.y + 1.5 * 12 = valve3Pos.y + 18 -> 335 => valve3Pos.y = 317
+            QPointF valve3Pos{1500, 317};
+            QPointF teePos{1770, 450};
 
-            qreal pumpToValveLeadOffset = 100;
-            qreal pumpToValveTrailOffset = 80;
-            qreal valveToSensorVerticalStart = 60;
-            qreal valveToSensorVerticalEnd = 40;
-            qreal valveToSensor3Horizontal = 60;
-            qreal sensor3BranchStartX = 70;
-            qreal valveToTankHorizontal = 60;
-            qreal tankEntryOffsetX = 100;
+            // 压力传感器（卡片显示）
+            QPointF ps1Pos{630, 100};
+            QPointF ps2Pos{630, 490};
+            QPointF ps3Pos{1200, 80};
 
-            // 室外水池配置
-            QPointF outdoorPoolBase{30, 280};   // 紧靠最左侧
-            qreal outdoorPoolToPumpOffset = 60; // 室外水池到泵的管路偏移
+            QPointF outdoorPool() const { return outdoorPoolPos; }
+            QPointF pump1() const { return pump1Pos; }
+            QPointF pump2() const { return pump2Pos; }
+            QPointF valve1() const { return valve1Pos; }
+            QPointF valve2() const { return valve2Pos; }
+            QPointF tank() const { return tankPos; }
+            QPointF valve3() const { return valve3Pos; }
+            QPointF tee() const { return teePos; }
 
-            QPointF pump1() const { return pumpBase; }
-            QPointF pump2() const { return QPointF(pumpBase.x(), pumpBase.y() + pumpRowSpacing); }
-            QPointF valve1() const { return QPointF(pump1().x() + valveHorizontalOffset, pump1().y()); }
-            QPointF valve2() const { return QPointF(pump2().x() + valveHorizontalOffset, pump2().y()); }
-            QPointF sensor1() const { return QPointF(valve1().x(), valve1().y() + sensorVerticalSpacing); }
-            QPointF sensor2() const { return QPointF(valve2().x(), valve2().y() + sensorVerticalSpacing); }
-            QPointF sensor3() const { return QPointF(valve1().x() + sensor3HorizontalOffset, valve1().y() - sensor3VerticalOffset); }
-            QPointF tank() const { return QPointF(sensor3().x() + tankHorizontalDistance, sensor3().y() + tankVerticalOffset); }
-            QPointF outdoorPool() const { return outdoorPoolBase; }
-
-            qreal pumpHalfWidth() const { return (kPumpItemWidth * kPumpScale) / 2; }
-            qreal valveHalfWidth() const { return (kValveItemWidth * kValveScale) / 2; }
+            QPointF ps1() const { return ps1Pos; }
+            QPointF ps2() const { return ps2Pos; }
+            QPointF ps3() const { return ps3Pos; }
         };
+
+        // ===== 管道走向（手工 waypoint，可选） =====
+        // 说明：
+        // - 每条管道默认不填 waypoint（QList 为空）时，走 DynamicPipe 的“自动正交路由”。
+        // - 如果需要手工固定走向：在下面把对应列表填上“场景坐标点”。
+        // - 点的含义：依次经过的拐点（scenePos），最终仍会自动用横竖线连接。
+        // - 建议坐标用 10 像素网格（和拖拽吸附一致），例如 (520, 220)。
+        struct HmiPipeWaypointsConfig
+        {
+            // 室外水池 -> P1
+            QList<QPointF> poolToP1Scene;
+            // 室外水池 -> P2
+            QList<QPointF> poolToP2Scene;
+            // P1 -> V1
+            QList<QPointF> p1ToV1Scene;
+            // P2 -> V2
+            QList<QPointF> p2ToV2Scene;
+            // V1 -> Tank
+            QList<QPointF> v1ToTankScene;
+            // Tank(outlet) -> V3(inlet)
+            QList<QPointF> tankToV3Scene;
+            // V3(outlet) -> Tee(inlet2)
+            QList<QPointF> v3ToTeeScene;
+            // V2(outlet) -> Tee(inlet1)
+            QList<QPointF> v2ToTeeScene;
+        };
+
+        static QList<QPointF> toStartLocalWaypoints(QGraphicsItem *startItem, const QList<QPointF> &sceneWaypoints)
+        {
+            if (sceneWaypoints.isEmpty())
+                return {};
+            QList<QPointF> result;
+            result.reserve(sceneWaypoints.size());
+            for (const QPointF &wpScene : sceneWaypoints)
+            {
+                if (startItem)
+                    result.append(startItem->mapFromScene(wpScene));
+                else
+                    result.append(wpScene);
+            }
+            return result;
+        }
 
         // ========== 拟物图元（蓝底流程图：泵/阀/传感器/分水罐）==========
         class PumpItem : public QGraphicsItem
         {
         public:
+            static QPointF inletPortLocal() { return QPointF(-55, 0); }
+            static QPointF outletPortLocal() { return QPointF(55, 0); }
+
             explicit PumpItem(const QString &name)
                 : m_name(name), m_running(false), m_frequencyHz(0.0)
             {
                 setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
             }
 
             QRectF boundingRect() const override { return QRectF(-55, -45, 110, 140); }
@@ -131,6 +254,8 @@ namespace WaterTest
 
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
                 if (change == ItemPositionChange && scene())
                 {
                     // 网格吸附（10像素网格）
@@ -141,6 +266,18 @@ namespace WaterTest
                     return QPointF(xV, yV);
                 }
                 return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
             qreal x() const { return pos().x(); }
             qreal y() const { return pos().y(); }
@@ -253,6 +390,12 @@ namespace WaterTest
                 const QString powerText = QString("%1W").arg(QString::number(m_power, 'f', 1));
                 p->setPen(kUiTextDim);
                 p->drawText(QRectF(-55, 70, 110, 18), Qt::AlignCenter, powerText);
+
+                // 入口/出口触点（用于管道吸附）
+                p->setPen(QPen(kUiBorder, 1));
+                p->setBrush(kUiCyan);
+                p->drawEllipse(inletPortLocal(), 4, 4);
+                p->drawEllipse(outletPortLocal(), 4, 4);
             }
 
         private:
@@ -267,10 +410,17 @@ namespace WaterTest
         class ValveItem : public QGraphicsItem
         {
         public:
+            static QPointF inletPortLocal() { return QPointF(-52, 12); }
+            static QPointF outletPortLocal() { return QPointF(52, 12); }
+
             explicit ValveItem(const QString &name)
                 : m_name(name), m_open(false), m_degree(0)
             {
                 setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
             }
 
             QRectF boundingRect() const override { return QRectF(-52, -40, 104, 100); }
@@ -282,6 +432,8 @@ namespace WaterTest
 
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
                 if (change == ItemPositionChange && scene())
                 {
                     // 网格吸附（10像素网格）
@@ -292,6 +444,18 @@ namespace WaterTest
                     return QPointF(xV, yV);
                 }
                 return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
             void setOpen(bool open)
@@ -402,6 +566,12 @@ namespace WaterTest
                 p->setPen(kUiTextMuted);
                 const QString s = QString("POS:%1%").arg(QString::number(m_degree, 'f', 0));
                 p->drawText(QRectF(-52, 40, 104, 16), Qt::AlignCenter, s);
+
+                // 入口/出口触点（用于管道吸附）
+                p->setPen(QPen(kUiBorder, 1));
+                p->setBrush(kUiCyan);
+                p->drawEllipse(inletPortLocal(), 4, 4);
+                p->drawEllipse(outletPortLocal(), 4, 4);
             }
 
         private:
@@ -417,6 +587,10 @@ namespace WaterTest
                 : m_name(name), m_pressureMPa(0.0)
             {
                 setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
             }
 
             // 卡片 + 引线
@@ -426,6 +600,8 @@ namespace WaterTest
             static constexpr qreal height() { return 104; }
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
                 if (change == ItemPositionChange && scene())
                 {
                     // 网格吸附（10像素网格）
@@ -436,6 +612,18 @@ namespace WaterTest
                     return QPointF(xV, yV);
                 }
                 return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
             qreal x() const { return pos().x(); }
@@ -524,10 +712,17 @@ namespace WaterTest
         class TankItem : public QGraphicsItem
         {
         public:
+            static QPointF inletPortLocal() { return QPointF(-55, -5); }
+            static QPointF outletPortLocal() { return QPointF(55, 50); }
+
             explicit TankItem(const QString &name)
                 : m_name(name), m_fillPercent(0.0), m_filling(false), m_pressureMPa(0.0)
             {
                 setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
             }
 
             QRectF boundingRect() const override { return QRectF(-70, -90, 160, 240); }
@@ -536,6 +731,8 @@ namespace WaterTest
             static constexpr qreal height() { return 240; }
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
                 if (change == ItemPositionChange && scene())
                 {
                     // 网格吸附（10像素网格）
@@ -546,6 +743,18 @@ namespace WaterTest
                     return QPointF(xV, yV);
                 }
                 return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
             qreal x() const { return pos().x(); }
@@ -667,6 +876,12 @@ namespace WaterTest
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-70, 62, 140, 16), Qt::AlignCenter,
                             QString("LV:%1%%  PT:%2MPa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 3)));
+
+                // 入口/出口触点（用于管道吸附）
+                p->setPen(QPen(kUiBorder, 1));
+                p->setBrush(kUiCyan);
+                p->drawEllipse(inletPortLocal(), 4, 4);
+                p->drawEllipse(outletPortLocal(), 4, 4);
             }
 
         private:
@@ -680,10 +895,18 @@ namespace WaterTest
         class OutdoorPoolItem : public QGraphicsItem
         {
         public:
+            // 1) 上面入口 2) 下面出口
+            static QPointF inletPortLocal() { return QPointF(80, -45); }
+            static QPointF outletPortLocal() { return QPointF(80, 35); }
+
             explicit OutdoorPoolItem(const QString &name)
                 : m_name(name), m_waterLevel(80.0)
             {
                 setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
             }
 
             QRectF boundingRect() const override { return QRectF(-80, -100, 160, 200); }
@@ -692,6 +915,8 @@ namespace WaterTest
             static constexpr qreal height() { return 200; }
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
                 if (change == ItemPositionChange && scene())
                 {
                     // 网格吸附（10像素网格）
@@ -702,6 +927,18 @@ namespace WaterTest
                     return QPointF(xV, yV);
                 }
                 return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
             void setWaterLevel(double level)
@@ -782,6 +1019,12 @@ namespace WaterTest
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-80, 68, 160, 16), Qt::AlignCenter,
                             QString("水位:%1%%").arg(QString::number(level, 'f', 0)));
+
+                // 入口/出口触点（用于管道吸附）
+                p->setPen(QPen(kUiBorder, 1));
+                p->setBrush(kUiCyan);
+                p->drawEllipse(inletPortLocal(), 4, 4);
+                p->drawEllipse(outletPortLocal(), 4, 4);
             }
 
         private:
@@ -789,38 +1032,145 @@ namespace WaterTest
             double m_waterLevel;
         };
 
+        // ========== 三通节点（用于汇合/分支） ==========
+        class TeeNodeItem : public QGraphicsItem
+        {
+        public:
+            // 上下触点对调：让 inlet1 / inlet2 的上下位置反一下
+            static QPointF inlet1PortLocal() { return QPointF(-18, 8); }
+            static QPointF inlet2PortLocal() { return QPointF(-18, -8); }
+            static QPointF outletPortLocal() { return QPointF(18, 0); }
+
+            explicit TeeNodeItem(const QString &name)
+                : m_name(name)
+            {
+                setCacheMode(DeviceCoordinateCache);
+                QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
+                if (hmiDragEnabled())
+                    flags |= QGraphicsItem::ItemIsMovable;
+                setFlags(flags);
+            }
+
+            QRectF boundingRect() const override { return QRectF(-24, -20, 48, 40); }
+
+            QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
+            {
+                if (!hmiDragEnabled())
+                    return QGraphicsItem::itemChange(change, value);
+                if (change == ItemPositionChange && scene())
+                {
+                    QPointF newPos = value.toPointF();
+                    qreal gridSize = 10.0;
+                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
+                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
+                    return QPointF(xV, yV);
+                }
+                return QGraphicsItem::itemChange(change, value);
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                if (!hmiDragEnabled())
+                    return;
+                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
+                                          .arg(m_name)
+                                          .arg(pos().x(), 0, 'f', 0)
+                                          .arg(pos().y(), 0, 'f', 0);
+                appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
+            }
+
+            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
+            {
+                p->setRenderHint(QPainter::Antialiasing, true);
+
+                if (isSelected())
+                {
+                    p->setPen(QPen(kUiCyan, 2, Qt::DashLine));
+                    p->setBrush(Qt::NoBrush);
+                    p->drawRoundedRect(boundingRect().adjusted(1, 1, -1, -1), 6, 6);
+                }
+
+                // T 形节点（深灰本体 + #666 描边）
+                p->setPen(QPen(kUiBorder, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p->drawLine(QPointF(-14, -8), QPointF(-14, 8));
+                p->drawLine(QPointF(-14, 0), QPointF(14, 0));
+
+                // 端口触点
+                p->setPen(QPen(kUiBorder, 1));
+                p->setBrush(kUiCyan);
+                p->drawEllipse(inlet1PortLocal(), 3.5, 3.5);
+                p->drawEllipse(inlet2PortLocal(), 3.5, 3.5);
+                p->drawEllipse(outletPortLocal(), 3.5, 3.5);
+            }
+
+        private:
+            QString m_name;
+        };
+
         // ========== 动态管道（跟随图元移动） ==========
         class DynamicPipe : public QGraphicsItem
         {
         public:
+            enum class PortDir
+            {
+                Auto,
+                Horizontal,
+                Vertical
+            };
+
             DynamicPipe(QGraphicsItem *startItem, QPointF startOffset,
                         QGraphicsItem *endItem, QPointF endOffset,
-                        const QList<QPointF> &waypoints = {})
+                        const QList<QPointF> &waypoints = {},
+                        PortDir startDir = PortDir::Auto,
+                        PortDir endDir = PortDir::Auto)
                 : m_startItem(startItem), m_startOffset(startOffset),
                   m_endItem(endItem), m_endOffset(endOffset),
-                  m_waypoints(waypoints), m_flowing(false)
+                    m_waypointsStartLocal(waypoints), m_flowing(false),
+                    m_flowDashOffset(0.0),
+                  m_hovered(false), m_dragWaypointIndex(-1),
+                  m_startDir(startDir), m_endDir(endDir)
             {
                 setZValue(-1);
+                if (hmiDragEnabled())
+                {
+                    setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+                    setAcceptHoverEvents(true);
+                }
+                else
+                {
+                    setFlags({});
+                    setAcceptHoverEvents(false);
+                }
+                m_cachedRect = computeBoundingRect();
             }
 
             QRectF boundingRect() const override
             {
-                QPointF start = getStartPos();
-                QPointF end = getEndPos();
-                qreal minX = qMin(start.x(), end.x()) - 20;
-                qreal minY = qMin(start.y(), end.y()) - 20;
-                qreal maxX = qMax(start.x(), end.x()) + 20;
-                qreal maxY = qMax(start.y(), end.y()) + 20;
+                return m_cachedRect;
+            }
 
-                for (const QPointF &wp : m_waypoints)
-                {
-                    minX = qMin(minX, wp.x() - 20);
-                    minY = qMin(minY, wp.y() - 20);
-                    maxX = qMax(maxX, wp.x() + 20);
-                    maxY = qMax(maxY, wp.y() + 20);
-                }
+            QPainterPath shape() const override
+            {
+                // 让命中区域贴合管道，而不是用巨大的 boundingRect
+                const QPainterPath path = buildPath();
+                if (path.isEmpty())
+                    return {};
 
-                return QRectF(minX, minY, maxX - minX, maxY - minY);
+                QPainterPathStroker stroker;
+                stroker.setWidth(20.0);
+                stroker.setCapStyle(Qt::RoundCap);
+                stroker.setJoinStyle(Qt::RoundJoin);
+                return stroker.createStroke(path);
+            }
+
+            void refreshGeometry()
+            {
+                const QRectF next = computeBoundingRect();
+                if (next == m_cachedRect)
+                    return;
+                prepareGeometryChange();
+                m_cachedRect = next;
             }
 
             void setFlowing(bool flowing)
@@ -832,32 +1182,25 @@ namespace WaterTest
                 }
             }
 
+            void advanceFlowAnimation(qreal delta)
+            {
+                if (!m_flowing)
+                    return;
+                m_flowDashOffset += delta;
+                if (m_flowDashOffset > 10000.0)
+                    m_flowDashOffset = 0.0;
+            }
+
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
 
-                QPointF start = getStartPos();
-                QPointF end = getEndPos();
+                const QPainterPath path = buildPath();
+                if (path.isEmpty())
+                    return;
 
                 QPen borderPen(QColor("#666"), 12.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
                 QPen innerPen(QColor("#2a2a2a"), 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-
-                // 构建路径
-                QPainterPath path;
-                path.moveTo(start);
-
-                if (m_waypoints.isEmpty())
-                {
-                    path.lineTo(end);
-                }
-                else
-                {
-                    for (const QPointF &wp : m_waypoints)
-                    {
-                        path.lineTo(wp);
-                    }
-                    path.lineTo(end);
-                }
 
                 // 绘制管道
                 p->setPen(borderPen);
@@ -868,11 +1211,107 @@ namespace WaterTest
                 // 流动提示
                 if (m_flowing)
                 {
-                    QPen flowPen(QColor("#0af"), 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+                    QPen flowPen(kUiCyan, 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
                     flowPen.setDashPattern({4, 4});
+                    flowPen.setDashOffset(m_flowDashOffset);
                     p->setPen(flowPen);
                     p->drawPath(path);
                 }
+
+                // 选中/悬浮时显示可拖拽拐点（管道拖拽不好用时，用这个改走线）
+                if (isSelected() || m_hovered)
+                {
+                    p->setPen(QPen(kUiCyan, 2));
+                    p->setBrush(QColor(kUiCyan.red(), kUiCyan.green(), kUiCyan.blue(), 160));
+                    for (const QPointF &wpScene : waypointScenePositions())
+                        p->drawEllipse(wpScene, 6, 6);
+                }
+            }
+
+        protected:
+            void hoverEnterEvent(QGraphicsSceneHoverEvent *event) override
+            {
+                QGraphicsItem::hoverEnterEvent(event);
+                m_hovered = true;
+                update();
+            }
+
+            void hoverLeaveEvent(QGraphicsSceneHoverEvent *event) override
+            {
+                QGraphicsItem::hoverLeaveEvent(event);
+                m_hovered = false;
+                update();
+            }
+
+            void mousePressEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                if (!hmiDragEnabled())
+                {
+                    QGraphicsItem::mousePressEvent(event);
+                    return;
+                }
+                if (event->button() != Qt::LeftButton)
+                {
+                    QGraphicsItem::mousePressEvent(event);
+                    return;
+                }
+
+                setSelected(true);
+
+                // 1) 先尝试点到已有拐点 2) 没有则创建一个拐点
+                const QPointF clickScene = event->scenePos();
+                const auto wps = waypointScenePositions();
+                int bestIdx = -1;
+                qreal bestD2 = 0.0;
+                for (int i = 0; i < wps.size(); ++i)
+                {
+                    const QPointF d = wps[i] - clickScene;
+                    const qreal d2 = d.x() * d.x() + d.y() * d.y();
+                    if (bestIdx < 0 || d2 < bestD2)
+                    {
+                        bestIdx = i;
+                        bestD2 = d2;
+                    }
+                }
+
+                constexpr qreal kPickRadius = 14.0;
+                if (bestIdx >= 0 && bestD2 <= kPickRadius * kPickRadius)
+                {
+                    m_dragWaypointIndex = bestIdx;
+                }
+                else
+                {
+                    ensureDefaultWaypoint(clickScene);
+                    m_dragWaypointIndex = 0;
+                }
+
+                event->accept();
+            }
+
+            void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                if (!hmiDragEnabled())
+                {
+                    QGraphicsItem::mouseMoveEvent(event);
+                    return;
+                }
+                if (m_dragWaypointIndex < 0)
+                {
+                    QGraphicsItem::mouseMoveEvent(event);
+                    return;
+                }
+
+                const QPointF snapped = snapToGrid(event->scenePos(), 10.0);
+                setWaypointScenePos(m_dragWaypointIndex, snapped);
+                refreshGeometry();
+                update();
+                event->accept();
+            }
+
+            void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
+            {
+                QGraphicsItem::mouseReleaseEvent(event);
+                m_dragWaypointIndex = -1;
             }
 
         private:
@@ -880,20 +1319,249 @@ namespace WaterTest
             QPointF m_startOffset;
             QGraphicsItem *m_endItem;
             QPointF m_endOffset;
-            QList<QPointF> m_waypoints;
+            // waypoints 按“起点图元的本地坐标”存储：拖拽设备时管路更稳定（拐点会跟着起点走）
+            QList<QPointF> m_waypointsStartLocal;
             bool m_flowing;
+            qreal m_flowDashOffset;
+            QRectF m_cachedRect;
+            bool m_hovered;
+            int m_dragWaypointIndex;
+            PortDir m_startDir;
+            PortDir m_endDir;
+
+            static QPointF snapToGrid(const QPointF &scenePos, qreal gridSize)
+            {
+                if (gridSize <= 0.0)
+                    return scenePos;
+                const qreal xV = qRound(scenePos.x() / gridSize) * gridSize;
+                const qreal yV = qRound(scenePos.y() / gridSize) * gridSize;
+                return QPointF(xV, yV);
+            }
+
+            void ensureDefaultWaypoint(const QPointF &scenePos)
+            {
+                if (!m_waypointsStartLocal.isEmpty())
+                    return;
+                setWaypointScenePos(0, scenePos);
+            }
+
+            QList<QPointF> waypointScenePositions() const
+            {
+                QList<QPointF> result;
+                result.reserve(m_waypointsStartLocal.size());
+                for (const QPointF &wpLocal : m_waypointsStartLocal)
+                {
+                    if (m_startItem)
+                        result.append(m_startItem->mapToScene(wpLocal));
+                    else
+                        result.append(wpLocal);
+                }
+                return result;
+            }
+
+            void setWaypointScenePos(int index, const QPointF &scenePos)
+            {
+                if (index < 0)
+                    return;
+
+                while (m_waypointsStartLocal.size() <= index)
+                    m_waypointsStartLocal.append(QPointF());
+
+                if (m_startItem)
+                    m_waypointsStartLocal[index] = m_startItem->mapFromScene(scenePos);
+                else
+                    m_waypointsStartLocal[index] = scenePos;
+            }
+
+            QRectF computeBoundingRect() const
+            {
+                const QList<QPointF> points = buildOrthogonalPolyline();
+                if (points.isEmpty())
+                    return QRectF();
+
+                qreal minX = points[0].x();
+                qreal minY = points[0].y();
+                qreal maxX = points[0].x();
+                qreal maxY = points[0].y();
+
+                for (const QPointF &pt : points)
+                {
+                    minX = qMin(minX, pt.x());
+                    minY = qMin(minY, pt.y());
+                    maxX = qMax(maxX, pt.x());
+                    maxY = qMax(maxY, pt.y());
+                }
+
+                constexpr qreal kMargin = 30.0;
+                return QRectF(minX - kMargin, minY - kMargin, (maxX - minX) + 2 * kMargin, (maxY - minY) + 2 * kMargin);
+            }
+
+            static void appendOrthogonalSegment(QList<QPointF> &out, const QPointF &from, const QPointF &to)
+            {
+                if (out.isEmpty() || out.last() != from)
+                    out.append(from);
+
+                // 已经是水平/垂直
+                if (qFuzzyCompare(from.x(), to.x()) || qFuzzyCompare(from.y(), to.y()))
+                {
+                    out.append(to);
+                    return;
+                }
+
+                // 默认：先水平再垂直（不画斜线）
+                out.append(QPointF(to.x(), from.y()));
+                out.append(to);
+            }
+
+            static qreal snapScalar(qreal v, qreal gridSize)
+            {
+                if (gridSize <= 0.0)
+                    return v;
+                return qRound(v / gridSize) * gridSize;
+            }
+
+            static void appendRoutedSegment(QList<QPointF> &out,
+                                            const QPointF &from,
+                                            const QPointF &to,
+                                            PortDir fromDir,
+                                            PortDir toDir)
+            {
+                // 已经是水平/垂直，直接连
+                if (qFuzzyCompare(from.x(), to.x()) || qFuzzyCompare(from.y(), to.y()))
+                {
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(to);
+                    return;
+                }
+
+                // 规则：左右口 -> 水平出线；上下口 -> 垂直出线。
+                // 需要时允许“两次拐点”，以同时满足起点/终点口的方向。
+                const bool fromH = (fromDir == PortDir::Horizontal);
+                const bool fromV = (fromDir == PortDir::Vertical);
+                const bool toH = (toDir == PortDir::Horizontal);
+                const bool toV = (toDir == PortDir::Vertical);
+
+                // 默认回退（兼容 Auto）：先水平再垂直
+                auto fallback = [&]() { appendOrthogonalSegment(out, from, to); };
+
+                // 只指定了起点方向/终点方向之一时：用一个拐点保证“离开端口”的方向
+                if ((fromDir == PortDir::Auto) && (toDir == PortDir::Auto))
+                {
+                    fallback();
+                    return;
+                }
+
+                if (fromH && toV)
+                {
+                    // 起点水平，终点垂直：一拐点即可
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(to.x(), from.y()));
+                    out.append(to);
+                    return;
+                }
+                if (fromV && toH)
+                {
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(from.x(), to.y()));
+                    out.append(to);
+                    return;
+                }
+
+                if (fromH && toH)
+                {
+                    // 两端都水平：两拐点，保证最后一段也水平进入终点口
+                    const qreal midX = snapScalar((from.x() + to.x()) / 2.0, 10.0);
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(midX, from.y()));
+                    out.append(QPointF(midX, to.y()));
+                    out.append(to);
+                    return;
+                }
+
+                if (fromV && toV)
+                {
+                    // 两端都垂直：两拐点，保证最后一段也垂直进入终点口
+                    const qreal midY = snapScalar((from.y() + to.y()) / 2.0, 10.0);
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(from.x(), midY));
+                    out.append(QPointF(to.x(), midY));
+                    out.append(to);
+                    return;
+                }
+
+                // 其余组合（含 Auto）：尽量满足已指定的一侧
+                if (fromH)
+                {
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(to.x(), from.y()));
+                    out.append(to);
+                    return;
+                }
+                if (fromV)
+                {
+                    if (out.isEmpty() || out.last() != from)
+                        out.append(from);
+                    out.append(QPointF(from.x(), to.y()));
+                    out.append(to);
+                    return;
+                }
+
+                fallback();
+            }
+
+            QList<QPointF> buildOrthogonalPolyline() const
+            {
+                QList<QPointF> result;
+                const QPointF start = getStartPos();
+                const QPointF end = getEndPos();
+
+                if (m_waypointsStartLocal.isEmpty())
+                {
+                    appendRoutedSegment(result, start, end, m_startDir, m_endDir);
+                    return result;
+                }
+
+                QPointF cur = start;
+                for (const QPointF &wpLocal : m_waypointsStartLocal)
+                {
+                    const QPointF wp = m_startItem ? m_startItem->mapToScene(wpLocal) : wpLocal;
+                    appendOrthogonalSegment(result, cur, wp);
+                    cur = wp;
+                }
+                appendOrthogonalSegment(result, cur, end);
+                return result;
+            }
+
+            QPainterPath buildPath() const
+            {
+                const QList<QPointF> points = buildOrthogonalPolyline();
+                if (points.size() < 2)
+                    return {};
+
+                QPainterPath path;
+                path.moveTo(points[0]);
+                for (int i = 1; i < points.size(); ++i)
+                    path.lineTo(points[i]);
+                return path;
+            }
 
             QPointF getStartPos() const
             {
                 if (m_startItem)
-                    return m_startItem->pos() + m_startOffset * m_startItem->scale();
+                    return m_startItem->mapToScene(m_startOffset);
                 return m_startOffset;
             }
 
             QPointF getEndPos() const
             {
                 if (m_endItem)
-                    return m_endItem->pos() + m_endOffset * m_endItem->scale();
+                    return m_endItem->mapToScene(m_endOffset);
                 return m_endOffset;
             }
         };
@@ -984,15 +1652,15 @@ namespace WaterTest
             if (!scene)
                 return;
 
-            // 对齐 docs/UI-design 的暗色画布（#1a1a1a / #2a2a2a / #444 / #666）
+            // 工业屏灰背景：仅使用 token，避免背景色与主题脱节
             QLinearGradient bg(rect.topLeft(), rect.bottomLeft());
-            bg.setColorAt(0.0, QColor("#1a1a1a"));
-            bg.setColorAt(1.0, QColor("#121212"));
+            bg.setColorAt(0.0, kUiBg2);
+            bg.setColorAt(1.0, kUiBg);
             scene->setBackgroundBrush(bg);
 
-            // 轻量网格线（更克制，避免喧宾夺主）
-            const QPen minor(QColor(255, 255, 255, 10), 1);
-            const QPen major(QColor(255, 255, 255, 18), 1.5);
+            // 轻量网格线（深底上用浅白透明线）
+            const QPen minor(kUiGridMinor, 1);
+            const QPen major(kUiGridMajor, 1.5);
             const int step = 25;
             for (int x = 0; x <= rect.width(); x += step)
             {
@@ -1080,6 +1748,8 @@ namespace WaterTest
         m_view->setRenderHint(QPainter::TextAntialiasing, true);
         m_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_view->setDragMode(QGraphicsView::RubberBandDrag);
+        m_view->setInteractive(true);
         m_scene = new QGraphicsScene(this);
         m_view->setScene(m_scene);
         buildHmiScene();
@@ -1123,15 +1793,25 @@ namespace WaterTest
         const HmiLayoutConfig layout;
         const QPointF p1 = layout.pump1();
         const QPointF v1 = layout.valve1();
-        const QPointF ps1 = layout.sensor1();
-
         const QPointF p2 = layout.pump2();
         const QPointF v2 = layout.valve2();
-        const QPointF ps2 = layout.sensor2();
-
-        const QPointF ps3 = layout.sensor3();
         const QPointF tank = layout.tank();
         const QPointF outdoorPool = layout.outdoorPool();
+        const QPointF v3 = layout.valve3();
+        const QPointF tee = layout.tee();
+        const QPointF ps1 = layout.ps1();
+        const QPointF ps2 = layout.ps2();
+        const QPointF ps3 = layout.ps3();
+
+        // 手工管道走向：如需调整，把对应 QList 填上 waypoint（场景坐标）即可。
+        // 注意：这里不要用 const，因为需要给成员赋值。
+        HmiPipeWaypointsConfig pipeWps;
+        pipeWps.poolToP1Scene = {QPointF(280, 340), QPointF(280, 150)};
+        pipeWps.p1ToV1Scene = {QPointF(540, 150), QPointF(660, 150)};
+        pipeWps.poolToP2Scene = {QPointF(280, 440), QPointF(280, 540)};
+        pipeWps.p2ToV2Scene = {QPointF(540, 540), QPointF(660, 540)};
+        pipeWps.v2ToTeeScene = {QPointF(900, 540), QPointF(1670, 459)};
+        // pipeWps.v2ToTeeScene = {QPointF(540, 540), QPointF(660, 540)};
 
         // 设备图元
         auto *pump1 = new PumpItem("P1 变频泵1");
@@ -1162,26 +1842,47 @@ namespace WaterTest
         m_scene->addItem(valve2);
         m_itemValve2 = valve2;
 
-        auto *sensor1 = new SensorItem("PS1");
-        sensor1->setPos(ps1);
-        sensor1->setZValue(2);
-        sensor1->setScale(kSensorScale);
-        m_scene->addItem(sensor1);
-        m_itemPS1 = sensor1;
+        auto *valve3 = new ValveItem("V3 电动阀3(流量监控)");
+        valve3->setPos(v3);
+        valve3->setZValue(2);
+        valve3->setScale(kValveScale);
+        m_scene->addItem(valve3);
 
-        auto *sensor2 = new SensorItem("PS2");
-        sensor2->setPos(ps2);
-        sensor2->setZValue(2);
-        sensor2->setScale(kSensorScale);
-        m_scene->addItem(sensor2);
-        m_itemPS2 = sensor2;
+        auto *teeNode = new TeeNodeItem("三通节点");
+        teeNode->setPos(tee);
+        teeNode->setZValue(2);
+        m_scene->addItem(teeNode);
 
-        auto *sensor3 = new SensorItem("PS3");
-        sensor3->setPos(ps3);
-        sensor3->setZValue(2);
-        sensor3->setScale(kSensorScale);
-        m_scene->addItem(sensor3);
-        m_itemPS3 = sensor3;
+        // 压力传感器图元：可通过配置控制是否显示
+        if (hmiShowPressureSensors())
+        {
+            auto *s1Item = new SensorItem("PS1 压力1");
+            s1Item->setPos(ps1);
+            s1Item->setZValue(2);
+            s1Item->setScale(kSensorScale);
+            m_scene->addItem(s1Item);
+            m_itemPS1 = s1Item;
+
+            auto *s2Item = new SensorItem("PS2 压力2");
+            s2Item->setPos(ps2);
+            s2Item->setZValue(2);
+            s2Item->setScale(kSensorScale);
+            m_scene->addItem(s2Item);
+            m_itemPS2 = s2Item;
+
+            auto *s3Item = new SensorItem("PS3 压力3");
+            s3Item->setPos(ps3);
+            s3Item->setZValue(2);
+            s3Item->setScale(kSensorScale);
+            m_scene->addItem(s3Item);
+            m_itemPS3 = s3Item;
+        }
+        else
+        {
+            m_itemPS1 = nullptr;
+            m_itemPS2 = nullptr;
+            m_itemPS3 = nullptr;
+        }
 
         auto *tankItem = new TankItem("分水罐");
         tankItem->setPos(tank);
@@ -1196,54 +1897,129 @@ namespace WaterTest
         outdoorPoolItem->setScale(kTankScale);
         m_scene->addItem(outdoorPoolItem);
         m_itemOutdoorPool = outdoorPoolItem;
+
+        // 初始布局坐标打印（便于现场拖拽微调后回填配置）
+        {
+            appendHmiPositionLine(QString("---- %1 ----").arg(QDateTime::currentDateTime().toString(Qt::ISODateWithMs)));
+            appendHmiPositionLine(QString("LOG_PATH\t%1").arg(hmiPositionLogPath()));
+
+            auto logPos = [](const QString &name, const QGraphicsItem *item)
+            {
+                if (!item)
+                    return;
+                const QPointF p = item->pos();
+
+                qInfo().noquote() << QString("[HMI初始坐标] %1 pos=(%2, %3)")
+                                          .arg(name)
+                                          .arg(p.x(), 0, 'f', 0)
+                                          .arg(p.y(), 0, 'f', 0);
+
+                appendHmiPositionLine(formatHmiPositionLine("INIT", name, p));
+            };
+
+            logPos("室外水池", outdoorPoolItem);
+            logPos("P1 变频泵1", pump1);
+            logPos("P2 变频泵2", pump2);
+            logPos("V1 电动阀1", valve1);
+            logPos("V2 电动阀2", valve2);
+            logPos("V3 电动阀3(流量监控)", valve3);
+            logPos("分水罐", tankItem);
+            logPos("三通节点", teeNode);
+
+            if (hmiShowPressureSensors())
+            {
+                logPos("PS1 压力1", m_itemPS1);
+                logPos("PS2 压力2", m_itemPS2);
+                logPos("PS3 压力3", m_itemPS3);
+            }
+        }
         // ========== 创建动态管道（使用相对偏移量） ==========
         // 室外水池 -> P1
         auto *pipePool1 = new DynamicPipe(
-            m_itemOutdoorPool, QPointF(OutdoorPoolItem::width() / 2, -55),
-            m_itemPump1, QPointF(-PumpItem::width() / 2 - 60 / kPumpScale, 0),
-            {});
+            m_itemOutdoorPool, OutdoorPoolItem::outletPortLocal(),
+            m_itemPump1, PumpItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemOutdoorPool, pipeWps.poolToP1Scene),
+            DynamicPipe::PortDir::Vertical,
+            DynamicPipe::PortDir::Horizontal);
         m_scene->addItem(pipePool1);
         m_pipes.append(pipePool1);
 
         // 室外水池 -> P2
         auto *pipePool2 = new DynamicPipe(
-            m_itemOutdoorPool, QPointF(OutdoorPoolItem::width() / 2, 50),
-            m_itemPump2, QPointF(-PumpItem::width() / 2 - 60 / kPumpScale, 0),
-            {});
+            m_itemOutdoorPool, OutdoorPoolItem::outletPortLocal(),
+            m_itemPump2, PumpItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemOutdoorPool, pipeWps.poolToP2Scene),
+            DynamicPipe::PortDir::Vertical,
+            DynamicPipe::PortDir::Horizontal);
         m_scene->addItem(pipePool2);
         m_pipes.append(pipePool2);
 
         // P1 -> V1
         auto *pipe1V1 = new DynamicPipe(
-            m_itemPump1, QPointF(PumpItem::width() / 2 + 100 / kPumpScale, 0),
-            m_itemValve1, QPointF(-ValveItem::width() / 2 - 80 / kValveScale, 0),
-            {});
+            m_itemPump1, PumpItem::outletPortLocal(),
+            m_itemValve1, ValveItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemPump1, pipeWps.p1ToV1Scene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
         m_scene->addItem(pipe1V1);
         m_pipes.append(pipe1V1);
 
         // P2 -> V2
         auto *pipe2V2 = new DynamicPipe(
-            m_itemPump2, QPointF(PumpItem::width() / 2 + 100 / kPumpScale, 0),
-            m_itemValve2, QPointF(-ValveItem::width() / 2 - 80 / kValveScale, 0),
-            {});
+            m_itemPump2, PumpItem::outletPortLocal(),
+            m_itemValve2, ValveItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemPump2, pipeWps.p2ToV2Scene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
         m_scene->addItem(pipe2V2);
         m_pipes.append(pipe2V2);
 
         // V1 -> Tank
         auto *pipeV1Tank = new DynamicPipe(
-            m_itemValve1, QPointF(70 / kValveScale, 0),
-            m_itemTank, QPointF(-TankItem::width() / 2 - 100 / kTankScale, 0),
-            {});
+            m_itemValve1, ValveItem::outletPortLocal(),
+            m_itemTank, TankItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemValve1, pipeWps.v1ToTankScene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
         m_scene->addItem(pipeV1Tank);
         m_pipes.append(pipeV1Tank);
 
-        // V2 -> Tank
-        auto *pipeV2Tank = new DynamicPipe(
-            m_itemValve2, QPointF(0, 0),
-            m_itemTank, QPointF(-TankItem::width() / 2 - 100 / kTankScale, 0),
-            {});
-        m_scene->addItem(pipeV2Tank);
-        m_pipes.append(pipeV2Tank);
+        // Tank(outlet) -> V3(inlet)
+        auto *pipeTankV3 = new DynamicPipe(
+            m_itemTank, TankItem::outletPortLocal(),
+            valve3, ValveItem::inletPortLocal(),
+            toStartLocalWaypoints(m_itemTank, pipeWps.tankToV3Scene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
+        m_scene->addItem(pipeTankV3);
+        m_pipes.append(pipeTankV3);
+
+        // V3(outlet) -> Tee(inlet2)
+        auto *pipeV3Tee = new DynamicPipe(
+            valve3, ValveItem::outletPortLocal(),
+            teeNode, TeeNodeItem::inlet2PortLocal(),
+            toStartLocalWaypoints(valve3, pipeWps.v3ToTeeScene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
+        m_scene->addItem(pipeV3Tee);
+        m_pipes.append(pipeV3Tee);
+
+        // V2(outlet) -> Tee(inlet1)（不再接分水罐入口）
+        auto *pipeV2Tee = new DynamicPipe(
+            m_itemValve2, ValveItem::outletPortLocal(),
+            teeNode, TeeNodeItem::inlet1PortLocal(),
+            toStartLocalWaypoints(m_itemValve2, pipeWps.v2ToTeeScene),
+            DynamicPipe::PortDir::Horizontal,
+            DynamicPipe::PortDir::Horizontal);
+        m_scene->addItem(pipeV2Tee);
+        m_pipes.append(pipeV2Tee);
+
+        // 打开管道动画（流动虚线）
+        for (auto *pipe : m_pipes)
+        {
+            if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
+                dp->setFlowing(true);
+        }
 
         // 启动管道更新定时器
         QTimer *pipeTimer = new QTimer(this);
@@ -1267,7 +2043,7 @@ namespace WaterTest
 
         // 标题（左上）
         auto *caption = m_scene->addText("测试准备区流程（拟物显示）");
-        caption->setDefaultTextColor(QColor("#e6edf3"));
+        caption->setDefaultTextColor(kUiText);
         QFont tf = caption->font();
         tf.setPointSize(12);
         tf.setBold(true);
@@ -1293,11 +2069,18 @@ namespace WaterTest
 
     void PreparationPanel::onUpdatePipes()
     {
-        // 强制所有管道重绘以跟随图元移动
+        // 强制所有管道重绘以跟随图元移动（同时刷新几何，避免 boundingRect 变化导致裁剪）
         for (auto *pipe : m_pipes)
         {
-            if (pipe)
-                pipe->update();
+            if (!pipe)
+                continue;
+
+            if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
+            {
+                dp->advanceFlowAnimation(-1.0);
+                dp->refreshGeometry();
+            }
+            pipe->update();
         }
     }
 
