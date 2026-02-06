@@ -49,6 +49,8 @@ namespace WaterTest
         void onSelfCheck();
         void onStartFilling();
         void onStopFilling();
+        void onDrainWater();
+        void onStopAll();
         void onEmergencyStop();
         void onReliefValveToggled(bool open);
         void onPumpFrequencyChanged(double value);
@@ -66,6 +68,7 @@ namespace WaterTest
         void updateClock();
         void updateReliefValveStatus();
         void buildHmiScene();
+        void updateActionBarOverlayGeometry();
 
         // 设备管理器
         std::shared_ptr<DeviceManager> m_deviceManager;
@@ -104,8 +107,10 @@ namespace WaterTest
         QDoubleSpinBox *m_targetPressureSpinBox;
 
         // 操作按钮
+        QWidget *m_actionBarOverlay;
         QPushButton *m_selfCheckBtn;
         QPushButton *m_startFillingBtn;
+        QPushButton *m_drainBtn;
         QPushButton *m_stopFillingBtn;
         QPushButton *m_reliefValveBtn;      // 作为“长按开启泄压阀”按钮（危险）
         QPushButton *m_reliefValveCloseBtn; // 关闭泄压阀

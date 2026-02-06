@@ -1918,8 +1918,10 @@ namespace WaterTest
           m_tankLevelText(nullptr),
           m_pumpFrequencySpinBox(nullptr),
           m_targetPressureSpinBox(nullptr),
+          m_actionBarOverlay(nullptr),
           m_selfCheckBtn(nullptr),
           m_startFillingBtn(nullptr),
+                    m_drainBtn(nullptr),
           m_stopFillingBtn(nullptr),
           m_reliefValveBtn(nullptr),
           m_reliefValveCloseBtn(nullptr),
@@ -1955,6 +1957,8 @@ namespace WaterTest
         const QRectF r = m_scene->itemsBoundingRect().adjusted(-20, -20, 20, 20);
         if (!r.isEmpty())
             m_view->fitInView(r, Qt::KeepAspectRatio);
+
+        updateActionBarOverlayGeometry();
     }
 
     void PreparationPanel::setupUI()
@@ -1977,7 +1981,84 @@ namespace WaterTest
         m_view->setScene(m_scene);
         buildHmiScene();
         rootLayout->addWidget(m_view, 1);
+
+        // ========== 操作按钮栏：叠加在流程区内部靠下（不占用外部布局） ==========
+        m_actionBarOverlay = new QWidget(m_view->viewport());
+        // 不在 overlay 上设置局部 styleSheet，避免影响应用级 QSS（tone/size）对按钮的匹配
+        m_actionBarOverlay->setAutoFillBackground(false);
+        m_actionBarOverlay->setAttribute(Qt::WA_NoSystemBackground, true);
+        m_actionBarOverlay->setAttribute(Qt::WA_TranslucentBackground, true);
+
+        auto *actionLayout = new QHBoxLayout(m_actionBarOverlay);
+        actionLayout->setContentsMargins(30, 10, 12, 50);
+        actionLayout->setSpacing(10);
+
+        m_selfCheckBtn = new QPushButton("系统自检", m_actionBarOverlay);
+        m_selfCheckBtn->setProperty("tone", "info");
+        m_selfCheckBtn->setProperty("size", "lg");
+
+        m_startFillingBtn = new QPushButton("加水", m_actionBarOverlay);
+        m_startFillingBtn->setProperty("tone", "good");
+        m_startFillingBtn->setProperty("size", "lg");
+
+        m_drainBtn = new QPushButton("放水", m_actionBarOverlay);
+        m_drainBtn->setProperty("tone", "warn");
+        m_drainBtn->setProperty("size", "lg");
+
+        m_stopFillingBtn = new QPushButton("停止", m_actionBarOverlay);
+        m_stopFillingBtn->setProperty("tone", "neutral");
+        m_stopFillingBtn->setProperty("size", "lg");
+        m_stopFillingBtn->setEnabled(false);
+
+        // 动态属性（tone/size）有时需要显式 polish 才能立即触发 QSS 重算
+        auto repolish = [](QWidget *w)
+        {
+            if (!w)
+                return;
+            if (auto *s = w->style())
+            {
+                s->unpolish(w);
+                s->polish(w);
+            }
+            w->update();
+        };
+        repolish(m_selfCheckBtn);
+        repolish(m_startFillingBtn);
+        repolish(m_drainBtn);
+        repolish(m_stopFillingBtn);
+
+        connect(m_selfCheckBtn, &QPushButton::clicked, this, &PreparationPanel::onSelfCheck);
+        connect(m_startFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStartFilling);
+        connect(m_drainBtn, &QPushButton::clicked, this, &PreparationPanel::onDrainWater);
+        connect(m_stopFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStopAll);
+
+        actionLayout->addWidget(m_selfCheckBtn);
+        actionLayout->addWidget(m_startFillingBtn);
+        actionLayout->addWidget(m_drainBtn);
+        actionLayout->addWidget(m_stopFillingBtn);
+        actionLayout->addStretch(1);
+
+        updateActionBarOverlayGeometry();
         updateReliefValveStatus();
+    }
+
+    void PreparationPanel::updateActionBarOverlayGeometry()
+    {
+        if (!m_view || !m_actionBarOverlay)
+            return;
+
+        QWidget *vp = m_view->viewport();
+        if (!vp)
+            return;
+
+        const int margin = 10;
+        const int h = m_actionBarOverlay->sizeHint().height();
+        const int barH = (h > 0) ? h : 56;
+        const int w = vp->width();
+        const int y = std::max(0, vp->height() - barH - margin);
+
+        m_actionBarOverlay->setGeometry(0, y, w, barH + margin);
+        m_actionBarOverlay->raise();
     }
 
     void PreparationPanel::buildHmiScene()
@@ -2265,7 +2346,7 @@ namespace WaterTest
         // m_itemSafety2 = sv2;
 
         // 标题（左上）
-        auto *caption = m_scene->addText("测试准备区流程（拟物显示）");
+        auto *caption = m_scene->addText("测试准备区流程");
         caption->setDefaultTextColor(kUiText);
         QFont tf = caption->font();
         tf.setPointSize(12);
@@ -2733,6 +2814,8 @@ namespace WaterTest
         // 更新UI
         m_startFillingBtn->setEnabled(false);
         m_stopFillingBtn->setEnabled(true);
+        if (m_drainBtn)
+            m_drainBtn->setEnabled(false);
         if (m_pumpFrequencySpinBox)
             m_pumpFrequencySpinBox->setEnabled(false);
         if (m_targetPressureSpinBox)
@@ -2746,22 +2829,73 @@ namespace WaterTest
 
     void PreparationPanel::onStopFilling()
     {
+        onStopAll();
+    }
+
+    void PreparationPanel::onDrainWater()
+    {
         if (!m_deviceManager)
         {
+            QMessageBox::warning(this, "错误", "设备管理器未初始化");
             return;
         }
 
+        // 确认操作
+        auto reply = QMessageBox::question(this, "确认",
+                                           "确定开始放水吗？\n\n提示：将关闭进水并打开出水阀(阀2)。",
+                                           QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::No)
+            return;
+
+        // 停止加水状态（避免冲突）
+        m_isFilling = false;
+        m_deviceManager->controlValve(1, false);
+        m_deviceManager->controlPump(1, false);
+
+        // 打开出水阀
+        if (!m_deviceManager->controlValve(2, true))
+        {
+            QMessageBox::warning(this, "错误", "打开出水阀失败");
+            return;
+        }
+
+        // 更新UI
+        if (m_startFillingBtn)
+            m_startFillingBtn->setEnabled(false);
+        if (m_drainBtn)
+            m_drainBtn->setEnabled(false);
+        if (m_stopFillingBtn)
+            m_stopFillingBtn->setEnabled(true);
+        if (m_pumpFrequencySpinBox)
+            m_pumpFrequencySpinBox->setEnabled(false);
+        if (m_targetPressureSpinBox)
+            m_targetPressureSpinBox->setEnabled(false);
+        if (m_statusBadge)
+        {
+            m_statusBadge->setText("放水中");
+            setBadgeTone(m_statusBadge, "warn");
+        }
+    }
+
+    void PreparationPanel::onStopAll()
+    {
+        if (!m_deviceManager)
+            return;
+
         m_isFilling = false;
 
-        // 关闭进水阀
+        // 关闭阀门与停止泵（仅停止准备区相关动作）
         m_deviceManager->controlValve(1, false);
-
-        // 停止变频泵
+        m_deviceManager->controlValve(2, false);
         m_deviceManager->controlPump(1, false);
 
         // 更新UI
-        m_startFillingBtn->setEnabled(true);
-        m_stopFillingBtn->setEnabled(false);
+        if (m_startFillingBtn)
+            m_startFillingBtn->setEnabled(true);
+        if (m_drainBtn)
+            m_drainBtn->setEnabled(true);
+        if (m_stopFillingBtn)
+            m_stopFillingBtn->setEnabled(false);
         if (m_pumpFrequencySpinBox)
             m_pumpFrequencySpinBox->setEnabled(true);
         if (m_targetPressureSpinBox)
