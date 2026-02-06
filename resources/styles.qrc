@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/">
-    <file>styles/industrial_10inch.qss</file>
+    <file>styles/industrial_10inch_graphite.qss</file>
+    <file>styles/industrial_10inch_light.qss</file>
+    <file>styles/industrial_10inch_ocean.qss</file>
   </qresource>
 </RCC>

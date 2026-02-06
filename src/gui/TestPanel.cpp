@@ -40,7 +40,7 @@ namespace WaterTest
             auto *lbl = new QLabel(title + "\n--", this);
             lbl->setMinimumWidth(160);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setStyleSheet("QLabel { padding: 5px; border: 2px solid #ddd; border-radius: 6px; background:#fafafa; font-family:'Courier New'; font-size: 11pt; font-weight: bold; }");
+            lbl->setProperty("role", "metricBlock");
             return lbl;
         };
 
@@ -72,7 +72,6 @@ namespace WaterTest
 
         // ========== 电磁阀控制(D0.0 / D0.1 / D0.2) ==========
         m_solenoidGroup = new QGroupBox("电磁阀控制 (D0.0 / D0.1 / D0.2)", this);
-        m_solenoidGroup->setStyleSheet("QGroupBox { font-size: 12pt; font-weight: bold; }");
         auto *solenoidLayout = new QHBoxLayout(m_solenoidGroup);
 
         auto styleBtn = [](QPushButton *btn, const QString &label, bool on)
@@ -80,7 +79,9 @@ namespace WaterTest
             if (!btn)
                 return;
             btn->setText(QString("%1 (%2)").arg(label).arg(on ? "通" : "断"));
-            btn->setStyleSheet(on ? "QPushButton { background-color: #4CAF50; color: white; font-size: 13pt; padding: 8px 14px; }" : "QPushButton { background-color: #9E9E9E; color: white; font-size: 13pt; padding: 8px 14px; }");
+            btn->setProperty("tone", on ? "good" : "neutral");
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
         };
 
         auto makeSolenoidBtn = [&](const QString &label, uint8_t index)
@@ -110,24 +111,26 @@ namespace WaterTest
 
         // ========== 控制按钮区 ==========
         auto *controlGroup = new QGroupBox("测试控制", this);
-        controlGroup->setStyleSheet("QGroupBox { font-size: 12pt; font-weight: bold; }");
         auto *controlLayout = new QHBoxLayout(controlGroup);
 
         m_startTestBtn = new QPushButton("开始测试", this);
-        m_startTestBtn->setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 16pt; padding: 12px; }");
+        m_startTestBtn->setProperty("tone", "good");
+        m_startTestBtn->setProperty("size", "xl");
         m_startTestBtn->setMinimumHeight(50);
         connect(m_startTestBtn, &QPushButton::clicked, this, &TestPanel::onStartTest);
         controlLayout->addWidget(m_startTestBtn);
 
         m_stopTestBtn = new QPushButton("停止测试", this);
-        m_stopTestBtn->setStyleSheet("QPushButton { background-color: #FFC107; color: black; font-size: 16pt; padding: 12px; }");
+        m_stopTestBtn->setProperty("tone", "warn");
+        m_stopTestBtn->setProperty("size", "xl");
         m_stopTestBtn->setMinimumHeight(50);
         m_stopTestBtn->setEnabled(false);
         connect(m_stopTestBtn, &QPushButton::clicked, this, &TestPanel::onStopTest);
         controlLayout->addWidget(m_stopTestBtn);
 
         m_emergencyStopBtn = new QPushButton("紧急停止", this);
-        m_emergencyStopBtn->setStyleSheet("QPushButton { background-color: #f44336; color: white; font-size: 16pt; padding: 12px; font-weight: bold; }");
+        m_emergencyStopBtn->setProperty("tone", "bad");
+        m_emergencyStopBtn->setProperty("size", "xl");
         m_emergencyStopBtn->setMinimumHeight(50);
         connect(m_emergencyStopBtn, &QPushButton::clicked, this, &TestPanel::onEmergencyStop);
         controlLayout->addWidget(m_emergencyStopBtn);
@@ -138,11 +141,13 @@ namespace WaterTest
         auto *infoLayout = new QHBoxLayout();
 
         m_statusLabel = new QLabel("状态: 等待测试", this);
-        m_statusLabel->setStyleSheet("QLabel { font-size: 14pt; padding: 6px; border: 2px solid #ddd; border-radius: 3px; }");
+        m_statusLabel->setProperty("role", "statusBox");
+        m_statusLabel->setProperty("tone", "muted");
         infoLayout->addWidget(m_statusLabel, 2);
 
         m_testTimeLabel = new QLabel("测试时间: 0秒", this);
-        m_testTimeLabel->setStyleSheet("QLabel { font-size: 14pt; padding: 6px; border: 2px solid #ddd; border-radius: 3px; }");
+        m_testTimeLabel->setProperty("role", "statusBox");
+        m_testTimeLabel->setProperty("tone", "muted");
         infoLayout->addWidget(m_testTimeLabel, 1);
 
         mainLayout->addLayout(infoLayout);
@@ -158,44 +163,19 @@ namespace WaterTest
     {
         m_flowDiagramLabel = new QLabel(this);
         m_flowDiagramLabel->setWordWrap(true);
-        m_flowDiagramLabel->setStyleSheet(
-            "QLabel {"
-            "   background-color: #f5f5f5;"
-            "   padding: 15px;"
-            "   border: 2px solid #1976d2;"
-            "   border-radius: 5px;"
-            "   font-family: 'Courier New', monospace;"
-            "   font-size: 12pt;"
-            "   line-height: 1.6;"
-            "}");
+        m_flowDiagramLabel->setProperty("role", "flowDiagram");
 
+        const QString arrow = " → ";
         QString flowText = QString(
-            "<div style='color: #333;'>"
-            "<b style='color: #1976d2; font-size: 11pt;'>测试管路流程图：</b><br/><br/>"
-            "分水罐 "
-            "<span style='color: green;'>→</span> 电动阀2 "
-            "<span style='color: green;'>→</span> <i>消声止回阀</i> "
-            "<span style='color: green;'>→</span> 压力传感器2 "
-            "<span style='color: green;'>→</span> 电动阀3 "
-            "<span style='color: green;'>→</span> 流量计1<br/>"
-            "<span style='color: green;'>→</span> 电动阀4 "
-            "<span style='color: green;'>→</span> <i>压力表</i> "
-            "<span style='color: green;'>→</span> <i>消声止回阀</i> "
-            "<span style='color: green;'>→</span> 压力传感器3 "
-            "<span style='color: green;'>→</span> 电动阀5<br/>"
-            "<span style='color: green;'>→</span> 压力传感器4 "
-            "<span style='color: green;'>→</span> <b style='color: #FF5722;'>电动三通切换阀</b> "
-            "<span style='color: green;'>→</span> 电动阀6 "
-            "<span style='color: green;'>→</span> 调压阀1<br/>"
-            "<span style='color: green;'>→</span> 压力传感器5 "
-            "<span style='color: green;'>→</span> <b style='color: #9C27B0;'>温度传感器</b> "
-            "<span style='color: green;'>→</span> <b style='color: #FF9800;'>待测试阀</b> "
-            "<span style='color: green;'>→</span> 压力传感器6<br/>"
-            "<span style='color: green;'>→</span> 流量计2 "
-            "<span style='color: green;'>→</span> 电动阀7 "
-            "<span style='color: green;'>→</span> 调压阀2<br/><br/>"
-            "<span style='color: gray; font-size: 9pt;'><i>注：斜体表示物理设备（不受PLC控制）</i></span>"
-            "</div>");
+            "<div>"
+            "<b>测试管路流程图：</b><br/><br/>"
+            "分水罐%1电动阀2%1<i>消声止回阀</i>%1压力传感器2%1电动阀3%1流量计1<br/>"
+            "%1电动阀4%1<i>压力表</i>%1<i>消声止回阀</i>%1压力传感器3%1电动阀5<br/>"
+            "%1压力传感器4%1<b>电动三通切换阀</b>%1电动阀6%1调压阀1<br/>"
+            "%1压力传感器5%1<b>温度传感器</b>%1<b>待测试阀</b>%1压力传感器6<br/>"
+            "%1流量计2%1电动阀7%1调压阀2<br/><br/>"
+            "<i style='font-size: 9pt;'>注：斜体表示物理设备（不受PLC控制）</i>"
+            "</div>").arg(arrow);
 
         m_flowDiagramLabel->setText(flowText);
     }
@@ -441,7 +421,9 @@ namespace WaterTest
             if (!btn)
                 return;
             btn->setText(QString("%1 (%2)").arg(label).arg(on ? "通" : "断"));
-            btn->setStyleSheet(on ? "QPushButton { background-color: #4CAF50; color: white; font-size: 11pt; padding: 6px 12px; }" : "QPushButton { background-color: #9E9E9E; color: white; font-size: 11pt; padding: 6px 12px; }");
+            btn->setProperty("tone", on ? "good" : "neutral");
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
         };
         bool on = false;
         if (m_deviceManager->getRelayState(0, on))
@@ -461,13 +443,18 @@ namespace WaterTest
         if (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING)
         {
             statusLabel->setText("开启");
-            statusLabel->setStyleSheet("QLabel { padding: 5px; border: 1px solid #4CAF50; background-color: #E8F5E9; font-weight: bold; color: #4CAF50; }");
+            statusLabel->setProperty("role", "valueBox");
+            statusLabel->setProperty("tone", "good");
         }
         else
         {
             statusLabel->setText("关闭");
-            statusLabel->setStyleSheet("QLabel { padding: 5px; border: 1px solid #ddd; background-color: white; color: gray; }");
+            statusLabel->setProperty("role", "valueBox");
+            statusLabel->setProperty("tone", "muted");
         }
+
+        statusLabel->style()->unpolish(statusLabel);
+        statusLabel->style()->polish(statusLabel);
     }
 
     void TestPanel::updatePressureSensor(int sensorId, QLabel *valueLabel)
@@ -481,16 +468,22 @@ namespace WaterTest
         // 根据压力值设置颜色
         if (sensor.pressure > 0.8f)
         {
-            valueLabel->setStyleSheet("QLabel { padding: 5px; border: 1px solid #f44336; background-color: #FFEBEE; font-weight: bold; color: #f44336; }");
+            valueLabel->setProperty("role", "valueBox");
+            valueLabel->setProperty("tone", "bad");
         }
         else if (sensor.pressure > 0.01f)
         {
-            valueLabel->setStyleSheet("QLabel { padding: 5px; border: 1px solid #4CAF50; background-color: #E8F5E9; font-weight: bold; color: #4CAF50; }");
+            valueLabel->setProperty("role", "valueBox");
+            valueLabel->setProperty("tone", "good");
         }
         else
         {
-            valueLabel->setStyleSheet("QLabel { padding: 5px; border: 1px solid #ddd; background-color: white; font-weight: bold; }");
+            valueLabel->setProperty("role", "valueBox");
+            valueLabel->setProperty("tone", "muted");
         }
+
+        valueLabel->style()->unpolish(valueLabel);
+        valueLabel->style()->polish(valueLabel);
     }
 
     void TestPanel::onStartTest()
@@ -521,7 +514,9 @@ namespace WaterTest
         m_startTestBtn->setEnabled(false);
         m_stopTestBtn->setEnabled(true);
         m_statusLabel->setText("状态: 测试进行中...");
-        m_statusLabel->setStyleSheet("QLabel { font-size: 12pt; padding: 5px; border: 2px solid #4CAF50; border-radius: 3px; background-color: #E8F5E9; }");
+        m_statusLabel->setProperty("tone", "good");
+        m_statusLabel->style()->unpolish(m_statusLabel);
+        m_statusLabel->style()->polish(m_statusLabel);
 
         appendTestRecord("开始测试");
     }
@@ -545,7 +540,9 @@ namespace WaterTest
         m_startTestBtn->setEnabled(true);
         m_stopTestBtn->setEnabled(false);
         m_statusLabel->setText("状态: 测试已停止");
-        m_statusLabel->setStyleSheet("QLabel { font-size: 12pt; padding: 5px; border: 2px solid #ddd; border-radius: 3px; }");
+        m_statusLabel->setProperty("tone", "muted");
+        m_statusLabel->style()->unpolish(m_statusLabel);
+        m_statusLabel->style()->polish(m_statusLabel);
 
         appendTestRecord("停止测试");
     }
@@ -575,7 +572,9 @@ namespace WaterTest
         m_startTestBtn->setEnabled(true);
         m_stopTestBtn->setEnabled(false);
         m_statusLabel->setText("状态: 紧急停止");
-        m_statusLabel->setStyleSheet("QLabel { font-size: 12pt; padding: 5px; border: 2px solid #f44336; border-radius: 3px; background-color: #FFEBEE; font-weight: bold; }");
+        m_statusLabel->setProperty("tone", "bad");
+        m_statusLabel->style()->unpolish(m_statusLabel);
+        m_statusLabel->style()->polish(m_statusLabel);
 
         appendTestRecord("紧急停止");
     }

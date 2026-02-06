@@ -38,10 +38,24 @@ namespace WaterTest
 
     namespace
     {
+        static void ensureHmiConfigLoadedOnce()
+        {
+            static bool tried = false;
+            if (tried)
+                return;
+            tried = true;
+
+            const bool ok = ConfigManager::getInstance().loadConfig("config/system.conf");
+            qInfo().noquote() << QString("[HMI配置] load config/system.conf %1 (cwd=%2)")
+                                     .arg(ok ? "OK" : "FAIL")
+                                     .arg(QDir::currentPath());
+        }
+
         static bool hmiDragEnabled()
         {
             // 由配置文件控制：config/system.conf
             // ui.hmi.drag_enabled = true/false
+            ensureHmiConfigLoadedOnce();
             return ConfigManager::getInstance().getBool("ui.hmi.drag_enabled", false);
         }
 
@@ -49,7 +63,24 @@ namespace WaterTest
         {
             // 由配置文件控制：config/system.conf
             // ui.hmi.show_pressure_sensors = true/false
+            ensureHmiConfigLoadedOnce();
             return ConfigManager::getInstance().getBool("ui.hmi.show_pressure_sensors", true);
+        }
+
+        static QString hmiThemePreset()
+        {
+            // 由配置文件控制：config/system.conf
+            // ui.hmi.theme = graphite/light/ocean
+            // - 若 ui.hmi.theme 为空或为 auto，则跟随 ui.theme
+            ensureHmiConfigLoadedOnce();
+            auto &cfg = ConfigManager::getInstance();
+            const QString hmi = QString::fromStdString(cfg.getString("ui.hmi.theme", "")).trimmed().toLower();
+            if (hmi.isEmpty() || hmi == "auto")
+            {
+                const QString ui = QString::fromStdString(cfg.getString("ui.theme", "graphite")).trimmed().toLower();
+                return ui;
+            }
+            return hmi;
         }
 
         static QString hmiPositionLogPath()
@@ -92,38 +123,210 @@ namespace WaterTest
         }
 
         // ===== UI-design 视觉 token（集中改色：只动这里即可整体生效） =====
-        // 风格：石墨灰简约（低对比），青色/蓝绿强调。
-        static const QColor kUiBg("#242628"); // 背景石墨灰
-        static const QColor kUiBg2 = []() {
-            QColor c = kUiBg;
-            return c.lighter(106);
-        }();
-        static const QColor kUiPanel("#2b2e31");
-        static const QColor kUiBody("#34383b");
-        static const QColor kUiBorder("#666a6e");
-        static const QColor kUiBorderWeak("#45494c");
-        static const QColor kUiText("#d6d9dc");
-        static const QColor kUiTextMuted("#a9adb1");
-        static const QColor kUiTextDim("#80858a");
+        // 说明：支持三套主题，通过 ui.hmi.theme（或 ui.theme）选择。
+        // - graphite：保留当前“石墨灰”方案（相当于“把这套保存下”）
+        // - light：灰白底方案（便于白天/亮环境查看）
+        // - ocean：海蓝青（低眩光深色 + 青色强调）
+        static QColor kUiBg;
+        static QColor kUiBg2;
+        static QColor kUiPanel;
+        static QColor kUiBody;
+        static QColor kUiBorder;
+        static QColor kUiBorderWeak;
+        static QColor kUiText;
+        static QColor kUiTextMuted;
+        static QColor kUiTextDim;
+        static QColor kUiGridMinor;
+        static QColor kUiGridMajor;
 
-        // 背景网格：用文字色派生 alpha，避免硬编码到绘制逻辑里
-        static const QColor kUiGridMinor = []() {
-            QColor c = kUiText;
-            c.setAlpha(8);
-            return c;
-        }();
-        static const QColor kUiGridMajor = []() {
-            QColor c = kUiText;
-            c.setAlpha(14);
-            return c;
-        }();
+        static QColor kUiCyan;
+        static QColor kUiGreen;
+        static QColor kUiRed;
+        static QColor kUiOrange;
+        static QColor kUiPurple;
 
-        // 状态/强调色：低饱和、偏灰（石墨灰风格）
-        static const QColor kUiCyan("#4aa7a8");
-        static const QColor kUiGreen("#59a86a");
-        static const QColor kUiRed("#d4605a");
-        static const QColor kUiOrange("#d3a34a");
-        static const QColor kUiPurple("#8a7ec7");
+        // 组件/管道常用辅助色（避免散落硬编码）
+        static QColor kUiShadow;
+        static QColor kUiInk;
+        static QColor kUiMetalDark;
+        static QColor kUiMetalMid;
+        static QColor kUiWater;
+        static QColor kUiPipeOuter;
+        static QColor kUiPipeInner;
+
+        struct UiThemeTokens
+        {
+            QColor bg;
+            QColor panel;
+            QColor body;
+            QColor border;
+            QColor borderWeak;
+            QColor text;
+            QColor textMuted;
+            QColor textDim;
+
+            QColor cyan;
+            QColor green;
+            QColor red;
+            QColor orange;
+            QColor purple;
+
+            QColor shadow;
+            QColor ink;
+            QColor metalDark;
+            QColor metalMid;
+            QColor water;
+        };
+
+        static UiThemeTokens makeGraphiteTheme()
+        {
+            UiThemeTokens t;
+            t.bg = QColor("#3a3d40");
+            t.panel = QColor("#3f4245");
+            t.body = QColor("#474b4f");
+            t.border = QColor("#666a6e");
+            t.borderWeak = QColor("#45494c");
+            t.text = QColor("#d6d9dc");
+            t.textMuted = QColor("#a9adb1");
+            t.textDim = QColor("#80858a");
+
+            t.cyan = QColor("#4aa7a8");
+            t.green = QColor("#59a86a");
+            t.red = QColor("#d4605a");
+            t.orange = QColor("#d3a34a");
+            t.purple = QColor("#8a7ec7");
+
+            t.shadow = QColor(0, 0, 0, 90);
+            t.ink = QColor(0, 0, 0, 200);
+            t.metalDark = QColor("#444");
+            t.metalMid = QColor("#555");
+            t.water = QColor("#0af");
+            return t;
+        }
+
+        static UiThemeTokens makeLightTheme()
+        {
+            UiThemeTokens t;
+            t.bg = QColor("#e6e8ea");
+            t.panel = QColor("#f0f2f3");
+            t.body = QColor("#2d333aa9");
+            t.border = QColor("#90979f");
+            t.borderWeak = QColor("#464c52");
+            t.text = QColor("#2b2f33");
+            t.textMuted = QColor("#4f565d");
+            t.textDim = QColor("#6b737b");
+
+            t.cyan = QColor("#1f8a8b");
+            t.green = QColor("#2a8f56");
+            t.red = QColor("#c24b45");
+            t.orange = QColor("#c4842d");
+            t.purple = QColor("#6a5fb2");
+
+            t.shadow = QColor(0, 0, 0, 50);
+            t.ink = QColor(0, 0, 0, 160);
+            t.metalDark = QColor("#7a828a");
+            t.metalMid = QColor("#8b9299");
+            t.water = QColor("#1677c8");
+            return t;
+        }
+
+        static UiThemeTokens makeOceanTheme()
+        {
+            UiThemeTokens t;
+            t.bg = QColor("#0e2a33");
+            t.panel = QColor("#12323d");
+            t.body = QColor("#153a46");
+            t.border = QColor("#2c5866");
+            t.borderWeak = QColor("#1a3f4b");
+            t.text = QColor("#d6f2f1");
+            t.textMuted = QColor("#a6c9c8");
+            t.textDim = QColor("#7ea5a6");
+
+            t.cyan = QColor("#1aa6a8");
+            t.green = QColor("#2fbf8f");
+            t.red = QColor("#ff6b6b");
+            t.orange = QColor("#f2c14e");
+            t.purple = QColor("#7c6bd6");
+
+            t.shadow = QColor(0, 0, 0, 85);
+            t.ink = QColor(0, 0, 0, 190);
+            t.metalDark = QColor("#244a55");
+            t.metalMid = QColor("#2c5866");
+            t.water = QColor("#2bbcff");
+            return t;
+        }
+
+        static void applyThemeTokens(const UiThemeTokens &t)
+        {
+            kUiBg = t.bg;
+            kUiBg2 = [&]() {
+                QColor c = t.bg;
+                return c.lighter(t.bg.lightness() > 200 ? 104 : 110);
+            }();
+            kUiPanel = t.panel;
+            kUiBody = t.body;
+            kUiBorder = t.border;
+            kUiBorderWeak = t.borderWeak;
+            kUiText = t.text;
+            kUiTextMuted = t.textMuted;
+            kUiTextDim = t.textDim;
+
+            // 网格：根据明暗底自动选择“黑/白系”透明线（用 text 派生最稳）
+            kUiGridMinor = [&]() {
+                QColor c = t.text;
+                c.setAlpha(t.bg.lightness() > 200 ? 18 : 8);
+                return c;
+            }();
+            kUiGridMajor = [&]() {
+                QColor c = t.text;
+                c.setAlpha(t.bg.lightness() > 200 ? 28 : 14);
+                return c;
+            }();
+
+            kUiCyan = t.cyan;
+            kUiGreen = t.green;
+            kUiRed = t.red;
+            kUiOrange = t.orange;
+            kUiPurple = t.purple;
+
+            kUiShadow = t.shadow;
+            kUiInk = t.ink;
+            kUiMetalDark = t.metalDark;
+            kUiMetalMid = t.metalMid;
+            kUiWater = t.water;
+
+            // 管道：外圈略偏边框色，内圈略贴近背景
+            kUiPipeOuter = t.border;
+            kUiPipeInner = [&]() {
+                QColor c = t.bg;
+                return c.darker(t.bg.lightness() > 200 ? 110 : 125);
+            }();
+        }
+
+        static bool ensureUiTokensInitialized()
+        {
+            static QString applied;
+
+            const QString preset = hmiThemePreset();
+            QString normalized = "graphite";
+            if (preset == "light" || preset == "graywhite" || preset == "greywhite")
+                normalized = "light";
+            else if (preset == "ocean" || preset == "aqua" || preset == "teal")
+                normalized = "ocean";
+            if (applied == normalized)
+                return false;
+
+            if (normalized == "light")
+                applyThemeTokens(makeLightTheme());
+            else if (normalized == "ocean")
+                applyThemeTokens(makeOceanTheme());
+            else
+                applyThemeTokens(makeGraphiteTheme());
+
+            qInfo().noquote() << QString("[HMI主题] apply preset=%1 (ui.hmi/ui.theme=%2)").arg(normalized, preset);
+            applied = normalized;
+            return true;
+        }
 
         static QString fmtMPa(double pa)
         {
@@ -316,7 +519,7 @@ namespace WaterTest
 
                 // 轻阴影（选中态暂无，这里做轻量立体感）
                 p->setPen(Qt::NoPen);
-                p->setBrush(QColor(0, 0, 0, 90));
+                p->setBrush(kUiShadow);
                 p->drawRoundedRect(QRectF(-54, -42, 108, 140).translated(2, 3), 10, 10);
 
                 // 电机主体
@@ -331,8 +534,8 @@ namespace WaterTest
                 p->drawEllipse(QPointF(motor.left() + 20, motor.center().y()), 6, 15);
 
                 // 轴
-                p->setBrush(QColor("#555"));
-                p->setPen(QPen(QColor("#777"), 1));
+                p->setBrush(kUiMetalMid);
+                p->setPen(QPen(kUiBorder, 1));
                 p->drawRect(QRectF(motor.right(), motor.center().y() - 3, 12, 6));
 
                 // 泵壳（圆形）
@@ -341,13 +544,13 @@ namespace WaterTest
                 p->drawEllipse(QPointF(22, 0), 18, 18);
 
                 // 出口
-                p->setBrush(QColor("#444"));
+                p->setBrush(kUiMetalDark);
                 p->setPen(QPen(borderColor, 2));
                 p->drawRect(QRectF(40, -4, 12, 8));
 
                 // 状态灯
                 p->setBrush(statusColor);
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->drawEllipse(QPointF(motor.left() + 10, motor.top() + 5), 4, 4);
 
                 // 运行提示环（不做动画，静态 #0af 内圈）
@@ -410,8 +613,8 @@ namespace WaterTest
         class ValveItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return QPointF(-52, 12); }
-            static QPointF outletPortLocal() { return QPointF(52, 12); }
+            static QPointF inletPortLocal() { return QPointF(-40, 12); }
+            static QPointF outletPortLocal() { return QPointF(45, 12); }
 
             explicit ValveItem(const QString &name)
                 : m_name(name), m_open(false), m_degree(0)
@@ -423,7 +626,7 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-52, -40, 104, 100); }
+            QRectF boundingRect() const override { return QRectF(-50, -40, 104, 100); }
 
             static constexpr qreal width() { return 104; }
             static constexpr qreal height() { return 100; }
@@ -493,7 +696,7 @@ namespace WaterTest
 
                 // 轻阴影
                 p->setPen(Qt::NoPen);
-                p->setBrush(QColor(0, 0, 0, 90));
+                p->setBrush(kUiShadow);
                 p->drawRoundedRect(QRectF(-40, -38, 80, 98).translated(2, 3), 10, 10);
 
                 // 执行器
@@ -512,11 +715,11 @@ namespace WaterTest
 
                 // 状态灯
                 p->setBrush(statusColor);
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->drawEllipse(QPointF(-11, -30), 3, 3);
 
                 // 阀杆
-                p->setBrush(QColor("#555"));
+                p->setBrush(kUiMetalMid);
                 p->setPen(QPen(kUiBorder, 1));
                 p->drawRect(QRectF(-2, -16, 4, 12));
 
@@ -537,7 +740,7 @@ namespace WaterTest
                 p->translate(0, 12);
                 p->rotate(rotation);
                 p->setBrush(discColor);
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->drawEllipse(QPointF(0, 0), 16, 3);
                 p->restore();
 
@@ -685,7 +888,7 @@ namespace WaterTest
                 unitFont.setBold(false);
                 unitFont.setFamily("Consolas");
                 p->setFont(unitFont);
-                p->setPen(QColor("#9ca3af"));
+                p->setPen(kUiTextDim);
                 p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "MPa");
 
                 // Status（简化：固定 GOOD）
@@ -700,7 +903,7 @@ namespace WaterTest
                 p->setPen(QPen(kUiBorder, 1.5, Qt::DashLine, Qt::RoundCap));
                 p->drawLine(QPointF(0, card.bottom()), QPointF(0, card.bottom() + 16));
                 p->setBrush(typeColor);
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->drawEllipse(QPointF(0, card.bottom() + 16), 3, 3);
             }
 
@@ -803,7 +1006,7 @@ namespace WaterTest
 
                 // 轻阴影
                 p->setPen(Qt::NoPen);
-                p->setBrush(QColor(0, 0, 0, 90));
+                p->setBrush(kUiShadow);
                 p->drawRoundedRect(QRectF(-58, -88, 116, 176).translated(3, 4), 18, 18);
 
                 // 罐体几何（在既有 boundingRect 内做缩放版）
@@ -837,27 +1040,27 @@ namespace WaterTest
                 p->restore();
 
                 // 入口/出口（简化）
-                p->setBrush(QColor("#444"));
+                p->setBrush(kUiMetalDark);
                 p->setPen(QPen(borderColor, 2));
                 p->drawRect(QRectF(shell.left() - 18, shell.center().y() - 5, 18, 10));
                 p->drawRect(QRectF(shell.right(), shell.bottom() - 10, 18, 10));
 
                 // 支撑
-                p->setBrush(QColor("#444"));
+                p->setBrush(kUiMetalDark);
                 p->setPen(QPen(kUiBorder, 1));
                 p->drawRect(QRectF(shell.left() + 10, bottom.bottom() - 2, 8, 20));
                 p->drawRect(QRectF(shell.right() - 18, bottom.bottom() - 2, 8, 20));
                 p->drawRect(QRectF(shell.left() + 6, bottom.bottom() + 16, shell.width() - 12, 4));
 
                 // 人孔
-                p->setBrush(QColor("#444"));
-                p->setPen(QPen(QColor("#777"), 1.5));
+                p->setBrush(kUiMetalDark);
+                p->setPen(QPen(kUiBorder, 1.5));
                 p->drawEllipse(QRectF(-8, roof.top() + 3, 16, 6));
 
                 // 状态灯（加水中绿，否则灰）
                 const QColor lamp = m_filling ? kUiGreen : kUiBorder;
                 p->setBrush(lamp);
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->drawEllipse(QPointF(shell.right() + 14, roof.center().y()), 4, 4);
 
                 // 文本
@@ -896,7 +1099,7 @@ namespace WaterTest
         {
         public:
             // 1) 上面入口 2) 下面出口
-            static QPointF inletPortLocal() { return QPointF(80, -45); }
+            static QPointF inletPortLocal() { return QPointF(80, -55); }
             static QPointF outletPortLocal() { return QPointF(80, 35); }
 
             explicit OutdoorPoolItem(const QString &name)
@@ -963,11 +1166,11 @@ namespace WaterTest
                 }
 
                 const QColor borderColor = kUiBorder;
-                const QColor waterColor = QColor("#0af");
+                const QColor waterColor = kUiWater;
 
                 // 轻阴影
                 p->setPen(Qt::NoPen);
-                p->setBrush(QColor(0, 0, 0, 90));
+                p->setBrush(kUiShadow);
                 p->drawRoundedRect(QRectF(-78, -98, 156, 196).translated(3, 4), 12, 12);
 
                 // 水池主体（矩形池体）
@@ -991,7 +1194,7 @@ namespace WaterTest
                 p->restore();
 
                 // 出水口（两个出口在右侧）
-                p->setBrush(QColor("#444"));
+                p->setBrush(kUiMetalDark);
                 p->setPen(QPen(borderColor, 2));
                 // 上出口（到P1）
                 p->drawRect(QRectF(poolBody.right(), poolBody.top() + 30, 18, 10));
@@ -999,7 +1202,7 @@ namespace WaterTest
                 p->drawRect(QRectF(poolBody.right(), poolBody.bottom() - 40, 18, 10));
 
                 // 底座
-                p->setBrush(QColor("#333"));
+                p->setBrush(kUiMetalMid);
                 p->setPen(QPen(kUiBorder, 2));
                 p->drawRect(QRectF(-75, poolBody.bottom(), 150, 8));
 
@@ -1199,8 +1402,8 @@ namespace WaterTest
                 if (path.isEmpty())
                     return;
 
-                QPen borderPen(QColor("#666"), 12.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-                QPen innerPen(QColor("#2a2a2a"), 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+                QPen borderPen(kUiPipeOuter, 12.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+                QPen innerPen(kUiPipeInner, 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
 
                 // 绘制管道
                 p->setPen(borderPen);
@@ -1629,7 +1832,7 @@ namespace WaterTest
                 p->drawRect(QRectF(-3, 20, 6, 12));
 
                 // 状态灯
-                p->setPen(QPen(QColor("#000"), 1));
+                p->setPen(QPen(kUiInk, 1));
                 p->setBrush(status);
                 p->drawEllipse(QPointF(-22, 10), 3, 3);
 
@@ -1652,6 +1855,21 @@ namespace WaterTest
             if (!scene)
                 return;
 
+            ensureUiTokensInitialized();
+
+            // 清理旧网格（避免重复叠加）
+            const auto items = scene->items();
+            for (auto *it : items)
+            {
+                if (!it)
+                    continue;
+                if (it->data(0).toString() == "hmi_grid")
+                {
+                    scene->removeItem(it);
+                    delete it;
+                }
+            }
+
             // 工业屏灰背景：仅使用 token，避免背景色与主题脱节
             QLinearGradient bg(rect.topLeft(), rect.bottomLeft());
             bg.setColorAt(0.0, kUiBg2);
@@ -1665,12 +1883,16 @@ namespace WaterTest
             for (int x = 0; x <= rect.width(); x += step)
             {
                 const bool isMajor = (x % (step * 4) == 0);
-                scene->addLine(rect.left() + x, rect.top(), rect.left() + x, rect.bottom(), isMajor ? major : minor)->setZValue(-10);
+                auto *line = scene->addLine(rect.left() + x, rect.top(), rect.left() + x, rect.bottom(), isMajor ? major : minor);
+                line->setZValue(-10);
+                line->setData(0, "hmi_grid");
             }
             for (int y = 0; y <= rect.height(); y += step)
             {
                 const bool isMajor = (y % (step * 4) == 0);
-                scene->addLine(rect.left(), rect.top() + y, rect.right(), rect.top() + y, isMajor ? major : minor)->setZValue(-10);
+                auto *line = scene->addLine(rect.left(), rect.top() + y, rect.right(), rect.top() + y, isMajor ? major : minor);
+                line->setZValue(-10);
+                line->setData(0, "hmi_grid");
             }
         }
     }
@@ -1711,6 +1933,7 @@ namespace WaterTest
           m_targetPressure(0.5f),
           m_currentPressure(0.0f)
     {
+                ensureUiTokensInitialized();
         setupUI();
 
         m_updateTimer = new QTimer(this);
@@ -1810,7 +2033,7 @@ namespace WaterTest
         pipeWps.p1ToV1Scene = {QPointF(540, 150), QPointF(660, 150)};
         pipeWps.poolToP2Scene = {QPointF(280, 440), QPointF(280, 540)};
         pipeWps.p2ToV2Scene = {QPointF(540, 540), QPointF(660, 540)};
-        pipeWps.v2ToTeeScene = {QPointF(900, 540), QPointF(1670, 459)};
+        pipeWps.v2ToTeeScene = {QPointF(900, 540), QPointF(1660, 459)};
         // pipeWps.v2ToTeeScene = {QPointF(540, 540), QPointF(660, 540)};
 
         // 设备图元
@@ -2069,6 +2292,32 @@ namespace WaterTest
 
     void PreparationPanel::onUpdatePipes()
     {
+        // 主题可能在配置加载后才可读：这里做一次轻量检查，变更时刷新背景/网格
+        if (ensureUiTokensInitialized())
+        {
+            if (m_scene)
+            {
+                addBlueGridBackground(m_scene, m_scene->sceneRect());
+
+                // 强制刷新场景内所有图元（含缓存图元），让主题立即体现在设备/文字/图标上
+                const auto items = m_scene->items();
+                for (auto *it : items)
+                {
+                    if (!it)
+                        continue;
+                    // grid 线条已在 addBlueGridBackground 中重建
+                    if (it->data(0).toString() == "hmi_grid")
+                        continue;
+
+                    if (auto *text = dynamic_cast<QGraphicsTextItem *>(it))
+                        text->setDefaultTextColor(kUiText);
+
+                    it->update();
+                }
+                m_scene->update();
+            }
+        }
+
         // 强制所有管道重绘以跟随图元移动（同时刷新几何，避免 boundingRect 变化导致裁剪）
         for (auto *pipe : m_pipes)
         {

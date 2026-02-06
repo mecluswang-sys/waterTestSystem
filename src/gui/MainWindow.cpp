@@ -60,8 +60,8 @@ namespace WaterTest
         setWindowTitle("水质测试系统");
         setMinimumSize(1400, 900);
 
-        // Apply dark theme
-        applyDarkTheme();
+        // Apply app theme (graphite/light/ocean)
+        applyAppTheme();
 
         // createMenuBar();
 
@@ -131,20 +131,33 @@ namespace WaterTest
         }
     }
 
-    void MainWindow::applyDarkTheme()
+    void MainWindow::applyAppTheme()
     {
-        QFile styleFile(":/styles/industrial_10inch.qss");
+        auto &config = ConfigManager::getInstance();
+        const QString uiTheme = QString::fromStdString(config.getString("ui.theme", "")).trimmed().toLower();
+        const QString hmiTheme = QString::fromStdString(config.getString("ui.hmi.theme", "")).trimmed().toLower();
+        const QString theme = !uiTheme.isEmpty() ? uiTheme : (!hmiTheme.isEmpty() ? hmiTheme : QString("graphite"));
+
+        QString qssPath = ":/styles/industrial_10inch_graphite.qss";
+        if (theme == "light" || theme == "graywhite" || theme == "greywhite")
+            qssPath = ":/styles/industrial_10inch_light.qss";
+        else if (theme == "ocean" || theme == "aqua" || theme == "teal")
+            qssPath = ":/styles/industrial_10inch_ocean.qss";
+
+        QFile styleFile(qssPath);
         if (styleFile.open(QFile::ReadOnly))
         {
             QString style = QLatin1String(styleFile.readAll());
             qApp->setStyle("Fusion");
             qApp->setStyleSheet(style);
             styleFile.close();
+            qInfo().noquote() << QString("[UI主题] apply theme=%1 (ui.theme=%2 ui.hmi.theme=%3)").arg(theme, uiTheme, hmiTheme);
         }
         else
         {
             // Fallback theme if resource not available
             qApp->setStyle("Fusion");
+            qWarning().noquote() << QString("[UI主题] load qss fail: %1").arg(qssPath);
         }
     }
 
@@ -245,35 +258,38 @@ namespace WaterTest
 
         // 创建顶部状态栏
         auto *topBar = new QWidget(this);
-        topBar->setStyleSheet("QWidget { background-color: #2c3e50; border-bottom: 1px solid #1a252f; }");
+        topBar->setObjectName("topBar");
         auto *topBarLayout = new QHBoxLayout(topBar);
         topBarLayout->setContentsMargins(15, 10, 15, 10);
 
         // 左侧：标题
         auto *titleLabel = new QLabel("主控台 - Terminal Server", this);
-        titleLabel->setStyleSheet("QLabel { font-size: 16pt; font-weight: bold; color: #4CAF50; }");
+        titleLabel->setObjectName("topTitle");
         topBarLayout->addWidget(titleLabel);
 
         topBarLayout->addSpacing(20);
 
         // 中间：状态指示
         m_terminalStatusLabel = new QLabel("● 待启动", this);
-        m_terminalStatusLabel->setStyleSheet("QLabel { font-size: 11pt; color: #FFC107; font-weight: bold; }");
+        m_terminalStatusLabel->setObjectName("terminalStatus");
+        m_terminalStatusLabel->setProperty("tone", "warn");
         topBarLayout->addWidget(m_terminalStatusLabel);
 
         m_plcStatusLabel = new QLabel("● PLC 已连接", this);
-        m_plcStatusLabel->setStyleSheet("QLabel { font-size: 11pt; color: #4CAF50; font-weight: bold; padding: 0 15px; }");
+        m_plcStatusLabel->setObjectName("plcStatus");
+        m_plcStatusLabel->setProperty("tone", "good");
         topBarLayout->addWidget(m_plcStatusLabel);
 
         m_stationStatusLabel = new QLabel("● Station 0/4", this);
-        m_stationStatusLabel->setStyleSheet("QLabel { font-size: 11pt; color: #F44336; font-weight: bold; }");
+        m_stationStatusLabel->setObjectName("stationStatus");
+        m_stationStatusLabel->setProperty("tone", "bad");
         topBarLayout->addWidget(m_stationStatusLabel);
 
         topBarLayout->addStretch();
 
         // 右侧：时间显示
         auto *timeLabel = new QLabel(QTime::currentTime().toString("HH:mm:ss"), this);
-        timeLabel->setStyleSheet("QLabel { font-size: 11pt; color: #bbb; }");
+        timeLabel->setObjectName("topTime");
         topBarLayout->addWidget(timeLabel);
 
         mainLayout->addWidget(topBar);
@@ -281,10 +297,7 @@ namespace WaterTest
         // 创建标签页容器
         m_tabWidget = new QTabWidget(this);
         m_tabWidget->setTabPosition(QTabWidget::North);
-        m_tabWidget->setStyleSheet(
-            "QTabBar::tab { height: 40px; font-size: 12pt; padding: 8px 20px; }"
-            "QTabBar { background-color: #3a3a3a; }"
-            "QTabWidget::pane { border: none; }");
+        m_tabWidget->setObjectName("mainTabs");
 
         createTerminalTabs();
 

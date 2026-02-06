@@ -9,6 +9,7 @@
 #include "TerminalServer.h"
 #include "StationClient.h"
 #include "DeviceManager.h"
+#include "ConfigManager.h"
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
@@ -18,6 +19,10 @@ using namespace WaterTest;
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+
+    // Load config early so UI theme can be applied on startup.
+    const bool configOk = ConfigManager::getInstance().loadConfig("config/system.conf");
+    qInfo() << "[Config] load config/system.conf" << (configOk ? "OK" : "FAIL");
 
     app.setApplicationName("Water Test System");
     app.setApplicationVersion("2.0");

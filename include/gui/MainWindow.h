@@ -86,7 +86,7 @@ namespace WaterTest
         void setupDeviceManager();
         void createTabWidgetStation();  // Station mode tabs
         void createTabWidgetTerminal(); // Terminal mode tabs (6 tabs)
-        void applyDarkTheme();
+        void applyAppTheme();
 
         // PLC connection helpers (station mode)
         bool connectPlc(bool interactive);

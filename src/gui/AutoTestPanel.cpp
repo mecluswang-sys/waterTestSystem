@@ -42,12 +42,10 @@ namespace WaterTest
         auto *powerTypeLayout = new QHBoxLayout();
         m_powerTypeDC = new QRadioButton("DC直流", this);
         m_powerTypeDC->setChecked(true);
-        m_powerTypeDC->setStyleSheet("QRadioButton { font-size: 11pt; }");
         connect(m_powerTypeDC, &QRadioButton::toggled, this, &AutoTestPanel::onPowerTypeChanged);
         powerTypeLayout->addWidget(m_powerTypeDC);
 
         m_powerTypeAC = new QRadioButton("AC交流", this);
-        m_powerTypeAC->setStyleSheet("QRadioButton { font-size: 11pt; }");
         powerTypeLayout->addWidget(m_powerTypeAC);
         powerTypeLayout->addStretch();
         testValveControlLayout->addLayout(powerTypeLayout, 0, 1);
@@ -58,30 +56,31 @@ namespace WaterTest
         m_testValveVoltageSpinBox->setValue(12.0);
         m_testValveVoltageSpinBox->setSingleStep(0.5);
         m_testValveVoltageSpinBox->setSuffix(" V");
-        m_testValveVoltageSpinBox->setStyleSheet("QDoubleSpinBox { padding: 5px; font-size: 12pt; }");
         connect(m_testValveVoltageSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this, &AutoTestPanel::onTestValveVoltageChanged);
         testValveControlLayout->addWidget(m_testValveVoltageSpinBox, 1, 1);
 
         testValveControlLayout->addWidget(new QLabel("当前电压:", this), 2, 0);
         m_testValveVoltageLabel = new QLabel("0.0 V", this);
-        m_testValveVoltageLabel->setStyleSheet("QLabel { padding: 8px; border: 1px solid #ddd; font-weight: bold; color: #1976d2; font-size: 12pt; }");
+        m_testValveVoltageLabel->setProperty("role", "valueBox");
+        m_testValveVoltageLabel->setProperty("tone", "info");
         testValveControlLayout->addWidget(m_testValveVoltageLabel, 2, 1);
 
         testValveControlLayout->addWidget(new QLabel("阀门状态:", this), 3, 0);
         m_testValveStatusLabel = new QLabel("已关闭", this);
-        m_testValveStatusLabel->setStyleSheet("QLabel { padding: 8px; border: 1px solid #ddd; color: gray; font-size: 11pt; }");
+        m_testValveStatusLabel->setObjectName("badge");
+        m_testValveStatusLabel->setProperty("tone", "muted");
         testValveControlLayout->addWidget(m_testValveStatusLabel, 3, 1);
 
         auto *valveButtonLayout = new QHBoxLayout();
         m_testValveOpenBtn = new QPushButton("开启阀门", this);
-        m_testValveOpenBtn->setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 12px; font-size: 12pt; }");
+        m_testValveOpenBtn->setProperty("tone", "good");
         m_testValveOpenBtn->setMinimumHeight(45);
         connect(m_testValveOpenBtn, &QPushButton::clicked, this, &AutoTestPanel::onTestValveOpen);
         valveButtonLayout->addWidget(m_testValveOpenBtn);
 
         m_testValveCloseBtn = new QPushButton("关闭阀门", this);
-        m_testValveCloseBtn->setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 12px; font-size: 12pt; }");
+        m_testValveCloseBtn->setProperty("tone", "bad");
         m_testValveCloseBtn->setMinimumHeight(45);
         m_testValveCloseBtn->setEnabled(false);
         connect(m_testValveCloseBtn, &QPushButton::clicked, this, &AutoTestPanel::onTestValveClose);
@@ -101,12 +100,10 @@ namespace WaterTest
 
         m_testByCountRadio = new QRadioButton("按次数测试", this);
         m_testByCountRadio->setChecked(true);
-        m_testByCountRadio->setStyleSheet("QRadioButton { font-size: 11pt; }");
         connect(m_testByCountRadio, &QRadioButton::toggled, this, &AutoTestPanel::onTestTypeChanged);
         testTypeLayout->addWidget(m_testByCountRadio);
 
         m_testByDurationRadio = new QRadioButton("按时长测试", this);
-        m_testByDurationRadio->setStyleSheet("QRadioButton { font-size: 11pt; }");
         testTypeLayout->addWidget(m_testByDurationRadio);
 
         testTypeLayout->addStretch();
@@ -118,7 +115,6 @@ namespace WaterTest
         m_testConditionTable->setHorizontalHeaderLabels({"条件名称", "供电类型", "目标压力(MPa)", "流量(L/min)",
                                                          "温度(°C)", "阀门电压(V)", "循环次数", "测试时长(秒)"});
         m_testConditionTable->horizontalHeader()->setStretchLastSection(true);
-        m_testConditionTable->horizontalHeader()->setStyleSheet("QHeaderView::section { background-color: #E3F2FD; font-weight: bold; }");
         m_testConditionTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_testConditionTable->setSelectionMode(QAbstractItemView::SingleSelection);
         m_testConditionTable->setMinimumHeight(200);
@@ -129,19 +125,19 @@ namespace WaterTest
         auto *conditionBtnLayout = new QHBoxLayout();
 
         m_addConditionBtn = new QPushButton("添加条件", this);
-        m_addConditionBtn->setStyleSheet("QPushButton { background-color: #2196F3; color: white; padding: 10px; font-size: 11pt; }");
+        m_addConditionBtn->setProperty("tone", "info");
         m_addConditionBtn->setMinimumHeight(40);
         connect(m_addConditionBtn, &QPushButton::clicked, this, &AutoTestPanel::onAddTestCondition);
         conditionBtnLayout->addWidget(m_addConditionBtn);
 
         m_editConditionBtn = new QPushButton("编辑条件", this);
-        m_editConditionBtn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; padding: 10px; font-size: 11pt; }");
+        m_editConditionBtn->setProperty("tone", "warn");
         m_editConditionBtn->setMinimumHeight(40);
         connect(m_editConditionBtn, &QPushButton::clicked, this, &AutoTestPanel::onEditTestCondition);
         conditionBtnLayout->addWidget(m_editConditionBtn);
 
         m_deleteConditionBtn = new QPushButton("删除条件", this);
-        m_deleteConditionBtn->setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 10px; font-size: 11pt; }");
+        m_deleteConditionBtn->setProperty("tone", "bad");
         m_deleteConditionBtn->setMinimumHeight(40);
         connect(m_deleteConditionBtn, &QPushButton::clicked, this, &AutoTestPanel::onDeleteTestCondition);
         conditionBtnLayout->addWidget(m_deleteConditionBtn);
@@ -152,13 +148,15 @@ namespace WaterTest
         // 自动测试控制
         auto *autoTestLayout = new QHBoxLayout();
         m_startAutoTestBtn = new QPushButton("开始自动测试", this);
-        m_startAutoTestBtn->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; padding: 12px; font-size: 13pt; font-weight: bold; }");
+        m_startAutoTestBtn->setProperty("tone", "info");
+        m_startAutoTestBtn->setProperty("size", "lg");
         m_startAutoTestBtn->setMinimumHeight(50);
         connect(m_startAutoTestBtn, &QPushButton::clicked, this, &AutoTestPanel::onStartAutoTest);
         autoTestLayout->addWidget(m_startAutoTestBtn, 2);
 
         m_autoTestProgressLabel = new QLabel("就绪", this);
-        m_autoTestProgressLabel->setStyleSheet("QLabel { padding: 10px; border: 2px solid #ddd; border-radius: 5px; font-size: 12pt; background-color: #f5f5f5; }");
+        m_autoTestProgressLabel->setProperty("role", "statusBox");
+        m_autoTestProgressLabel->setProperty("tone", "muted");
         autoTestLayout->addWidget(m_autoTestProgressLabel, 1);
 
         conditionLayout->addLayout(autoTestLayout);
@@ -287,7 +285,9 @@ namespace WaterTest
 
         // 更新UI
         m_testValveStatusLabel->setText(QString("已开启 (%1 V)").arg(m_testValveVoltage, 0, 'f', 1));
-        m_testValveStatusLabel->setStyleSheet("QLabel { padding: 8px; border: 2px solid #4CAF50; background-color: #E8F5E9; font-weight: bold; color: #4CAF50; font-size: 11pt; }");
+        m_testValveStatusLabel->setProperty("tone", "good");
+        m_testValveStatusLabel->style()->unpolish(m_testValveStatusLabel);
+        m_testValveStatusLabel->style()->polish(m_testValveStatusLabel);
         m_testValveVoltageLabel->setText(QString("%1 V").arg(m_testValveVoltage, 0, 'f', 1));
         m_testValveOpenBtn->setEnabled(false);
         m_testValveCloseBtn->setEnabled(true);
@@ -308,7 +308,9 @@ namespace WaterTest
 
         // 更新UI
         m_testValveStatusLabel->setText("已关闭");
-        m_testValveStatusLabel->setStyleSheet("QLabel { padding: 8px; border: 1px solid #ddd; background-color: white; color: gray; font-size: 11pt; }");
+        m_testValveStatusLabel->setProperty("tone", "muted");
+        m_testValveStatusLabel->style()->unpolish(m_testValveStatusLabel);
+        m_testValveStatusLabel->style()->polish(m_testValveStatusLabel);
         m_testValveVoltageLabel->setText("0.0 V");
         m_testValveOpenBtn->setEnabled(true);
         m_testValveCloseBtn->setEnabled(false);
@@ -546,9 +548,15 @@ namespace WaterTest
             // 停止自动测试
             m_isAutoTesting = false;
             m_startAutoTestBtn->setText("开始自动测试");
-            m_startAutoTestBtn->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; padding: 12px; font-size: 13pt; font-weight: bold; }");
+            m_startAutoTestBtn->setProperty("tone", "info");
+            m_startAutoTestBtn->setProperty("size", "lg");
+            m_startAutoTestBtn->style()->unpolish(m_startAutoTestBtn);
+            m_startAutoTestBtn->style()->polish(m_startAutoTestBtn);
             m_autoTestProgressLabel->setText("已停止");
-            m_autoTestProgressLabel->setStyleSheet("QLabel { padding: 10px; border: 2px solid #FFC107; background-color: #FFF8E1; border-radius: 5px; font-size: 12pt; }");
+            m_autoTestProgressLabel->setProperty("role", "statusBox");
+            m_autoTestProgressLabel->setProperty("tone", "warn");
+            m_autoTestProgressLabel->style()->unpolish(m_autoTestProgressLabel);
+            m_autoTestProgressLabel->style()->polish(m_autoTestProgressLabel);
 
             // 关闭待测试阀
             if (m_testValveOpen)
@@ -578,7 +586,10 @@ namespace WaterTest
         m_autoTestElapsedSeconds = 0;
 
         m_startAutoTestBtn->setText("停止自动测试");
-        m_startAutoTestBtn->setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 12px; font-size: 13pt; font-weight: bold; }");
+        m_startAutoTestBtn->setProperty("tone", "bad");
+        m_startAutoTestBtn->setProperty("size", "lg");
+        m_startAutoTestBtn->style()->unpolish(m_startAutoTestBtn);
+        m_startAutoTestBtn->style()->polish(m_startAutoTestBtn);
 
         // 开始执行第一个测试条件
         executeAutoTest();
@@ -638,7 +649,9 @@ namespace WaterTest
             m_testValveOpen = true;
             m_testValveVoltage = condition.valveVoltage;
             m_testValveStatusLabel->setText(QString("已开启 (%1 V)").arg(m_testValveVoltage, 0, 'f', 1));
-            m_testValveStatusLabel->setStyleSheet("QLabel { padding: 8px; border: 2px solid #4CAF50; background-color: #E8F5E9; font-weight: bold; color: #4CAF50; font-size: 11pt; }");
+            m_testValveStatusLabel->setProperty("tone", "good");
+            m_testValveStatusLabel->style()->unpolish(m_testValveStatusLabel);
+            m_testValveStatusLabel->style()->polish(m_testValveStatusLabel);
             m_testValveVoltageLabel->setText(QString("%1 V").arg(m_testValveVoltage, 0, 'f', 1));
             m_testValveOpenBtn->setEnabled(false);
             m_testValveCloseBtn->setEnabled(true);
@@ -653,9 +666,15 @@ namespace WaterTest
             // 测试完成
             m_isAutoTesting = false;
             m_startAutoTestBtn->setText("开始自动测试");
-            m_startAutoTestBtn->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; padding: 12px; font-size: 13pt; font-weight: bold; }");
+            m_startAutoTestBtn->setProperty("tone", "info");
+            m_startAutoTestBtn->setProperty("size", "lg");
+            m_startAutoTestBtn->style()->unpolish(m_startAutoTestBtn);
+            m_startAutoTestBtn->style()->polish(m_startAutoTestBtn);
             m_autoTestProgressLabel->setText("测试完成");
-            m_autoTestProgressLabel->setStyleSheet("QLabel { padding: 10px; border: 2px solid #4CAF50; background-color: #E8F5E9; border-radius: 5px; font-size: 12pt; font-weight: bold; }");
+            m_autoTestProgressLabel->setProperty("role", "statusBox");
+            m_autoTestProgressLabel->setProperty("tone", "good");
+            m_autoTestProgressLabel->style()->unpolish(m_autoTestProgressLabel);
+            m_autoTestProgressLabel->style()->polish(m_autoTestProgressLabel);
 
             // 关闭待测试阀
             if (m_testValveOpen)
