@@ -69,6 +69,7 @@ set(SOURCES
     src/gui/PreparationPanel.cpp
     src/gui/TestPanel.cpp
     src/gui/AutoTestPanel.cpp
+    src/gui/Station1Panel.cpp
 )
 
 # 头文件
@@ -91,6 +92,7 @@ set(HEADERS
     include/gui/PreparationPanel.h
     include/gui/TestPanel.h
     include/gui/AutoTestPanel.h
+    include/gui/Station1Panel.h
 )
 
 # 创建可执行文件

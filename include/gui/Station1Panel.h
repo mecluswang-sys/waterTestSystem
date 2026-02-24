@@ -1,0 +1,45 @@
+/**
+ * @file Station1Panel.h
+ * @brief 1号操作台面板（流程图展示）
+ */
+
+#ifndef STATION1_PANEL_H
+#define STATION1_PANEL_H
+
+#include <QWidget>
+#include <memory>
+
+class QShowEvent;
+
+class QGraphicsView;
+class QGraphicsScene;
+
+namespace WaterTest
+{
+    class DeviceManager;
+
+    class Station1Panel : public QWidget
+    {
+        Q_OBJECT
+
+    public:
+        explicit Station1Panel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent = nullptr);
+        ~Station1Panel();
+
+    protected:
+        void resizeEvent(QResizeEvent *event) override;
+        void showEvent(QShowEvent *event) override;
+
+    private:
+        void setupUI();
+        void buildScene();
+        void applyAutoFit();
+
+        std::shared_ptr<DeviceManager> m_deviceManager;
+        QGraphicsView *m_view;
+        QGraphicsScene *m_scene;
+    };
+
+} // namespace WaterTest
+
+#endif // STATION1_PANEL_H

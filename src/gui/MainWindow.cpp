@@ -8,6 +8,7 @@
 #include "gui/PreparationPanel.h"
 #include "gui/TestPanel.h"
 #include "gui/AutoTestPanel.h"
+#include "gui/Station1Panel.h"
 #include "gui/ConfigDialog.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
@@ -41,6 +42,7 @@ namespace WaterTest
           m_monitorPanel(nullptr),
           m_testPanel(nullptr),
           m_autoTestPanel(nullptr),
+          m_station1Panel(nullptr),
           m_connectBtn(nullptr),
           m_disconnectBtn(nullptr),
           m_connectionStatusLabel(nullptr),
@@ -240,6 +242,10 @@ namespace WaterTest
         // Tab 4: 自动测试配置
         m_autoTestPanel = new AutoTestPanel(m_deviceManager, this);
         m_tabWidget->addTab(m_autoTestPanel, "④ 自动测试配置");
+
+        // Tab 5: 1号操作台（流程图）
+        m_station1Panel = new Station1Panel(m_deviceManager, this);
+        m_tabWidget->addTab(m_station1Panel, "⑤ 1号操作台");
 
         mainLayout->addWidget(m_tabWidget);
         setCentralWidget(centralWidget);
