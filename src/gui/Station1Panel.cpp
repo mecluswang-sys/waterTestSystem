@@ -173,7 +173,8 @@ namespace WaterTest
         static void applyThemeTokens(const UiThemeTokens &t)
         {
             kUiBg = t.bg;
-            kUiBg2 = [&]() {
+            kUiBg2 = [&]()
+            {
                 QColor c = t.bg;
                 return c.lighter(t.bg.lightness() > 200 ? 104 : 110);
             }();
@@ -195,19 +196,22 @@ namespace WaterTest
             kUiMetalDark = t.metalDark;
             kUiMetalMid = t.metalMid;
 
-            kUiGridMinor = [&]() {
+            kUiGridMinor = [&]()
+            {
                 QColor c = t.text;
                 c.setAlpha(t.bg.lightness() > 200 ? 18 : 8);
                 return c;
             }();
-            kUiGridMajor = [&]() {
+            kUiGridMajor = [&]()
+            {
                 QColor c = t.text;
                 c.setAlpha(t.bg.lightness() > 200 ? 28 : 14);
                 return c;
             }();
 
             kUiPipeOuter = t.border;
-            kUiPipeInner = [&]() {
+            kUiPipeInner = [&]()
+            {
                 QColor c = t.bg;
                 return c.darker(t.bg.lightness() > 200 ? 110 : 125);
             }();
@@ -295,32 +299,24 @@ namespace WaterTest
                 outer->setZValue(1);
                 auto *inner = scene->addPath(path, QPen(kUiPipeInner, 6.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 inner->setZValue(2);
+
+                QPen flowPen(kUiCyan, 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+                flowPen.setDashPattern({4, 4});
+                auto *flow = scene->addPath(path, flowPen);
+                flow->setZValue(3);
+                flow->setData(0, "hmi_pipe_flow");
             }
 
-            const QPointF v = arrowTip - arrowFrom;
-            const qreal len = qSqrt(v.x() * v.x() + v.y() * v.y());
-            if (len < 0.001)
-                return;
-
-            const QPointF u(v.x() / len, v.y() / len);
-            const QPointF n(-u.y(), u.x());
-
-            const qreal ah = 10.0;
-            const qreal aw = 6.0;
-            const QPointF base = arrowTip - u * ah;
-            QPolygonF tri;
-            tri << arrowTip << (base + n * aw) << (base - n * aw);
-
-            auto *head = scene->addPolygon(tri, QPen(Qt::NoPen), QBrush(kUiCyan));
-            head->setZValue(3);
+            Q_UNUSED(arrowTip);
+            Q_UNUSED(arrowFrom);
         }
 
         // ========== Station1 的图标化拟物设备图元（与 PreparationPanel 同风格） ==========
         class AccumulatorItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return QPointF(-70, 0); }
-            static QPointF outletPortLocal() { return QPointF(70, 0); }
+            static QPointF inletPortLocal() { return QPointF(-50, 0); }
+            static QPointF outletPortLocal() { return QPointF(50, 0); }
             static QPointF returnPortLocal() { return QPointF(0, 55); }
 
             explicit AccumulatorItem(const QString &name)
@@ -330,7 +326,7 @@ namespace WaterTest
                 setFlags(QGraphicsItem::ItemIsSelectable);
             }
 
-            QRectF boundingRect() const override { return QRectF(-80, -55, 160, 120); }
+            QRectF boundingRect() const override { return QRectF(-60, -55, 120, 120); }
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
@@ -346,10 +342,10 @@ namespace WaterTest
                 // 轻阴影
                 p->setPen(Qt::NoPen);
                 p->setBrush(kUiShadow);
-                p->drawRoundedRect(QRectF(-74, -50, 148, 100).translated(3, 4), 18, 18);
+                p->drawRoundedRect(QRectF(-54, -50, 108, 100).translated(3, 4), 18, 18);
 
                 // 罐体（横向胶囊）
-                const QRectF body(-70, -26, 140, 52);
+                const QRectF body(-50, -26, 100, 52);
                 QLinearGradient g(body.topLeft(), body.bottomLeft());
                 g.setColorAt(0.0, kUiBody.lighter(112));
                 g.setColorAt(1.0, kUiBody.darker(108));
@@ -375,7 +371,7 @@ namespace WaterTest
                 f.setPointSize(9);
                 f.setBold(true);
                 p->setFont(f);
-                p->drawText(QRectF(-80, 30, 160, 20), Qt::AlignCenter, m_name);
+                p->drawText(QRectF(-60, 30, 120, 20), Qt::AlignCenter, m_name);
 
                 // 端口触点
                 p->setPen(QPen(kUiBorder, 1));
@@ -523,7 +519,7 @@ namespace WaterTest
                 setFlags(QGraphicsItem::ItemIsSelectable);
             }
 
-            QRectF boundingRect() const override { return QRectF(-56, -42, 120, 112); }
+            QRectF boundingRect() const override { return QRectF(-56, -52, 120, 122); }
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
@@ -858,21 +854,40 @@ namespace WaterTest
 
         static void connectPorts(QGraphicsScene *scene, const QPointF &start, const QPointF &end)
         {
-            QPainterPath path(start);
+            if (!scene)
+                return;
 
-            if (qAbs(start.y() - end.y()) < 8 || qAbs(start.x() - end.x()) < 8)
+            QPainterPath path(start);
+            const qreal dx = end.x() - start.x();
+            const qreal dy = end.y() - start.y();
+
+            // 规则1：同排连接（y 接近）走“水平主干 + 末端短竖线”，避免斜线。
+            if (qAbs(dy) <= 20.0)
             {
+                const QPointF corner(end.x(), start.y());
+                path.lineTo(corner);
                 path.lineTo(end);
-                addHmiPipeWithArrow(scene, path, end, start);
+                addHmiPipeWithArrow(scene, path, end, corner);
                 return;
             }
 
-            const qreal midX = (start.x() + end.x()) * 0.5;
-            path.lineTo(QPointF(midX, start.y()));
-            path.lineTo(QPointF(midX, end.y()));
+            // 规则2：同列连接（x 接近）走“竖直主干 + 末端短横线”。
+            if (qAbs(dx) <= 20.0)
+            {
+                const QPointF corner(start.x(), end.y());
+                path.lineTo(corner);
+                path.lineTo(end);
+                addHmiPipeWithArrow(scene, path, end, corner);
+                return;
+            }
+
+            // 规则3：跨排连接走中间水平走线，保证横平竖直。
+            const qreal midY = (start.y() + end.y()) * 0.5;
+            path.lineTo(QPointF(start.x(), midY));
+            path.lineTo(QPointF(end.x(), midY));
             path.lineTo(end);
 
-            addHmiPipeWithArrow(scene, path, end, QPointF(midX, end.y()));
+            addHmiPipeWithArrow(scene, path, end, QPointF(end.x(), midY));
         }
     }
 
@@ -880,7 +895,9 @@ namespace WaterTest
         : QWidget(parent),
           m_deviceManager(std::move(deviceManager)),
           m_view(nullptr),
-          m_scene(nullptr)
+          m_scene(nullptr),
+          m_flowTimer(nullptr),
+          m_flowDashOffset(0.0)
     {
         setupUI();
     }
@@ -897,7 +914,8 @@ namespace WaterTest
     {
         QWidget::showEvent(event);
         // 关键：首次显示时布局刚完成，确保用最终 viewport 尺寸做 fitInView
-        QTimer::singleShot(0, this, [this]() { applyAutoFit(); });
+        QTimer::singleShot(0, this, [this]()
+                           { applyAutoFit(); });
     }
 
     void Station1Panel::setupUI()
@@ -919,6 +937,10 @@ namespace WaterTest
         m_view->setScene(m_scene);
         layout->addWidget(m_view, 1);
 
+        m_flowTimer = new QTimer(this);
+        connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
+        m_flowTimer->start(50);
+
         buildScene();
     }
 
@@ -932,7 +954,7 @@ namespace WaterTest
         ensureUiTokensInitialized();
 
         // 先给一个较大的场景范围，后面会按图元边界收紧
-        m_scene->setSceneRect(0, 0, 1900, 880);
+        m_scene->setSceneRect(0, 0, 1900, 780);
 
         // 与“测试准备区”一致：蓝色网格 + 拟物灰背景
         addBlueGridBackground(m_scene, m_scene->sceneRect());
@@ -947,12 +969,12 @@ namespace WaterTest
         caption->setPos(18, 14);
         caption->setZValue(5);
 
-        // ==== 图标化设备布局（两排规整排布）====
-        // 上排 9 个设备（0..8），下排 5 个设备（4..8），整体形成“U”字回转，但不再画回路->蓄能器闭环管路。
-        const qreal step = 190;
-        const qreal x0 = 140;
-        const qreal yTop = 160;
-        const qreal yBottom = 450;
+        // ==== 图标化设备布局（严格两排：7 + 7）====
+        // 上排按流程从左到右；下排按流程从右到左，形成蛇形回转。
+        const qreal step = 220;
+        const qreal x0 = 80;
+        const qreal yTop = 120;
+        const qreal yBottom = 300;
 
         auto place = [&](QGraphicsItem *it, qreal cx, qreal cy)
         {
@@ -963,77 +985,74 @@ namespace WaterTest
             m_scene->addItem(it);
         };
 
-        // 上排（从左到右，列 0..8）
+        // 上排（从左到右，列 0..6）
         auto *acc = new AccumulatorItem("蓄能器");
         place(acc, x0 + step * 0, yTop);
 
         auto *v3w = new ThreeWayValveItem("电动三通切换阀");
-        place(v3w, x0 + step * 1, yTop);
+        place(v3w, x0 + step * 1, yTop - 12);
 
         auto *v1 = new ValveItem("电动阀", true, 100.0);
-        place(v1, x0 + step * 2, yTop);
+        place(v1, x0 + step * 2, yTop - 12);
 
         auto *ps1 = new SensorItem("压力传感器", "MPa", kUiPurple);
-        place(ps1, x0 + step * 3, yTop);
+        place(ps1, x0 + step * 3 - 30, yTop - 32);
 
         auto *v2 = new ValveItem("电动阀", true, 100.0);
-        place(v2, x0 + step * 4, yTop);
+        place(v2, x0 + step * 4 - 60, yTop - 12);
 
         auto *ps2 = new SensorItem("压力传感器", "MPa", kUiPurple);
-        place(ps2, x0 + step * 5, yTop);
+        place(ps2, x0 + step * 5 - 90, yTop - 32);
 
         auto *vReg = new ValveItem("电动调压阀", true, 65.0);
-        place(vReg, x0 + step * 6, yTop);
+        place(vReg, x0 + step * 6 - 120, yTop - 12);
+
+        // 下排（按流程从右到左，列 6..0）
+        const qreal xR = x0 + step * 6;
 
         auto *fm = new FlowMeterItem("流量计");
-        place(fm, x0 + step * 7, yTop);
+        place(fm, xR - 120, yBottom);
 
         auto *pt1 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
-        place(pt1, x0 + step * 8, yTop);
+        place(pt1, x0 + step * 5 - 90, yBottom - 40);
 
-        // 下排（从右到左，列 8..4，对齐上排对应列）
-        const qreal xR = x0 + step * 8;
         auto *testValve = new ValveItem("待测试阀", false, 0.0);
-        place(testValve, xR, yBottom);
+        place(testValve, x0 + step * 4 - 60, yBottom - 12);
 
         auto *pt2 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
-        place(pt2, xR - step * 1, yBottom);
+        place(pt2, x0 + step * 3 - 30, yBottom - 40);
 
         auto *vBack1 = new ValveItem("电动阀", true, 100.0);
-        place(vBack1, xR - step * 2, yBottom);
+        place(vBack1, xR - step * 4, yBottom - 12);
 
         auto *vBackReg = new ValveItem("电动调压阀", true, 75.0);
-        place(vBackReg, xR - step * 3, yBottom);
+        place(vBackReg, xR - step * 5, yBottom - 12);
 
         auto *loopNode = new LoopItem("回路");
-        place(loopNode, xR - step * 4, yBottom);
+        place(loopNode, xR - step * 6, yBottom);
 
         // ==== 管道连接（用端口对齐，连接点落在图标上）====
         connectPorts(m_scene, acc->mapToScene(AccumulatorItem::outletPortLocal()), v3w->mapToScene(ThreeWayValveItem::inletPortLocal()));
         connectPorts(m_scene, v3w->mapToScene(ThreeWayValveItem::outletPortLocal()), v1->mapToScene(ValveItem::inletPortLocal()));
-        connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), ps1->mapToScene(SensorItem::inletPortLocal()));
-        connectPorts(m_scene, ps1->mapToScene(SensorItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()));
-        connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), ps2->mapToScene(SensorItem::inletPortLocal()));
-        connectPorts(m_scene, ps2->mapToScene(SensorItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()));
-        connectPorts(m_scene, vReg->mapToScene(ValveItem::outletPortLocal()), fm->mapToScene(FlowMeterItem::inletPortLocal()));
-        connectPorts(m_scene, fm->mapToScene(FlowMeterItem::outletPortLocal()), pt1->mapToScene(SensorItem::inletPortLocal()));
+        connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()));
+        connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()));
 
         // 换行连接：上排最后（右上） -> 下排第一个（右下）
         {
-            const QPointF start = pt1->mapToScene(SensorItem::outletPortLocal());
-            const QPointF end = testValve->mapToScene(ValveItem::inletPortLocal());
-            const qreal midY = (yTop + yBottom) * 0.5;
+            const QPointF start = vReg->mapToScene(ValveItem::outletPortLocal());
+            const QPointF end = fm->mapToScene(FlowMeterItem::outletPortLocal());
+            const qreal bendX = qMax(start.x(), end.x()) + 80.0;
             QPainterPath path(start);
-            path.lineTo(QPointF(start.x(), midY));
-            path.lineTo(QPointF(end.x(), midY));
+            path.lineTo(QPointF(bendX, start.y()));
+            path.lineTo(QPointF(bendX, end.y()));
             path.lineTo(end);
-            addHmiPipeWithArrow(m_scene, path, end, QPointF(end.x(), midY));
+            addHmiPipeWithArrow(m_scene, path, end, QPointF(bendX, end.y()));
         }
 
-        connectPorts(m_scene, testValve->mapToScene(ValveItem::outletPortLocal()), pt2->mapToScene(SensorItem::inletPortLocal()));
-        connectPorts(m_scene, pt2->mapToScene(SensorItem::outletPortLocal()), vBack1->mapToScene(ValveItem::inletPortLocal()));
-        connectPorts(m_scene, vBack1->mapToScene(ValveItem::outletPortLocal()), vBackReg->mapToScene(ValveItem::inletPortLocal()));
-        connectPorts(m_scene, vBackReg->mapToScene(ValveItem::outletPortLocal()), loopNode->mapToScene(LoopItem::inletPortLocal()));
+        connectPorts(m_scene, fm->mapToScene(FlowMeterItem::inletPortLocal()), testValve->mapToScene(ValveItem::outletPortLocal()));
+        connectPorts(m_scene, testValve->mapToScene(ValveItem::inletPortLocal()), vBack1->mapToScene(ValveItem::outletPortLocal()));
+        connectPorts(m_scene, vBack1->mapToScene(ValveItem::inletPortLocal()), vBackReg->mapToScene(ValveItem::outletPortLocal()));
+        connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), loopNode->mapToScene(LoopItem::outletPortLocal()));
 
         // 注：按需求不再绘制“回路 -> 蓄能器”的闭环管路。
 
@@ -1043,24 +1062,45 @@ namespace WaterTest
             m_scene->setSceneRect(r);
 
         // 让 fitInView 在控件完成布局（viewport 有真实尺寸）后执行
-        QTimer::singleShot(0, this, [this]() { applyAutoFit(); });
+        QTimer::singleShot(0, this, [this]()
+                           { applyAutoFit(); });
     }
 
     void Station1Panel::applyAutoFit()
     {
         if (!m_view || !m_scene)
             return;
-        if (!isVisible())
-            return;
 
-        const QRectF r = m_scene->itemsBoundingRect().adjusted(-12, -12, 12, 16);
+        const QRectF r = m_scene->itemsBoundingRect().adjusted(-20, -20, 20, 20);
         if (r.isEmpty())
             return;
 
-        m_view->resetTransform();
         m_view->fitInView(r, Qt::KeepAspectRatio);
-        // 轻微放大一点点，减少留白
-        m_view->scale(1.0, 1.18);
+    }
+
+    void Station1Panel::updatePipeFlowAnimation()
+    {
+        if (!m_scene)
+            return;
+
+        m_flowDashOffset -= 1.0;
+        if (m_flowDashOffset < -10000.0)
+            m_flowDashOffset = 0.0;
+
+        const auto items = m_scene->items();
+        for (auto *it : items)
+        {
+            if (!it || it->data(0).toString() != "hmi_pipe_flow")
+                continue;
+
+            auto *pathItem = dynamic_cast<QGraphicsPathItem *>(it);
+            if (!pathItem)
+                continue;
+
+            QPen pen = pathItem->pen();
+            pen.setDashOffset(m_flowDashOffset);
+            pathItem->setPen(pen);
+        }
     }
 
 } // namespace WaterTest

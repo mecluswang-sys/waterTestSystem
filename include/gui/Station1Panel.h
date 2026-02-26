@@ -10,6 +10,7 @@
 #include <memory>
 
 class QShowEvent;
+class QTimer;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -34,10 +35,13 @@ namespace WaterTest
         void setupUI();
         void buildScene();
         void applyAutoFit();
+        void updatePipeFlowAnimation();
 
         std::shared_ptr<DeviceManager> m_deviceManager;
         QGraphicsView *m_view;
         QGraphicsScene *m_scene;
+        QTimer *m_flowTimer;
+        qreal m_flowDashOffset;
     };
 
 } // namespace WaterTest
