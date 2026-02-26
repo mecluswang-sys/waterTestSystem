@@ -185,6 +185,33 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake
 cmake --build . --config Release
 ```
 
+### 问题4：`builtin-baseline` 提交不可用（`git show versions/baseline.json` 失败）
+
+典型报错：
+
+- `failed to git show versions/baseline.json`
+- `path 'versions/baseline.json' exists on disk, but not in '<commit>'`
+
+原因：`vcpkg.json` 中的 `builtin-baseline` 指向了本机 `vcpkg` 仓库中不存在或过旧的提交。
+
+```powershell
+# 1) 先更新本机 vcpkg 仓库
+git -C "$env:VCPKG_ROOT" fetch --all --prune
+
+# 2) 取一个当前可用的提交（通常直接用 HEAD）
+git -C "$env:VCPKG_ROOT" rev-parse HEAD
+```
+
+将上一步得到的提交哈希写入项目根目录 `vcpkg.json` 的 `builtin-baseline`，然后重新构建：
+
+```powershell
+.\scripts\rebuild.ps1
+```
+
+本项目曾验证可用的 baseline：
+
+- `903956eff7cb94774a9e805ff573c000afc43e3e`
+
 ## VSCode集成
 
 如果使用VSCode，可以在 `.vscode/settings.json` 中配置：

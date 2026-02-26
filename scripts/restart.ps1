@@ -6,7 +6,7 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $workspaceRoot = Split-Path -Parent $scriptDir
 
-$buildScript = Join-Path $workspaceRoot "scripts/build.ps1"
+$buildScript = Join-Path $workspaceRoot "scripts/rebuild.ps1"
 $deployScript = Join-Path $workspaceRoot "scripts/deploy.ps1"
 $startScript = Join-Path $workspaceRoot "deploy/start.bat"
 
