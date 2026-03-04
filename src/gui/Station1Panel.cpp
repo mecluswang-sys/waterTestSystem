@@ -28,6 +28,11 @@ namespace WaterTest
 {
     namespace
     {
+        constexpr qreal kDeviceItemScale = 1.25;
+        constexpr qreal kPipeOuterWidth = 14.0;
+        constexpr qreal kPipeInnerWidth = 9.0;
+        constexpr qreal kPipeFlowWidth = 5.0;
+
         // 说明：Station1Panel 需要与“测试准备区(PreparationPanel)”保持一致的拟物/HMI风格。
         // PreparationPanel 的 HMI 图元类都内联在 cpp 中，无法直接复用；这里复用同一套“主题 token + 网格背景”，
         // 并把节点/连线改成拟物面板与“管道”风格（外圈/内圈）。
@@ -269,7 +274,7 @@ namespace WaterTest
 
             const QPen minor(kUiGridMinor, 1);
             const QPen major(kUiGridMajor, 1.5);
-            const int step = 25;
+            const int step = 100;
             for (int x = 0; x <= rect.width(); x += step)
             {
                 const bool isMajor = (x % (step * 4) == 0);
@@ -295,12 +300,12 @@ namespace WaterTest
 
             // 画“管道”：外圈 + 内圈（拟物厚重感）
             {
-                auto *outer = scene->addPath(path, QPen(kUiPipeOuter, 10.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                auto *outer = scene->addPath(path, QPen(kUiPipeOuter, kPipeOuterWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 outer->setZValue(1);
-                auto *inner = scene->addPath(path, QPen(kUiPipeInner, 6.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                auto *inner = scene->addPath(path, QPen(kUiPipeInner, kPipeInnerWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 inner->setZValue(2);
 
-                QPen flowPen(kUiCyan, 4.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+                QPen flowPen(kUiCyan, kPipeFlowWidth, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
                 flowPen.setDashPattern({4, 4});
                 auto *flow = scene->addPath(path, flowPen);
                 flow->setZValue(3);
@@ -390,6 +395,8 @@ namespace WaterTest
         public:
             static QPointF inletPortLocal() { return QPointF(-40, 12); }
             static QPointF outletPortLocal() { return QPointF(45, 12); }
+            static QPointF topPortLocal() { return QPointF(0, -2); }
+            static QPointF bottomPortLocal() { return QPointF(0, 26); }
 
             explicit ValveItem(const QString &name, bool open = true, double degree = 100.0)
                 : m_name(name), m_open(open), m_degree(degree)
@@ -496,6 +503,8 @@ namespace WaterTest
                 p->setBrush(kUiCyan);
                 p->drawEllipse(inletPortLocal(), 4, 4);
                 p->drawEllipse(outletPortLocal(), 4, 4);
+                p->drawEllipse(topPortLocal(), 4, 4);
+                p->drawEllipse(bottomPortLocal(), 4, 4);
             }
 
         private:
@@ -966,100 +975,137 @@ namespace WaterTest
         tf.setPointSize(14);
         tf.setBold(true);
         caption->setFont(tf);
-        caption->setPos(18, 14);
+        caption->setPos(8, 8);
+        caption->setData(0, "hmi_caption");
         caption->setZValue(5);
 
-        // ==== 图标化设备布局（严格两排：7 + 7）====
-        // 上排按流程从左到右；下排按流程从右到左，形成蛇形回转。
-        const qreal step = 220;
-        const qreal x0 = 80;
-        const qreal yTop = 120;
-        const qreal yBottom = 300;
+        // ==== 图标化设备布局（两排蛇形：7 + 7）====
+        // 第一排：左->右；第二排：右->左。
+        const qreal step = 320;
+        const qreal x0 = 10;
+        const qreal leftTwoColsShiftX = 200;
+        const qreal yRow1 = 220;
+        const qreal yRow2 = 480;
+        const qreal valvePortYOffset = 12;
+        const qreal row1AfterAccumulatorYOffset = -valvePortYOffset;
+        const qreal row2AfterFlowMeterYOffset = -valvePortYOffset;
+        const qreal pressureSensorTapYOffset = -28;
+
+        const qreal firstRowAnchorX = x0 + leftTwoColsShiftX;
+        const qreal xAcc = firstRowAnchorX + step * 0.0;
+        const qreal xV3w = firstRowAnchorX + step * 1.0;
+        const qreal xV1 = firstRowAnchorX + step * 2.0;
+        const qreal xV2 = firstRowAnchorX + step * 3.0;
+        const qreal xVReg = firstRowAnchorX + step * 4.0;
+        const qreal xPs1 = (xV1 + xV2) * 0.5;
+        const qreal xPs2 = (xV2 + xVReg) * 0.5;
+
+        const qreal xFm = xVReg;
+        const qreal xTestValve = xV2;
+        const qreal xVBack1 = xV1;
+        const qreal xVBackReg = xV3w;
+        const qreal xLoop = xAcc;
+        const qreal xPt1 = (xFm + xTestValve) * 0.5;
+        const qreal xPt2 = (xTestValve + xVBack1) * 0.5;
 
         auto place = [&](QGraphicsItem *it, qreal cx, qreal cy)
         {
             if (!it)
                 return;
             it->setPos(QPointF(cx, cy));
+            it->setTransformOriginPoint(it->boundingRect().center());
+            it->setScale(kDeviceItemScale);
             it->setZValue(2);
             m_scene->addItem(it);
         };
 
-        // 上排（从左到右，列 0..6）
+        // 第一排（从左到右，列 0..6）
         auto *acc = new AccumulatorItem("蓄能器");
-        place(acc, x0 + step * 0, yTop);
+        place(acc, xAcc, yRow1);
 
         auto *v3w = new ThreeWayValveItem("电动三通切换阀");
-        place(v3w, x0 + step * 1, yTop - 12);
+        place(v3w, xV3w, yRow1 + row1AfterAccumulatorYOffset);
 
         auto *v1 = new ValveItem("电动阀", true, 100.0);
-        place(v1, x0 + step * 2, yTop - 12);
+        place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
 
+        // 压力传感器上置：使底部红点与主干管道平齐。
         auto *ps1 = new SensorItem("压力传感器", "MPa", kUiPurple);
-        place(ps1, x0 + step * 3 - 30, yTop - 32);
+        place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *v2 = new ValveItem("电动阀", true, 100.0);
-        place(v2, x0 + step * 4 - 60, yTop - 12);
+        place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
 
         auto *ps2 = new SensorItem("压力传感器", "MPa", kUiPurple);
-        place(ps2, x0 + step * 5 - 90, yTop - 32);
+        place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *vReg = new ValveItem("电动调压阀", true, 65.0);
-        place(vReg, x0 + step * 6 - 120, yTop - 12);
+        place(vReg, xVReg, yRow1 + row1AfterAccumulatorYOffset);
 
-        // 下排（按流程从右到左，列 6..0）
-        const qreal xR = x0 + step * 6;
-
+        // 第二排（从右到左，列 6..0）
         auto *fm = new FlowMeterItem("流量计");
-        place(fm, xR - 120, yBottom);
+        place(fm, xFm, yRow2);
 
         auto *pt1 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
-        place(pt1, x0 + step * 5 - 90, yBottom - 40);
+        place(pt1, xPt1, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *testValve = new ValveItem("待测试阀", false, 0.0);
-        place(testValve, x0 + step * 4 - 60, yBottom - 12);
+        place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
 
         auto *pt2 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
-        place(pt2, x0 + step * 3 - 30, yBottom - 40);
+        place(pt2, xPt2, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *vBack1 = new ValveItem("电动阀", true, 100.0);
-        place(vBack1, xR - step * 4, yBottom - 12);
+        place(vBack1, xVBack1, yRow2 + row2AfterFlowMeterYOffset);
 
         auto *vBackReg = new ValveItem("电动调压阀", true, 75.0);
-        place(vBackReg, xR - step * 5, yBottom - 12);
+        place(vBackReg, xVBackReg, yRow2 + row2AfterFlowMeterYOffset);
 
         auto *loopNode = new LoopItem("回路");
-        place(loopNode, xR - step * 6, yBottom);
+        place(loopNode, xLoop, yRow2);
 
-        // ==== 管道连接（用端口对齐，连接点落在图标上）====
+        // ==== 管道连接（四段主流程，按工艺流向编号）====
+
+        // 管路1（上排供压主线）
+        // 路径：蓄能器 -> 电动三通切换阀 -> 电动阀V1 -> 电动阀V2 -> 电动调压阀
+        // 作用：构建测试介质进入测试段前的供压与切换主通道。
+        // 特点：全部走上排主干，使用 connectPorts 保持横平竖直并自动端口对齐。
         connectPorts(m_scene, acc->mapToScene(AccumulatorItem::outletPortLocal()), v3w->mapToScene(ThreeWayValveItem::inletPortLocal()));
         connectPorts(m_scene, v3w->mapToScene(ThreeWayValveItem::outletPortLocal()), v1->mapToScene(ValveItem::inletPortLocal()));
         connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()));
         connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()));
 
-        // 换行连接：上排最后（右上） -> 下排第一个（右下）
+        // 管路2（上排到下排的跨排过渡线）
+        // 路径：电动调压阀出口 ->（向右预留）->（垂直下行）-> 流量计出口侧
+        // 作用：完成上排主线到下排测试回路的“换行”连接。
+        // 特点：先水平后垂直再水平，确保跨排连接无斜线；其中 +50 为过渡水平段长度。
         {
             const QPointF start = vReg->mapToScene(ValveItem::outletPortLocal());
             const QPointF end = fm->mapToScene(FlowMeterItem::outletPortLocal());
-            const qreal bendX = qMax(start.x(), end.x()) + 80.0;
             QPainterPath path(start);
-            path.lineTo(QPointF(bendX, start.y()));
-            path.lineTo(QPointF(bendX, end.y()));
+            const QPointF p1(start.x() + 50.0, start.y());
+            const QPointF p2(p1.x(), end.y());
+            path.lineTo(p1);
+            path.lineTo(p2);
             path.lineTo(end);
-            addHmiPipeWithArrow(m_scene, path, end, QPointF(bendX, end.y()));
+            addHmiPipeWithArrow(m_scene, path, end, p2);
         }
 
+        // 管路3（下排测试主线）
+        // 路径：流量计 -> 待测试阀 -> 回路电动阀（vBack1）
+        // 作用：形成测试段核心路径，覆盖流量计量与被测阀通路。
+        // 特点：按下排主干反向布置，方向与上排相反，但连接规则一致。
         connectPorts(m_scene, fm->mapToScene(FlowMeterItem::inletPortLocal()), testValve->mapToScene(ValveItem::outletPortLocal()));
         connectPorts(m_scene, testValve->mapToScene(ValveItem::inletPortLocal()), vBack1->mapToScene(ValveItem::outletPortLocal()));
+
+        // 管路4（下排回路收口段）
+        // 路径：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 回路节点（loopNode）
+        // 作用：对测试后介质进行回路调节并导入回路节点，完成流程收口。
+        // 特点：保持与管路3同一基准高度，便于视觉识别与后续长度微调。
         connectPorts(m_scene, vBack1->mapToScene(ValveItem::inletPortLocal()), vBackReg->mapToScene(ValveItem::outletPortLocal()));
         connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), loopNode->mapToScene(LoopItem::outletPortLocal()));
 
         // 注：按需求不再绘制“回路 -> 蓄能器”的闭环管路。
-
-        // 收紧 sceneRect 并自适配，避免缩放异常
-        const QRectF r = m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 60);
-        if (!r.isEmpty())
-            m_scene->setSceneRect(r);
 
         // 让 fitInView 在控件完成布局（viewport 有真实尺寸）后执行
         QTimer::singleShot(0, this, [this]()
@@ -1071,7 +1117,7 @@ namespace WaterTest
         if (!m_view || !m_scene)
             return;
 
-        const QRectF r = m_scene->itemsBoundingRect().adjusted(-20, -20, 20, 20);
+        const QRectF r = m_scene->sceneRect();
         if (r.isEmpty())
             return;
 
