@@ -259,7 +259,8 @@ namespace WaterTest
         static void applyThemeTokens(const UiThemeTokens &t)
         {
             kUiBg = t.bg;
-            kUiBg2 = [&]() {
+            kUiBg2 = [&]()
+            {
                 QColor c = t.bg;
                 return c.lighter(t.bg.lightness() > 200 ? 104 : 110);
             }();
@@ -272,12 +273,14 @@ namespace WaterTest
             kUiTextDim = t.textDim;
 
             // 网格：根据明暗底自动选择“黑/白系”透明线（用 text 派生最稳）
-            kUiGridMinor = [&]() {
+            kUiGridMinor = [&]()
+            {
                 QColor c = t.text;
                 c.setAlpha(t.bg.lightness() > 200 ? 18 : 8);
                 return c;
             }();
-            kUiGridMajor = [&]() {
+            kUiGridMajor = [&]()
+            {
                 QColor c = t.text;
                 c.setAlpha(t.bg.lightness() > 200 ? 28 : 14);
                 return c;
@@ -297,7 +300,8 @@ namespace WaterTest
 
             // 管道：外圈略偏边框色，内圈略贴近背景
             kUiPipeOuter = t.border;
-            kUiPipeInner = [&]() {
+            kUiPipeInner = [&]()
+            {
                 QColor c = t.bg;
                 return c.darker(t.bg.lightness() > 200 ? 110 : 125);
             }();
@@ -328,9 +332,9 @@ namespace WaterTest
             return true;
         }
 
-        static QString fmtMPa(double pa)
+        static QString fmtKPa(double pa)
         {
-            return QString::number(pa / 1e6, 'f', 3) + " MPa";
+            return QString::number(pa / 1e3, 'f', 1) + " kPa";
         }
 
         constexpr qreal kPumpItemWidth = 110;
@@ -477,9 +481,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
             qreal x() const { return pos().x(); }
@@ -655,9 +659,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -823,9 +827,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -889,7 +893,7 @@ namespace WaterTest
                 unitFont.setFamily("Consolas");
                 p->setFont(unitFont);
                 p->setPen(kUiTextDim);
-                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "MPa");
+                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "kPa");
 
                 // Status（简化：固定 GOOD）
                 p->setBrush(kUiGreen);
@@ -954,9 +958,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -1078,7 +1082,7 @@ namespace WaterTest
                 p->setFont(f2);
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-70, 62, 140, 16), Qt::AlignCenter,
-                            QString("LV:%1%%  PT:%2MPa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 3)));
+                            QString("LV:%1%%  PT:%2kPa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 1)));
 
                 // 入口/出口触点（用于管道吸附）
                 p->setPen(QPen(kUiBorder, 1));
@@ -1138,9 +1142,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -1277,9 +1281,9 @@ namespace WaterTest
                 if (!hmiDragEnabled())
                     return;
                 qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                          .arg(m_name)
-                                          .arg(pos().x(), 0, 'f', 0)
-                                          .arg(pos().y(), 0, 'f', 0);
+                                         .arg(m_name)
+                                         .arg(pos().x(), 0, 'f', 0)
+                                         .arg(pos().y(), 0, 'f', 0);
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -1329,8 +1333,8 @@ namespace WaterTest
                         PortDir endDir = PortDir::Auto)
                 : m_startItem(startItem), m_startOffset(startOffset),
                   m_endItem(endItem), m_endOffset(endOffset),
-                    m_waypointsStartLocal(waypoints), m_flowing(false),
-                    m_flowDashOffset(0.0),
+                  m_waypointsStartLocal(waypoints), m_flowing(false),
+                  m_flowDashOffset(0.0),
                   m_hovered(false), m_dragWaypointIndex(-1),
                   m_startDir(startDir), m_endDir(endDir)
             {
@@ -1646,7 +1650,8 @@ namespace WaterTest
                 const bool toV = (toDir == PortDir::Vertical);
 
                 // 默认回退（兼容 Auto）：先水平再垂直
-                auto fallback = [&]() { appendOrthogonalSegment(out, from, to); };
+                auto fallback = [&]()
+                { appendOrthogonalSegment(out, from, to); };
 
                 // 只指定了起点方向/终点方向之一时：用一个拐点保证“离开端口”的方向
                 if ((fromDir == PortDir::Auto) && (toDir == PortDir::Auto))
@@ -1921,7 +1926,7 @@ namespace WaterTest
           m_actionBarOverlay(nullptr),
           m_selfCheckBtn(nullptr),
           m_startFillingBtn(nullptr),
-                    m_drainBtn(nullptr),
+          m_drainBtn(nullptr),
           m_stopFillingBtn(nullptr),
           m_reliefValveBtn(nullptr),
           m_reliefValveCloseBtn(nullptr),
@@ -1932,10 +1937,10 @@ namespace WaterTest
           m_isFilling(false),
           m_fillingTimeSeconds(0),
           m_pumpFrequency(40.0f),
-          m_targetPressure(0.5f),
+          m_targetPressure(500.0f),
           m_currentPressure(0.0f)
     {
-                ensureUiTokensInitialized();
+        ensureUiTokensInitialized();
         setupUI();
 
         m_updateTimer = new QTimer(this);
@@ -2214,9 +2219,9 @@ namespace WaterTest
                 const QPointF p = item->pos();
 
                 qInfo().noquote() << QString("[HMI初始坐标] %1 pos=(%2, %3)")
-                                          .arg(name)
-                                          .arg(p.x(), 0, 'f', 0)
-                                          .arg(p.y(), 0, 'f', 0);
+                                         .arg(name)
+                                         .arg(p.x(), 0, 'f', 0)
+                                         .arg(p.y(), 0, 'f', 0);
 
                 appendHmiPositionLine(formatHmiPositionLine("INIT", name, p));
             };
@@ -2558,7 +2563,7 @@ namespace WaterTest
         addRow("系统运行", sys.isRunning, sys.isRunning ? "运行中" : "未运行");
 
         const auto p1 = m_deviceManager->getPressureSensor(1);
-        addRow("压力传感器1", p1.id != 0, QString("%1, %2 MPa").arg(statusToText(p1.status)).arg(p1.pressure / 1e6, 0, 'f', 3));
+        addRow("压力传感器1", p1.id != 0, QString("%1, %2 kPa").arg(statusToText(p1.status)).arg(p1.pressure / 1e3, 0, 'f', 1));
 
         const QString html =
             "<h3>系统自检结果</h3>"
@@ -2663,14 +2668,14 @@ namespace WaterTest
         auto s3 = m_deviceManager->getPressureSensor(3);
 
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS1))
-            item->setPressureMPa(s1.pressure / 1e6);
+            item->setPressureMPa(s1.pressure / 1e3);
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS2))
-            item->setPressureMPa(s2.pressure / 1e6);
+            item->setPressureMPa(s2.pressure / 1e3);
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS3))
-            item->setPressureMPa(s3.pressure / 1e6);
+            item->setPressureMPa(s3.pressure / 1e3);
 
         // 以传感器3作为分水罐压力（对应 docs/测试准备区流程图.mmd）
-        m_currentPressure = static_cast<float>(s3.pressure / 1e6);
+        m_currentPressure = static_cast<float>(s3.pressure / 1e3);
         // 根据压力计算水位百分比（假设目标压力对应满罐）
         int waterLevel = static_cast<int>((m_targetPressure <= 0.0001f) ? 0.0f : (m_currentPressure / m_targetPressure) * 100.0f);
         if (waterLevel > 100)
@@ -2719,7 +2724,7 @@ namespace WaterTest
 
         if (m_tankLevelText)
         {
-            m_tankLevelText->setText(QString("%1  (%2)").arg(levelText).arg(fmtMPa(s3.pressure)));
+            m_tankLevelText->setText(QString("%1  (%2)").arg(levelText).arg(fmtKPa(s3.pressure)));
             const char *tone = "bad";
             if (waterLevel >= 95)
                 tone = "good";
@@ -2776,7 +2781,7 @@ namespace WaterTest
 
         // 确认操作
         auto reply = QMessageBox::question(this, "确认",
-                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 MPa")
+                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kPa")
                                                .arg(m_pumpFrequency, 0, 'f', 1)
                                                .arg(m_targetPressure, 0, 'f', 2),
                                            QMessageBox::Yes | QMessageBox::No);

@@ -45,7 +45,7 @@ namespace WaterTest
     {
         QString name;         // 条件名称
         PowerType powerType;  // 供电类型 (AC/DC)
-        float targetPressure; // 目标压力 (MPa)
+        float targetPressure; // 目标压力 (kPa)
         float flowRate;       // 流量 (L/min)
         float temperature;    // 温度 (°C)
         float valveVoltage;   // 阀门电压 (V)
@@ -53,7 +53,7 @@ namespace WaterTest
         int durationSeconds;  // 测试时长(秒) (仅BY_DURATION类型使用)
 
         TestCondition()
-            : powerType(PowerType::DC), targetPressure(0.5f), flowRate(10.0f), temperature(25.0f), valveVoltage(12.0f), cycleCount(100), durationSeconds(3600)
+            : powerType(PowerType::DC), targetPressure(500.0f), flowRate(10.0f), temperature(25.0f), valveVoltage(12.0f), cycleCount(100), durationSeconds(3600)
         {
         }
     };

@@ -45,7 +45,7 @@ namespace WaterTest
             [](const PressureSensor &sensor)
             {
                 // 验证压力值是否在合理范围内
-                if (sensor.pressure < 0 || sensor.pressure > 2000000.0f) // 0-2MPa
+                if (sensor.pressure < 0 || sensor.pressure > 2000000.0f) // 0-2000kPa
                 {
                     return false;
                 }

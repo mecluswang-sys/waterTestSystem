@@ -125,8 +125,8 @@ namespace WaterTest
         bool m_isFilling;
         int m_fillingTimeSeconds;
         float m_pumpFrequency;   // 变频泵频率（Hz）
-        float m_targetPressure;  // 目标压力（MPa）
-        float m_currentPressure; // 当前压力（MPa）
+        float m_targetPressure;  // 目标压力（kPa）
+        float m_currentPressure; // 当前压力（kPa）
 
         // 样式
         QString getStatusColor(bool isGood) const;

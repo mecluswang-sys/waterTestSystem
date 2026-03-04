@@ -167,15 +167,16 @@ namespace WaterTest
 
         const QString arrow = " → ";
         QString flowText = QString(
-            "<div>"
-            "<b>测试管路流程图：</b><br/><br/>"
-            "分水罐%1电动阀2%1<i>消声止回阀</i>%1压力传感器2%1电动阀3%1流量计1<br/>"
-            "%1电动阀4%1<i>压力表</i>%1<i>消声止回阀</i>%1压力传感器3%1电动阀5<br/>"
-            "%1压力传感器4%1<b>电动三通切换阀</b>%1电动阀6%1调压阀1<br/>"
-            "%1压力传感器5%1<b>温度传感器</b>%1<b>待测试阀</b>%1压力传感器6<br/>"
-            "%1流量计2%1电动阀7%1调压阀2<br/><br/>"
-            "<i style='font-size: 9pt;'>注：斜体表示物理设备（不受PLC控制）</i>"
-            "</div>").arg(arrow);
+                               "<div>"
+                               "<b>测试管路流程图：</b><br/><br/>"
+                               "分水罐%1电动阀2%1<i>消声止回阀</i>%1压力传感器2%1电动阀3%1流量计1<br/>"
+                               "%1电动阀4%1<i>压力表</i>%1<i>消声止回阀</i>%1压力传感器3%1电动阀5<br/>"
+                               "%1压力传感器4%1<b>电动三通切换阀</b>%1电动阀6%1调压阀1<br/>"
+                               "%1压力传感器5%1<b>温度传感器</b>%1<b>待测试阀</b>%1压力传感器6<br/>"
+                               "%1流量计2%1电动阀7%1调压阀2<br/><br/>"
+                               "<i style='font-size: 9pt;'>注：斜体表示物理设备（不受PLC控制）</i>"
+                               "</div>")
+                               .arg(arrow);
 
         m_flowDiagramLabel->setText(flowText);
     }
@@ -216,9 +217,9 @@ namespace WaterTest
         }
     }
 
-    static QString fmtMPa(double pa)
+    static QString fmtKPa(double pa)
     {
-        return QString::number(pa / 1e6, 'f', 3) + " MPa";
+        return QString::number(pa / 1e3, 'f', 1) + " kPa";
     }
 
     static QString fmtC(double c)
@@ -258,7 +259,7 @@ namespace WaterTest
                                  .arg(QString::number(pump.frequency, 'f', 1)));
 
         m_p1t1Block->setText(QString("P1/T1\n%1  %2")
-                                 .arg(fmtMPa(p1.pressure))
+                                 .arg(fmtKPa(p1.pressure))
                                  .arg(fmtC(t1.temperature)));
         bool d0 = false, d1 = false, d2 = false;
         m_deviceManager->getRelayState(0, d0);
@@ -269,7 +270,7 @@ namespace WaterTest
                                    .arg(fmtValve(v1.status))
                                    .arg(d0 ? "通" : "断"));
         m_p2t2Block->setText(QString("P2/T2\n%1  %2")
-                                 .arg(fmtMPa(p2.pressure))
+                                 .arg(fmtKPa(p2.pressure))
                                  .arg(fmtC(t2.temperature)));
         m_flowBlock->setText(QString("流量计\n%1 L/min")
                                  .arg(QString::number(fm.flowRate, 'f', 2)));
@@ -277,13 +278,13 @@ namespace WaterTest
                                    .arg(fmtValve(v2.status))
                                    .arg(d1 ? "通" : "断"));
         m_p3t3Block->setText(QString("P3/T3\n%1  %2")
-                                 .arg(fmtMPa(p3.pressure))
+                                 .arg(fmtKPa(p3.pressure))
                                  .arg(fmtC(t3.temperature)));
         m_dutValveBlock->setText(QString("待测阀\n%1  C:%2")
                                      .arg(fmtValve(vDut.status))
                                      .arg(d2 ? "通" : "断"));
         m_p4t4Block->setText(QString("P4/T4\n%1  %2")
-                                 .arg(fmtMPa(p4.pressure))
+                                 .arg(fmtKPa(p4.pressure))
                                  .arg(fmtC(t4.temperature)));
     }
 
@@ -310,22 +311,22 @@ namespace WaterTest
 
         QString line1 = QString("增压泵[%1]  →  传感器1[P:%2  T:%3]  →  阀1[%4; A:%5]  →  传感器2[P:%6  T:%7]\n")
                             .arg(pump.isRunning ? "运行" : "停止")
-                            .arg(fmtMPa(p1.pressure))
+                            .arg(fmtKPa(p1.pressure))
                             .arg(fmtC(t1.temperature))
                             .arg(fmtValve(v1.status))
                             .arg(d0 ? "通" : "断")
-                            .arg(fmtMPa(p2.pressure))
+                            .arg(fmtKPa(p2.pressure))
                             .arg(fmtC(t2.temperature));
 
         QString line2 = QString("流量计[%1 L/min]  →  阀2[%2; B:%3]  →  传感器3[P:%4  T:%5]  →  待测阀[%6; C:%7]  →  传感器4[P:%8  T:%9]")
                             .arg(QString::number(fm.flowRate, 'f', 2))
                             .arg(fmtValve(v2.status))
                             .arg(d1 ? "通" : "断")
-                            .arg(fmtMPa(p3.pressure))
+                            .arg(fmtKPa(p3.pressure))
                             .arg(fmtC(t3.temperature))
                             .arg(fmtValve(vDUT.status))
                             .arg(d2 ? "通" : "断")
-                            .arg(fmtMPa(p4.pressure))
+                            .arg(fmtKPa(p4.pressure))
                             .arg(fmtC(t4.temperature));
 
         m_flowDiagramLabel->setText(line1 + "\n" + line2);
@@ -341,10 +342,10 @@ namespace WaterTest
         m_testRecordTable->setColumnCount(13);
         QStringList headers;
         headers << "时间" << "事件"
-                << "P1(MPa)" << "T1(℃)"
-                << "P2(MPa)" << "T2(℃)"
-                << "P3(MPa)" << "T3(℃)"
-                << "P4(MPa)" << "T4(℃)"
+                << "P1(kPa)" << "T1(℃)"
+                << "P2(kPa)" << "T2(℃)"
+                << "P3(kPa)" << "T3(℃)"
+                << "P4(kPa)" << "T4(℃)"
                 << "阀1" << "阀2" << "待测阀";
         m_testRecordTable->setHorizontalHeaderLabels(headers);
         m_testRecordTable->horizontalHeader()->setStretchLastSection(true);
@@ -391,13 +392,13 @@ namespace WaterTest
 
         set(0, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
         set(1, event);
-        set(2, fmtMPa(p1.pressure));
+        set(2, fmtKPa(p1.pressure));
         set(3, fmtC(t1.temperature));
-        set(4, fmtMPa(p2.pressure));
+        set(4, fmtKPa(p2.pressure));
         set(5, fmtC(t2.temperature));
-        set(6, fmtMPa(p3.pressure));
+        set(6, fmtKPa(p3.pressure));
         set(7, fmtC(t3.temperature));
-        set(8, fmtMPa(p4.pressure));
+        set(8, fmtKPa(p4.pressure));
         set(9, fmtC(t4.temperature));
         set(10, fmtValve(v1.status));
         set(11, fmtValve(v2.status));
@@ -463,15 +464,16 @@ namespace WaterTest
             return;
 
         auto sensor = m_deviceManager->getPressureSensor(sensorId);
-        valueLabel->setText(QString("%1 MPa").arg(sensor.pressure, 0, 'f', 3));
+        const double pressureKPa = static_cast<double>(sensor.pressure) / 1000.0;
+        valueLabel->setText(QString("%1 kPa").arg(pressureKPa, 0, 'f', 1));
 
         // 根据压力值设置颜色
-        if (sensor.pressure > 0.8f)
+        if (pressureKPa > 800.0)
         {
             valueLabel->setProperty("role", "valueBox");
             valueLabel->setProperty("tone", "bad");
         }
-        else if (sensor.pressure > 0.01f)
+        else if (pressureKPa > 10.0)
         {
             valueLabel->setProperty("role", "valueBox");
             valueLabel->setProperty("tone", "good");

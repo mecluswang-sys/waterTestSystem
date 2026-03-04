@@ -49,7 +49,7 @@ namespace WaterTest
         sensorLayout->setSpacing(4);
 
         m_sensorTable = new QTableWidget(0, 5, this);
-        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (MPa)", "温度 (℃)", "状态"});
+        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kPa)", "温度 (℃)", "状态"});
         m_sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_sensorTable->horizontalHeader()->setMinimumSectionSize(70);
         m_sensorTable->horizontalHeader()->setDefaultSectionSize(100);
@@ -190,11 +190,11 @@ namespace WaterTest
             m_sensorTable->setItem(i, 0, new QTableWidgetItem(QString::number(id)));
             m_sensorTable->setItem(i, 1, new QTableWidgetItem(QString("传感器 %1").arg(id)));
 
-            // 压力显示（Pa→MPa），若不存在则留空
+            // 压力显示（Pa→kPa），若不存在则留空
             if (i < pSensors.size())
             {
-                double mpa = static_cast<double>(pSensors[i].pressure) / 1000000.0;
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(mpa, 'f', 3)));
+                double kpa = static_cast<double>(pSensors[i].pressure) / 1000.0;
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kpa, 'f', 1)));
             }
             else
             {

@@ -71,7 +71,7 @@ PLC设备 → Snap7读取 → DeviceManager → DataPipeline → 处理结果
 ### 压力传感器流水线
 
 ```
-PressureSensor → 验证(0-2MPa) → 限幅过滤 → 单位转换 → 结果输出
+PressureSensor → 验证(0-2000kPa) → 限幅过滤 → 单位转换 → 结果输出
                  ✓ 在线状态
                  ✓ 合理范围
 ```
@@ -103,7 +103,7 @@ FrequencyPump → 验证(频率0-60Hz) → 电流检查(0-100A) → 结果输出
 ### 电动调压阀流水线
 
 ```
-RegulatingValve → 验证(压力0-2MPa) → 偏差检测 → 结果输出
+RegulatingValve → 验证(压力0-2000kPa) → 偏差检测 → 结果输出
                   ✓ 设定值检查
                   ✓ 实际值检查
 ```

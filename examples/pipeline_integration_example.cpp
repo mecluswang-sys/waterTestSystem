@@ -236,7 +236,7 @@ namespace WaterTest
         // 模拟一个压力传感器数据的完整流转过程
         PressureSensor sensor;
         sensor.id = 1;
-        sensor.pressure = 850000.0f; // 0.85 MPa
+        sensor.pressure = 850000.0f; // 850 kPa
         sensor.maxPressure = 1000000.0f;
         sensor.minPressure = 0.0f;
         sensor.status = DeviceStatus::ONLINE;

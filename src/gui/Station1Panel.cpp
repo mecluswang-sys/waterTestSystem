@@ -609,7 +609,7 @@ namespace WaterTest
             static QPointF inletPortLocal() { return QPointF(-52, 14); }
             static QPointF outletPortLocal() { return QPointF(52, 14); }
 
-            explicit SensorItem(const QString &name, const QString &unit = "MPa", QColor typeColor = QColor())
+            explicit SensorItem(const QString &name, const QString &unit = "kPa", QColor typeColor = QColor())
                 : m_name(name), m_value(0.0), m_unit(unit), m_typeColor(typeColor.isValid() ? typeColor : kUiPurple)
             {
                 setCacheMode(DeviceCoordinateCache);
@@ -1030,13 +1030,13 @@ namespace WaterTest
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
 
         // 压力传感器上置：使底部红点与主干管道平齐。
-        auto *ps1 = new SensorItem("压力传感器", "MPa", kUiPurple);
+        auto *ps1 = new SensorItem("压力传感器", "kPa", kUiPurple);
         place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *v2 = new ValveItem("电动阀", true, 100.0);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
 
-        auto *ps2 = new SensorItem("压力传感器", "MPa", kUiPurple);
+        auto *ps2 = new SensorItem("压力传感器", "kPa", kUiPurple);
         place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *vReg = new ValveItem("电动调压阀", true, 65.0);
