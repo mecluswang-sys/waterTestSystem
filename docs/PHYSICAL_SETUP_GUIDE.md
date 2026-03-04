@@ -119,6 +119,18 @@ plc.slot = 1
 
 # 数据采集间隔（100ms = 10Hz）
 data.collection_interval = 100
+
+# 压力读取（DB6结构体）
+db.sensor.number = 6
+db.sensor.base_offset = 0
+db.sensor.item_size = 0
+db.sensor.main_value_real.offset = 4
+db.sensor.main_decimal.offset = 20
+db.pressure.scale = 1000
+
+# 单传感器调试
+pressure.count = 1
+temp.count = 1
 ```
 
 ## 💻 应用部署方案

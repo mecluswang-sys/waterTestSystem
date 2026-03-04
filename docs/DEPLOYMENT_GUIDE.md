@@ -128,6 +128,18 @@ plc.slot = 1
 # 100 = 10Hz轮询
 data.collection_interval = 100
 
+# 压力读取（DB6结构体）
+db.sensor.number = 6
+db.sensor.base_offset = 0
+db.sensor.item_size = 0
+db.sensor.main_value_real.offset = 4
+db.sensor.main_decimal.offset = 20
+db.pressure.scale = 1000
+
+# 单传感器调试
+pressure.count = 1
+temp.count = 1
+
 # 其他配置保持不变
 ...
 ```

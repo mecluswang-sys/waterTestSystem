@@ -127,6 +127,18 @@ Terminal Server 执行
 ```properties
 plc.ip = 192.168.33.1        # PLC地址
 data.collection_interval = 100  # 采集周期(ms)
+
+# 压力读取（DB6结构体）
+db.sensor.number = 6
+db.sensor.base_offset = 0
+db.sensor.item_size = 0
+db.sensor.main_value_real.offset = 4
+db.sensor.main_decimal.offset = 20
+db.pressure.scale = 1000
+
+# 单传感器调试
+pressure.count = 1
+temp.count = 1
 ```
 
 ### src/main.cpp
@@ -231,10 +243,10 @@ WaterTestSystem.exe --mode station --id 1 --host 192.168.1.100
 
 ## 📚 相关文档
 
-- [部署指南](docs/DEPLOYMENT_GUIDE.md) - 详细部署步骤
-- [物理连接](docs/PHYSICAL_SETUP_GUIDE.md) - 网络和硬件配置
-- [架构设计](docs/ARCHITECTURE_TERMINAL_STATION.md) - 系统架构
-- [快速开始](QUICK_START.md) - 5分钟快速配置
+- [部署指南](DEPLOYMENT_GUIDE.md) - 详细部署步骤
+- [物理连接](PHYSICAL_SETUP_GUIDE.md) - 网络和硬件配置
+- [架构设计](ARCHITECTURE_TERMINAL_STATION.md) - 系统架构
+- [快速开始](../QUICK_START.md) - 5分钟快速配置
 
 ---
 

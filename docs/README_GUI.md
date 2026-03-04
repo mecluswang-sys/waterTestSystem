@@ -85,14 +85,24 @@ cmake --build build --config Release
 配置文件位于 `config/system.conf`:
 
 ```ini
-[plc]
-ip = 192.168.0.1
-rack = 0
-slot = 1
+# PLC连接
+plc.ip = 192.168.33.1
+plc.rack = 0
+plc.slot = 1
 
-[data]
-collection_interval = 1000
-log_path = logs/
+# 采集周期（毫秒）
+data.collection_interval = 100
+
+# 压力读取（DB6结构体）
+db.sensor.number = 6
+db.sensor.base_offset = 0
+db.sensor.item_size = 0
+db.sensor.main_value_real.offset = 4
+db.sensor.main_decimal.offset = 20
+db.pressure.scale = 1000
+
+pressure.count = 1
+temp.count = 1
 ```
 
 ## 使用说明
@@ -113,11 +123,11 @@ log_path = logs/
 
 ### PLC通信
 
-- DB1: 压力传感器数据（11个传感器，每个4字节）
+- DB6: 压力传感器结构体（读取 MainValue_Real + MainDecimal）
 - DB2: 流量计数据（4个流量计，每个12字节）
 - DB3: 阀门控制（11个阀门，每个3字节）
 - DB4: 泵控制（2个泵，每个9字节）
-- DB100: 系统状态
+- DB5: 系统状态
 
 ### 数据采集
 

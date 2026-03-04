@@ -6,7 +6,7 @@
 Water Test System
 ├── 📋 快速入门 (START HERE)
 │   ├── QUICK_START.md ..................... ⭐⭐⭐ 5分钟快速配置
-│   ├── DEVICE_CONNECTION_SOLUTION.md ..... 物理连接方案
+│   ├── docs/DEVICE_CONNECTION_SOLUTION.md ..... 物理连接方案
 │   ├── FINAL_SUMMARY.md .................. 完成总结
 │   └── TASK_1_EXECUTIVE_SUMMARY.md ....... Task 1执行摘要
 │
@@ -52,7 +52,7 @@ Water Test System
    └─ 最新的Task 1成果
 2. FINAL_SUMMARY.md (5分钟)
    └─ 了解核心答案
-3. DEVICE_CONNECTION_SOLUTION.md (10分钟)
+3. docs/DEVICE_CONNECTION_SOLUTION.md (10分钟)
    └─ 理解物理连接
 4. docs/ARCHITECTURE_COMPARISON.md (10分钟)
    └─ 对比新旧架构
@@ -107,7 +107,7 @@ Water Test System
 ### 📈 "我想扩展到多台PC"
 
 ```
-1. DEVICE_CONNECTION_SOLUTION.md - 场景2/3
+1. docs/DEVICE_CONNECTION_SOLUTION.md - 场景2/3
 2. docs/ARCHITECTURE_COMPARISON.md - 多PC环境部分
 3. docs/DEPLOYMENT_GUIDE.md - 将来扩展部分
 ```
@@ -129,7 +129,7 @@ Water Test System
 - **适合**: 急于部署的用户
 - **下一步**: launch_system.bat
 
-#### DEVICE_CONNECTION_SOLUTION.md
+#### docs/DEVICE_CONNECTION_SOLUTION.md
 
 - **时间**: 10分钟
 - **内容**:
@@ -221,7 +221,7 @@ START HERE
   ↓
 QUICK_START.md
   ↓
-DEVICE_CONNECTION_SOLUTION.md
+docs/DEVICE_CONNECTION_SOLUTION.md
   ↓
 launch_system.bat
   ↓
@@ -283,7 +283,7 @@ SUCCESS ✅
 ### 场景5：需要扩展到多台PC
 
 ```
-DEVICE_CONNECTION_SOLUTION.md - 场景2/3
+docs/DEVICE_CONNECTION_SOLUTION.md - 场景2/3
   ↓
 docs/ARCHITECTURE_COMPARISON.md - 多PC部分
   ↓
@@ -305,7 +305,7 @@ SUCCESS ✅
 ```
 1. FINAL_SUMMARY.md ........................ 了解总体情况
 2. QUICK_START.md ......................... 学习快速部署
-3. DEVICE_CONNECTION_SOLUTION.md ......... 理解连接方案
+3. docs/DEVICE_CONNECTION_SOLUTION.md ......... 理解连接方案
 4. launch_system.bat ....................... 实际操作
 ```
 
@@ -350,13 +350,13 @@ SUCCESS ✅
 | 问题 | 文档 | 章节 |
 |------|------|------|
 | 如何快速开始? | QUICK_START.md | 全文 |
-| 物理如何连接? | DEVICE_CONNECTION_SOLUTION.md | 全文 |
+| 物理如何连接? | docs/DEVICE_CONNECTION_SOLUTION.md | 全文 |
 | 怎样部署系统? | docs/DEPLOYMENT_GUIDE.md | 启动系统部分 |
 | 网络怎样配置? | docs/PHYSICAL_SETUP_GUIDE.md | 配置步骤部分 |
 | 出现什么故障? | docs/DEPLOYMENT_GUIDE.md | 故障排查部分 |
 | 架构如何设计? | docs/ARCHITECTURE_TERMINAL_STATION.md | 全文 |
 | 新旧有何区别? | docs/ARCHITECTURE_COMPARISON.md | 全文 |
-| 怎样扩展到多PC? | DEVICE_CONNECTION_SOLUTION.md | 场景2/3部分 |
+| 怎样扩展到多PC? | docs/DEVICE_CONNECTION_SOLUTION.md | 场景2/3部分 |
 | 代码如何使用? | ARCHITECTURE_UPGRADE_SUMMARY.md | 使用示例部分 |
 
 ---
@@ -401,7 +401,7 @@ QUICK_START.md → 然后 → launch_system.bat
 
 ```
 QUICK_START.md 
-  → DEVICE_CONNECTION_SOLUTION.md 
+  → docs/DEVICE_CONNECTION_SOLUTION.md 
   → launch_system.bat
 ```
 
@@ -431,7 +431,7 @@ ARCHITECTURE_UPGRADE_SUMMARY.md
 详细部署 | docs/DEPLOYMENT_GUIDE.md | 30分钟
 理解架构 | docs/ARCHITECTURE_TERMINAL_STATION.md | 30分钟
 对比新旧 | docs/ARCHITECTURE_COMPARISON.md | 20分钟
-学习扩展 | DEVICE_CONNECTION_SOLUTION.md | 20分钟
+学习扩展 | docs/DEVICE_CONNECTION_SOLUTION.md | 20分钟
 排查故障 | docs/DEPLOYMENT_GUIDE.md (故障部分) | 20分钟
 修改代码 | ARCHITECTURE_UPGRADE_SUMMARY.md | 20分钟
 

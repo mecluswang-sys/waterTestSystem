@@ -11,7 +11,7 @@
 | 文档 | 内容 | 位置 |
 |------|------|------|
 | **快速开始** | 5分钟快速配置 | [QUICK_START.md](QUICK_START.md) |
-| **物理连接方案** | 完整的连接指南 | [DEVICE_CONNECTION_SOLUTION.md](DEVICE_CONNECTION_SOLUTION.md) |
+| **物理连接方案** | 完整的连接指南 | [docs/DEVICE_CONNECTION_SOLUTION.md](docs/DEVICE_CONNECTION_SOLUTION.md) |
 | **架构对比** | 旧架构 vs 新架构对比 | [docs/ARCHITECTURE_COMPARISON.md](docs/ARCHITECTURE_COMPARISON.md) |
 | **部署指南** | 详细的部署步骤 | [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
 | **物理设置** | 网络和硬件配置 | [docs/PHYSICAL_SETUP_GUIDE.md](docs/PHYSICAL_SETUP_GUIDE.md) |
@@ -184,7 +184,7 @@ launch_system.bat → 一键启动
 ### 🟢 新手入门
 
 1. 从 [QUICK_START.md](QUICK_START.md) 开始（5分钟快速配置）
-2. 查看 [DEVICE_CONNECTION_SOLUTION.md](DEVICE_CONNECTION_SOLUTION.md)（了解连接方案）
+2. 查看 [docs/DEVICE_CONNECTION_SOLUTION.md](docs/DEVICE_CONNECTION_SOLUTION.md)（了解连接方案）
 
 ### 🟡 部署实施
 

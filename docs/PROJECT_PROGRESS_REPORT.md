@@ -109,7 +109,7 @@
 | 文档 | 页数 | 内容 | 创建时间 |
 |------|------|------|---------|
 | QUICK_START.md | 2 | 5分钟快速参考 | Week 1 |
-| DEVICE_CONNECTION_SOLUTION.md | 3 | 物理连接方案 | Week 1 |
+| docs/DEVICE_CONNECTION_SOLUTION.md | 3 | 物理连接方案 | Week 1 |
 | TERMINAL_DEPLOYMENT_LAYOUT.md | 4 | 4台终端部署 | Week 1 |
 | SIEMENS_HMI_VS_INDUSTRIAL_TABLET.md | 5 | 设备对比 | Week 1 |
 | INDUSTRIAL_TABLET_SPECS.md | 4 | 硬件规格 | Week 1 |

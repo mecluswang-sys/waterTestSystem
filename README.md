@@ -112,6 +112,18 @@ plc.slot = 1                 # 槽号（S7-1200通常为1）
 
 # 数据采集间隔（毫秒）
 data.collection_interval = 1000
+
+# 压力传感器（DB6结构体读取）
+db.sensor.number = 6
+db.sensor.base_offset = 0
+db.sensor.item_size = 0               # 单传感器调试；多传感器时改为结构体步长（常见34/36）
+db.sensor.main_value_real.offset = 4  # MainValue_Real
+db.sensor.main_decimal.offset = 20    # MainDecimal
+db.pressure.scale = 1000              # kPa -> Pa
+
+# 传感器数量（调试阶段通常为1）
+pressure.count = 1
+temp.count = 1
 ```
 
 ## PLC程序要求
@@ -120,8 +132,11 @@ data.collection_interval = 1000
 
 程序需要在S7-1200 PLC中定义以下DB块：
 
-1. **DB1 - 压力传感器数据** (11个传感器 × 8字节 = 88字节)
-   - 每个传感器: 状态(INT) + 压力值(REAL)
+1. **DB6 - 压力/温度传感器结构体数据（推荐）**
+   - 压力读取字段：MainValue_Real(REAL)、MainDecimal(UINT)
+   - 计算规则：工程值 = MainValue_Real / 10^MainDecimal，随后按 `db.pressure.scale` 转为内部Pa
+   - 单传感器调试：`db.sensor.item_size = 0`
+   - 多传感器上线：`pressure.count > 1` 且 `db.sensor.item_size = 结构体步长`
 
 2. **DB2 - 流量计数据** (4个流量计 × 16字节 = 64字节)
    - 每个流量计: 状态(INT) + 流量(REAL) + 累计(REAL) + 温度(REAL)
@@ -139,7 +154,7 @@ data.collection_interval = 1000
 
 1. 打开TIA Portal，创建S7-1200项目
 2. 配置PLC以太网接口IP地址（与配置文件一致）
-3. 在PLC中创建上述DB块
+3. 在PLC中创建上述DB块（压力传感器建议按DB6结构体方式）
 4. 允许PUT/GET通信（在PLC属性中启用）
 
 ## 使用说明
@@ -260,4 +275,5 @@ MIT License
 ---
 
 **注意**: 本程序仅供参考，实际使用需根据具体PLC程序调整DB块地址和数据结构。
+
 # waterTestSystem
