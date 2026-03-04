@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <cmath>
 
 namespace WaterTest
 {
@@ -580,6 +581,60 @@ namespace WaterTest
 
         auto &cfg = ConfigManager::getInstance();
         const int dbSensor = cfg.getInt("db.sensor.number", -1);
+        const int mainValueRealOffset = cfg.getInt("db.sensor.main_value_real.offset", -1);
+
+        // 如果配置了结构体字段映射（MainValue_Real/MainDecimal），优先按结构体读取
+        if (dbSensor >= 0 && mainValueRealOffset >= 0)
+        {
+            const int baseOffset = cfg.getInt("db.sensor.base_offset", 0);
+            const int itemSize = cfg.getInt("db.sensor.item_size", 0);
+            const int mainDecimalOffset = cfg.getInt("db.sensor.main_decimal.offset", -1);
+            const float scale = cfg.getFloat("db.pressure.scale", 1.0f); // 工程值→Pa（例如 kPa→Pa 乘1000）
+
+            std::lock_guard<std::mutex> lock(m_dataMutex);
+            for (auto &pair : m_pressureSensors)
+            {
+                uint16_t id = pair.first;
+                PressureSensor &sensor = pair.second;
+
+                // item_size=0 表示单结构体调试模式；若当前配置了多传感器，避免重复读取同一地址
+                if (itemSize <= 0 && id != 1)
+                {
+                    continue;
+                }
+
+                const int itemBase = baseOffset + ((itemSize > 0) ? (static_cast<int>(id) - 1) * itemSize : 0);
+                const int realOffset = itemBase + mainValueRealOffset;
+
+                float mainValueReal = 0.0f;
+                auto r = m_plcClient->readReal(dbSensor, realOffset, mainValueReal);
+                if (r != S7PLCClient::Result::SUCCESS)
+                {
+                    continue;
+                }
+
+                float engineeringValue = mainValueReal;
+                if (mainDecimalOffset >= 0)
+                {
+                    uint8_t rawDecimalBytes[2] = {0, 0};
+                    auto rDec = m_plcClient->readDB(dbSensor, itemBase + mainDecimalOffset, 2, rawDecimalBytes);
+                    if (rDec == S7PLCClient::Result::SUCCESS)
+                    {
+                        // S7 大端序：高字节在前；MainDecimal 定义为 UInt
+                        const uint16_t mainDecimalRaw = static_cast<uint16_t>((static_cast<uint16_t>(rawDecimalBytes[0]) << 8) |
+                                                                              static_cast<uint16_t>(rawDecimalBytes[1]));
+                        const int decimals = std::max(0, std::min(6, static_cast<int>(mainDecimalRaw)));
+                        engineeringValue = mainValueReal / std::pow(10.0f, static_cast<float>(decimals));
+                    }
+                }
+
+                sensor.pressure = engineeringValue * scale;
+                sensor.status = DeviceStatus::ONLINE;
+                sensor.timestamp = std::chrono::system_clock::now();
+            }
+
+            return true;
+        }
 
         // 如果配置了新的 DB_Sensor 结构，则从 Pressur_kPa 数组读取
         if (dbSensor >= 0)
