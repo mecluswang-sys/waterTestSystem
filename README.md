@@ -113,17 +113,17 @@ plc.slot = 1                 # 槽号（S7-1200通常为1）
 # 数据采集间隔（毫秒）
 data.collection_interval = 1000
 
-# 压力传感器（DB6结构体读取）
+# 压力传感器（DB6 UDT数组读取）
 db.sensor.number = 6
 db.sensor.base_offset = 0
-db.sensor.item_size = 0               # 单传感器调试；多传感器时改为结构体步长（常见34/36）
-db.sensor.main_value_real.offset = 4  # MainValue_Real
-db.sensor.main_decimal.offset = 20    # MainDecimal
-db.pressure.scale = 1000              # kPa -> Pa
+db.sensor.item_size = 108             # UDT数组单元素步长
+db.sensor.main_value_real.offset = 46 # MainValue_Real
+db.sensor.main_decimal.offset = -1    # 当前不启用小数位换算
+db.pressure.scale = 1                 # 当前 PLC MainValue_Real 已是工程值
 
-# 传感器数量（调试阶段通常为1）
-pressure.count = 1
-temp.count = 1
+# 传感器数量
+pressure.count = 3
+temp.count = 3
 ```
 
 ## PLC程序要求
@@ -132,11 +132,11 @@ temp.count = 1
 
 程序需要在S7-1200 PLC中定义以下DB块：
 
-1. **DB6 - 压力/温度传感器结构体数据（推荐）**
+1. **DB6 - 压力/温度传感器 UDT 数组（推荐）**
    - 压力读取字段：MainValue_Real(REAL)、MainDecimal(UINT)
    - 计算规则：工程值 = MainValue_Real / 10^MainDecimal，随后按 `db.pressure.scale` 转为内部Pa
-   - 单传感器调试：`db.sensor.item_size = 0`
-   - 多传感器上线：`pressure.count > 1` 且 `db.sensor.item_size = 结构体步长`
+   - 当前项目按 UDT 数组读取：`base_offset + (sensor_id - 1) * item_size + 46`
+   - 当前现场配置：`db.sensor.number = 6`，`db.sensor.item_size = 108`
 
 2. **DB2 - 流量计数据** (4个流量计 × 16字节 = 64字节)
    - 每个流量计: 状态(INT) + 流量(REAL) + 累计(REAL) + 温度(REAL)

@@ -50,14 +50,27 @@ namespace WaterTest
           m_plcStatusBtn(nullptr),
           m_plcStatusTimer(nullptr),
           m_autoConnectTimer(nullptr),
-          m_autoConnectEnabled(true),
+          m_autoConnectEnabled(false),
           m_autoConnecting(false),
+          m_diagVirtualConnected(false),
           m_dashboardWidget(nullptr),
           m_plcConnectionWidget(nullptr),
           m_stationManagerWidget(nullptr),
           m_dataMonitorWidget(nullptr),
           m_systemLogsWidget(nullptr),
-          m_settingsWidget(nullptr)
+          m_settingsWidget(nullptr),
+          m_terminalStatusLabel(nullptr),
+          m_plcStatusLabel(nullptr),
+          m_stationStatusLabel(nullptr),
+          m_dataStatsLabel(nullptr),
+          m_dataCollectionProgressBar(nullptr),
+          m_connectAction(nullptr),
+          m_disconnectAction(nullptr),
+          m_exitAction(nullptr),
+          m_settingsAction(nullptr),
+          m_viewLogsAction(nullptr),
+          m_helpAction(nullptr),
+          m_aboutAction(nullptr)
     {
         setWindowTitle("水质测试系统");
         setMinimumSize(1400, 900);
@@ -180,7 +193,7 @@ namespace WaterTest
         topBarLayout->setSpacing(10);
 
         // 左侧：标题
-        auto *titleLabel = new QLabel("水质测试系统 - 操作台", this);
+        auto *titleLabel = new QLabel("水介质电磁阀测试系统", this);
         titleLabel->setObjectName("topTitle");
         topBarLayout->addWidget(titleLabel);
 
@@ -244,11 +257,39 @@ namespace WaterTest
         m_tabWidget->addTab(m_autoTestPanel, "④ 自动测试配置");
 
         // Tab 5: 1号操作台（流程图）
-        m_station1Panel = new Station1Panel(m_deviceManager, this);
-        m_tabWidget->addTab(m_station1Panel, "⑤ 1号操作台");
+        // 说明：该页面包含高频图元/动画刷新；默认关闭以提升启动稳定性。
+        // 如需启用，可在 config/system.conf 中设置：ui.enable_station1_panel = true
+        {
+            auto &config = ConfigManager::getInstance();
+            const bool enableStation1Panel = config.getBool("ui.enable_station1_panel", false);
+            if (enableStation1Panel)
+            {
+                m_station1Panel = new Station1Panel(m_deviceManager, this);
+                m_tabWidget->addTab(m_station1Panel, "⑤ 1号操作台");
+            }
+            else
+            {
+                auto *disabled = new QWidget(this);
+                auto *disabledLayout = new QVBoxLayout(disabled);
+                auto *msg = new QLabel("1号操作台页面已关闭（可在 config/system.conf 设置 ui.enable_station1_panel = true 启用）", disabled);
+                msg->setWordWrap(true);
+                msg->setAlignment(Qt::AlignCenter);
+                disabledLayout->addStretch();
+                disabledLayout->addWidget(msg);
+                disabledLayout->addStretch();
+                m_tabWidget->addTab(disabled, "⑤ 1号操作台");
+            }
+        }
 
         mainLayout->addWidget(m_tabWidget);
         setCentralWidget(centralWidget);
+
+        // 默认关闭开机自动连接，避免在网络/PLC异常时进入重复重连路径。
+        // 需要自动连接可在配置中启用：plc.auto_connect_on_start = true
+        {
+            auto &config = ConfigManager::getInstance();
+            m_autoConnectEnabled = config.getBool("plc.auto_connect_on_start", false);
+        }
 
         // 启动 PLC 状态刷新与自动连接（仅 Station 模式）
         startAutoConnect();
@@ -470,8 +511,16 @@ namespace WaterTest
     {
         if (m_isConnected)
         {
-            statusBar()->showMessage("已连接到系统", 2000);
-            setPlcStatusState("connected", "PLC 已连接");
+            if (m_diagVirtualConnected)
+            {
+                statusBar()->showMessage("诊断模式已连接（未实际连接PLC）", 2000);
+                setPlcStatusState("connected", "诊断模式：未实际连接PLC");
+            }
+            else
+            {
+                statusBar()->showMessage("已连接到系统", 2000);
+                setPlcStatusState("connected", "PLC 已连接");
+            }
             return true;
         }
 
@@ -489,6 +538,36 @@ namespace WaterTest
             config.setInt("plc.rack", 0);
             config.setInt("plc.slot", 1);
         }
+
+        const bool skipDataCollection = config.getBool("diag.skip_data_collection_on_connect", false);
+        const bool skipPanelUpdates = config.getBool("diag.skip_panel_updates_on_connect", false);
+        const bool skipPlcConnect = config.getBool("diag.skip_plc_connect_on_connect", (skipDataCollection && skipPanelUpdates));
+        const bool enablePreparationPanelUpdate = config.getBool("ui.enable_preparation_live_update", false);
+        const bool enableTestPanelUpdate = config.getBool("ui.enable_test_live_update", false);
+        const bool enableAutoTestPanelUpdate = config.getBool("ui.enable_auto_test_live_update", false);
+
+        if (skipPlcConnect)
+        {
+            m_diagVirtualConnected = true;
+            m_isConnected = true;
+            if (m_connectAction)
+                m_connectAction->setEnabled(false);
+            if (m_disconnectAction)
+                m_disconnectAction->setEnabled(true);
+            if (m_connectBtn)
+                m_connectBtn->setEnabled(false);
+            if (m_disconnectBtn)
+                m_disconnectBtn->setEnabled(true);
+
+            if (m_autoConnectTimer)
+                m_autoConnectTimer->stop();
+
+            statusBar()->showMessage("诊断模式连接成功（已跳过PLC实连/采集/页面刷新）", 3000);
+            setPlcStatusState("connected", "诊断模式：已跳过PLC实连");
+            return true;
+        }
+
+        m_diagVirtualConnected = false;
 
         auto plcClient = std::make_shared<S7PLCClient>();
 
@@ -521,25 +600,37 @@ namespace WaterTest
             return false;
         }
 
-        int interval = config.getInt("data.collection_interval", 1000);
-        if (!m_deviceManager->startDataCollection(interval))
+        if (!skipDataCollection)
         {
-            const QString errorMsg = "启动数据采集失败";
-            if (interactive)
-                QMessageBox::critical(this, "错误", errorMsg);
-            plcClient->disconnect();
-            setPlcStatusState("disconnected", errorMsg);
-            return false;
+            int interval = config.getInt("data.collection_interval", 1000);
+            if (interval < 50)
+                interval = 50;
+            else if (interval > 5000)
+                interval = 5000;
+            if (!m_deviceManager->startDataCollection(interval))
+            {
+                const QString errorMsg = "启动数据采集失败";
+                if (interactive)
+                    QMessageBox::critical(this, "错误", errorMsg);
+                plcClient->disconnect();
+                setPlcStatusState("disconnected", errorMsg);
+                return false;
+            }
         }
 
-        if (m_preparationPanel)
-            m_preparationPanel->startUpdate();
-        if (m_monitorPanel)
-            m_monitorPanel->startUpdate();
-        if (m_testPanel)
-            m_testPanel->startUpdate();
-        if (m_autoTestPanel)
-            m_autoTestPanel->startUpdate();
+        if (!skipPanelUpdates)
+        {
+            if (m_monitorPanel)
+                m_monitorPanel->startUpdate();
+
+            // 为提升连接稳定性，复杂页面默认不启动高频定时刷新；按需通过配置逐步打开。
+            if (enablePreparationPanelUpdate && m_preparationPanel)
+                m_preparationPanel->startUpdate();
+            if (enableTestPanelUpdate && m_testPanel)
+                m_testPanel->startUpdate();
+            if (enableAutoTestPanelUpdate && m_autoTestPanel)
+                m_autoTestPanel->startUpdate();
+        }
 
         m_isConnected = true;
         if (m_connectAction)
@@ -563,6 +654,8 @@ namespace WaterTest
             setPlcStatusState("disconnected", "PLC 未连接");
             return;
         }
+
+        m_diagVirtualConnected = false;
 
         if (m_mode == WindowMode::STATION_MODE)
         {
@@ -614,6 +707,14 @@ namespace WaterTest
         }
         if (!m_plcStatusTimer->isActive())
             m_plcStatusTimer->start();
+
+        if (!m_autoConnectEnabled)
+        {
+            if (m_autoConnectTimer)
+                m_autoConnectTimer->stop();
+            setPlcStatusState("disconnected", "PLC 未连接（点击连接）");
+            return;
+        }
 
         // 自动连接：启动后持续尝试，成功后自动停
         if (!m_autoConnectTimer)
@@ -673,6 +774,12 @@ namespace WaterTest
         if (m_mode != WindowMode::STATION_MODE)
             return;
 
+        if (m_diagVirtualConnected && m_isConnected)
+        {
+            setPlcStatusState("connected", "诊断模式：未实际连接PLC");
+            return;
+        }
+
         if (!m_deviceManager)
         {
             setPlcStatusState(m_autoConnecting ? "connecting" : "disconnected", "设备管理器未初始化");
@@ -711,8 +818,7 @@ namespace WaterTest
                            "<h3>水质测试系统 v2.0</h3>"
                            "<p>Terminal-Station 分布式架构</p>"
                            "<p>与西门子 S7-1200 PLC 兼容</p>"
-                           "<p>用于实时监控和控制水质测试设备</p>"
-                           "<p>Copyright © 2026 WaterTest</p>");
+                           "<p>用于实时监控和控制水质测试设备</p>");
     }
 
     void MainWindow::onPLCConnected()

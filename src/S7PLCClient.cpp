@@ -18,6 +18,10 @@ namespace WaterTest
         : m_connected(false)
     {
         m_client = Cli_Create();
+        if (!m_client)
+        {
+            m_lastError = "Failed to create Snap7 client handle";
+        }
     }
 
     S7PLCClient::~S7PLCClient()
@@ -33,6 +37,18 @@ namespace WaterTest
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
+        // Guard against invalid handle and try to recover once.
+        if (!m_client)
+        {
+            m_client = Cli_Create();
+            if (!m_client)
+            {
+                m_connected = false;
+                m_lastError = "Snap7 client handle is null";
+                return false;
+            }
+        }
+
         if (m_connected)
         {
             disconnect();
@@ -42,9 +58,9 @@ namespace WaterTest
 
         // Connect to PLC (using C API)
         int result = Cli_ConnectTo(m_client,
-                                   m_params.ipAddress.c_str(),
-                                   m_params.rack,
-                                   m_params.slot);
+                       m_params.ipAddress.c_str(),
+                       m_params.rack,
+                       m_params.slot);
 
         if (result == 0)
         {
@@ -82,6 +98,12 @@ namespace WaterTest
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
         if (!m_connected)
         {
             return Result::CONNECTION_ERROR;
@@ -108,6 +130,12 @@ namespace WaterTest
     S7PLCClient::Result S7PLCClient::writeDB(int dbNumber, int start, int size, const void *buffer)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
 
         if (!m_connected)
         {
@@ -215,6 +243,12 @@ namespace WaterTest
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
         if (!m_connected)
         {
             return Result::CONNECTION_ERROR;
@@ -238,6 +272,12 @@ namespace WaterTest
     S7PLCClient::Result S7PLCClient::writeOutputBool(int byteOffset, int bit, bool value)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
 
         if (!m_connected)
         {

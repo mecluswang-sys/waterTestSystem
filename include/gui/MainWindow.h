@@ -126,6 +126,7 @@ namespace WaterTest
         QTimer *m_autoConnectTimer;
         bool m_autoConnectEnabled;
         bool m_autoConnecting;
+        bool m_diagVirtualConnected;
 
         // Terminal mode widgets (new)
         DashboardWidget *m_dashboardWidget;

@@ -1,0 +1,41 @@
+graph TD
+
+subgraph 操作层HMI
+    TP1[工业平板1<br/>产线1操作]
+    TP2[工业平板2<br/>产线2操作]
+    TP3[工业平板3<br/>产线3操作]
+end
+
+%% 管理层
+subgraph 管理层IPC
+    IPC[工控机 IPC<br/>测试软件]
+end
+
+%% 网络层
+subgraph 网络层
+    SW[工业交换机]
+end
+
+%% 控制层
+subgraph 控制层PLC
+    PLC[PLC<br/>S7-1200]
+end
+
+%% 设备层
+subgraph 设备层产线设备
+    L1[产线1<br/>电磁阀/水泵/压力传感器]
+    L2[产线2<br/>电磁阀/水泵/压力传感器]
+    L3[产线3<br/>电磁阀/水泵/压力传感器]
+end
+
+%% 连接关系
+TP1 --> IPC
+TP2 --> IPC
+TP3 --> IPC
+
+IPC --> SW
+SW --> PLC
+
+PLC --> L1
+PLC --> L2
+PLC --> L3

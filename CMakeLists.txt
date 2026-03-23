@@ -22,9 +22,11 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 # 查找Snap7库
 find_package(snap7 CONFIG)
+set(SNAP7_AVAILABLE FALSE)
 if(snap7_FOUND)
     message(STATUS "Found Snap7 via vcpkg")
     set(SNAP7_LIBRARY snap7::snap7)
+    set(SNAP7_AVAILABLE TRUE)
 else()
     # 手动安装的Snap7
     message(STATUS "Snap7 not found via vcpkg, trying manual installation...")
@@ -34,6 +36,7 @@ else()
     
     if(SNAP7_INCLUDE_DIR AND SNAP7_LIBRARY)
         message(STATUS "Found Snap7: ${SNAP7_LIBRARY}")
+        set(SNAP7_AVAILABLE TRUE)
     else()
         message(WARNING "Snap7 not found. Please install via vcpkg or manually.")
     endif()
@@ -52,7 +55,6 @@ include_directories(
 # 源文件
 set(SOURCES
     src/main.cpp
-    src/S7PLCClient_stub.cpp  # Stub implementation - snap7 not available
     src/DeviceManager.cpp
     src/DataLogger.cpp
     src/ConfigManager.cpp
@@ -72,9 +74,16 @@ set(SOURCES
     src/gui/Station1Panel.cpp
 )
 
+# Snap7可用时使用真实PLC实现，否则回退到stub实现
+if(SNAP7_AVAILABLE)
+    list(APPEND SOURCES src/S7PLCClient.cpp)
+else()
+    list(APPEND SOURCES src/S7PLCClient_stub.cpp)
+endif()
+
 # 头文件
 set(HEADERS
-    #include/S7PLCClient.h  # Temporarily disabled - snap7 not available
+    include/S7PLCClient.h
     include/DeviceManager.h
     include/DataLogger.h
     include/ConfigManager.h
@@ -97,6 +106,11 @@ set(HEADERS
 
 # 创建可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+
+# 真实Snap7实现需要启用头文件分支
+if(SNAP7_AVAILABLE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE SNAP7_FOUND)
+endif()
 
 # 设置源文件编码为UTF-8
 if(MSVC)

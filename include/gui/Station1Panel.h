@@ -36,11 +36,13 @@ namespace WaterTest
         void buildScene();
         void applyAutoFit();
         void updatePipeFlowAnimation();
+        void updateSensorValues();
 
         std::shared_ptr<DeviceManager> m_deviceManager;
         QGraphicsView *m_view;
         QGraphicsScene *m_scene;
         QTimer *m_flowTimer;
+        QTimer *m_dataTimer;
         qreal m_flowDashOffset;
     };
 
