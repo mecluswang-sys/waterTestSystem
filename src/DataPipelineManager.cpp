@@ -45,7 +45,7 @@ namespace WaterTest
             [](const PressureSensor &sensor)
             {
                 // 验证压力值是否在合理范围内
-                if (sensor.pressure < 0 || sensor.pressure > 2000000.0f) // 0-2000kPa
+                if (sensor.pressure < 0 || sensor.pressure > 2000.0f) // 0-2000kPa
                 {
                     return false;
                 }
@@ -79,7 +79,7 @@ namespace WaterTest
         auto converter = std::make_shared<ConversionProcessor<PressureSensor>>(
             [](PressureSensor &sensor)
             {
-                // Pa转换为其他单位的逻辑可以在这里
+                // kPa 转换为其他单位的逻辑可以在这里
                 // 当前保持原始单位
             });
         m_pressurePipeline->addProcessor(converter);
@@ -91,7 +91,7 @@ namespace WaterTest
                 if (m_loggingEnabled)
                 {
                     writeLog("Pressure sensor " + std::to_string(packet.data.id) +
-                             " processed: " + std::to_string(packet.data.pressure) + " Pa");
+                             " processed: " + std::to_string(packet.data.pressure) + " kPa");
                 }
             });
 

@@ -37,13 +37,13 @@ namespace WaterTest
     struct PressureSensor
     {
         uint16_t id;         // Sensor ID (1-11)
-        float pressure;      // Pressure value (Pa)
-        float maxPressure;   // Maximum pressure
-        float minPressure;   // Minimum pressure
+        float pressure;      // Pressure value (kPa)
+        float maxPressure;   // Maximum pressure (kPa)
+        float minPressure;   // Minimum pressure (kPa)
         DeviceStatus status; // Device status
         std::chrono::system_clock::time_point timestamp;
 
-        PressureSensor() : id(0), pressure(0.0f), maxPressure(1000000.0f),
+        PressureSensor() : id(0), pressure(0.0f), maxPressure(1000.0f),
                            minPressure(0.0f), status(DeviceStatus::OFFLINE) {}
     };
 

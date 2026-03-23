@@ -9,9 +9,49 @@
 #include <chrono>
 #include <iostream>
 #include <cmath>
+#include <limits>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 namespace WaterTest
 {
+
+    namespace
+    {
+        std::mutex &pressureDebugLogMutex()
+        {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        std::string pressureDebugTimestamp()
+        {
+            const auto now = std::chrono::system_clock::now();
+            const auto time = std::chrono::system_clock::to_time_t(now);
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
+            std::ostringstream oss;
+            oss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S")
+                << '.' << std::setfill('0') << std::setw(3) << ms.count();
+            return oss.str();
+        }
+
+        void appendPressureDebugLog(const std::string &message)
+        {
+            std::lock_guard<std::mutex> lock(pressureDebugLogMutex());
+            std::filesystem::create_directories("deploy/logs");
+
+            std::ofstream logFile("deploy/logs/pressure_device_debug.log", std::ios::app);
+            if (!logFile.is_open())
+            {
+                return;
+            }
+
+            logFile << pressureDebugTimestamp() << ' ' << message << '\n';
+        }
+    }
 
     bool DeviceManager::hasPlcClient() const
     {
@@ -96,8 +136,8 @@ namespace WaterTest
             if (pcount < 1)
                 pcount = 1;
             int tcount = cfg.getInt("temp.count", 1);
-            if (tcount < 1)
-                tcount = 1;
+            if (tcount < 0)
+                tcount = 0;
 
             std::lock_guard<std::mutex> lock(m_dataMutex);
             m_pressureSensors.clear();
@@ -105,6 +145,8 @@ namespace WaterTest
             {
                 PressureSensor sensor;
                 sensor.id = static_cast<uint16_t>(i);
+                sensor.maxPressure = cfg.getFloat("pressure.max_limit", 1000.0f);
+                sensor.minPressure = cfg.getFloat("pressure.min_limit", 0.0f);
                 m_pressureSensors[i] = sensor;
             }
 
@@ -565,6 +607,11 @@ namespace WaterTest
 
     void DeviceManager::collectionThreadFunc(int intervalMs)
     {
+        if (intervalMs < 10)
+        {
+            intervalMs = 10;
+        }
+
         while (m_running)
         {
             updateAllDevices();
@@ -576,147 +623,151 @@ namespace WaterTest
     {
         if (!m_plcClient)
         {
+            appendPressureDebugLog("[DEVICE][PRESSURE] skipped: plc client not initialized");
             return false;
         }
 
         auto &cfg = ConfigManager::getInstance();
+        constexpr int kUnset = (std::numeric_limits<int>::min)();
         const int dbSensor = cfg.getInt("db.sensor.number", -1);
         const int mainValueRealOffset = cfg.getInt("db.sensor.main_value_real.offset", -1);
 
-        // 如果配置了结构体字段映射（MainValue_Real/MainDecimal），优先按结构体读取
-        if (dbSensor >= 0 && mainValueRealOffset >= 0)
+        if (dbSensor < 0 || mainValueRealOffset < 0)
         {
-            const int baseOffset = cfg.getInt("db.sensor.base_offset", 0);
-            const int itemSize = cfg.getInt("db.sensor.item_size", 0);
-            const int mainDecimalOffset = cfg.getInt("db.sensor.main_decimal.offset", -1);
-            const float scale = cfg.getFloat("db.pressure.scale", 1.0f); // 工程值→Pa（例如 kPa→Pa 乘1000）
-
-            std::lock_guard<std::mutex> lock(m_dataMutex);
-            for (auto &pair : m_pressureSensors)
-            {
-                uint16_t id = pair.first;
-                PressureSensor &sensor = pair.second;
-
-                // item_size=0 表示单结构体调试模式；若当前配置了多传感器，避免重复读取同一地址
-                if (itemSize <= 0 && id != 1)
-                {
-                    continue;
-                }
-
-                const int itemBase = baseOffset + ((itemSize > 0) ? (static_cast<int>(id) - 1) * itemSize : 0);
-                const int realOffset = itemBase + mainValueRealOffset;
-
-                float mainValueReal = 0.0f;
-                auto r = m_plcClient->readReal(dbSensor, realOffset, mainValueReal);
-                if (r != S7PLCClient::Result::SUCCESS)
-                {
-                    continue;
-                }
-
-                float engineeringValue = mainValueReal;
-                if (mainDecimalOffset >= 0)
-                {
-                    uint8_t rawDecimalBytes[2] = {0, 0};
-                    auto rDec = m_plcClient->readDB(dbSensor, itemBase + mainDecimalOffset, 2, rawDecimalBytes);
-                    if (rDec == S7PLCClient::Result::SUCCESS)
-                    {
-                        // S7 大端序：高字节在前；MainDecimal 定义为 UInt
-                        const uint16_t mainDecimalRaw = static_cast<uint16_t>((static_cast<uint16_t>(rawDecimalBytes[0]) << 8) |
-                                                                              static_cast<uint16_t>(rawDecimalBytes[1]));
-                        const int decimals = std::max(0, std::min(6, static_cast<int>(mainDecimalRaw)));
-                        engineeringValue = mainValueReal / std::pow(10.0f, static_cast<float>(decimals));
-                    }
-                }
-
-                sensor.pressure = engineeringValue * scale;
-                sensor.status = DeviceStatus::ONLINE;
-                sensor.timestamp = std::chrono::system_clock::now();
-            }
-
-            return true;
+            appendPressureDebugLog("[DEVICE][PRESSURE][UDT] skipped: missing db.sensor.number or db.sensor.main_value_real.offset");
+            return false;
         }
 
-        // 如果配置了新的 DB_Sensor 结构，则从 Pressur_kPa 数组读取
-        if (dbSensor >= 0)
+        const int baseOffset = cfg.getInt("db.sensor.base_offset", 0);
+        const int itemSize = cfg.getInt("db.sensor.item_size", 0);
+        const int mainDecimalOffset = cfg.getInt("db.sensor.main_decimal.offset", -1);
+        const float scale = cfg.getFloat("db.pressure.scale", 1.0f); // 工程值缩放，当前统一按 kPa 保存/显示
+        bool anyUdtReadSuccess = false;
+
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        for (auto &pair : m_pressureSensors)
         {
-            const int baseOffset = cfg.getInt("db.sensor.pressure_kpa.base_offset", 8); // 默认推断：Raw_Pressure(8B) 后为 Pressur_kPa
-            const int elemSize = cfg.getInt("db.sensor.pressure_kpa.element_size", 4);  // REAL=4B
-            const float scale = cfg.getFloat("db.pressure.scale", 1.0f);                // kPa→Pa 乘1000
+            uint16_t id = pair.first;
+            PressureSensor &sensor = pair.second;
 
-            std::lock_guard<std::mutex> lock(m_dataMutex);
-            for (auto &pair : m_pressureSensors)
+            const std::string sensorPrefix = std::string("db.sensor.") + std::to_string(id) + ".";
+            const int sensorDbNumber = cfg.getInt(sensorPrefix + "number", dbSensor);
+            const int sensorBaseOffset = cfg.getInt(sensorPrefix + "base_offset", kUnset);
+            const int sensorItemSize = cfg.getInt(sensorPrefix + "item_size", kUnset);
+            const int sensorMainValueRealOffset = cfg.getInt(sensorPrefix + "main_value_real.offset", kUnset);
+            const int sensorMainDecimalOffset = cfg.getInt(sensorPrefix + "main_decimal.offset", kUnset);
+            const float sensorScale = cfg.getFloat(sensorPrefix + "scale", scale);
+
+            const bool hasSensorBaseOffset = (sensorBaseOffset != kUnset);
+            const bool hasSensorItemSize = (sensorItemSize != kUnset);
+            const bool hasSensorMainValueRealOffset = (sensorMainValueRealOffset != kUnset);
+            const bool hasSensorMainDecimalOffset = (sensorMainDecimalOffset != kUnset);
+            const int resolvedItemSize = hasSensorItemSize ? sensorItemSize : itemSize;
+
+            // item_size=0 时默认只有单结构体；可通过 db.sensor.<id>.* 覆盖读取多传感器。
+            if (resolvedItemSize <= 0 && id != 1 && !hasSensorBaseOffset && !hasSensorMainValueRealOffset)
             {
-                uint16_t id = pair.first;
-                PressureSensor &sensor = pair.second;
-
-                const int offset = baseOffset + (static_cast<int>(id) - 1) * elemSize;
-                float kpa = 0.0f;
-                auto r = m_plcClient->readReal(dbSensor, offset, kpa);
-                if (r == S7PLCClient::Result::SUCCESS)
-                {
-                    sensor.pressure = kpa * scale;
-                    sensor.status = DeviceStatus::ONLINE;
-                    sensor.timestamp = std::chrono::system_clock::now();
-                }
+                continue;
             }
 
-            return true;
-        }
+            const int itemBase = hasSensorBaseOffset
+                                     ? sensorBaseOffset
+                                     : baseOffset + ((resolvedItemSize > 0) ? (static_cast<int>(id) - 1) * resolvedItemSize : 0);
+            const int realOffset = itemBase + (hasSensorMainValueRealOffset ? sensorMainValueRealOffset : mainValueRealOffset);
+            const int decimalOffset = hasSensorMainDecimalOffset ? sensorMainDecimalOffset : mainDecimalOffset;
 
-        // 否则，回退到旧的 db.pressure.* 配置
-        {
-            std::lock_guard<std::mutex> lock(m_dataMutex);
-
-            for (auto &pair : m_pressureSensors)
+            uint8_t rawRealBytes[4] = {0, 0, 0, 0};
+            auto rRaw = m_plcClient->readDB(sensorDbNumber, realOffset, 4, rawRealBytes);
+            if (rRaw != S7PLCClient::Result::SUCCESS)
             {
-                uint16_t id = pair.first;
-                PressureSensor &sensor = pair.second;
+                std::ostringstream oss;
+                oss << "[DEVICE][PRESSURE][UDT] sensor=" << id
+                    << " db=" << sensorDbNumber
+                    << " itemBase=" << itemBase
+                    << " realOffset=" << realOffset
+                    << " decimalOffset=" << decimalOffset
+                    << " result=readRaw_failed"
+                    << " error=\"" << m_plcClient->getLastError() << "\"";
+                appendPressureDebugLog(oss.str());
+                continue;
+            }
 
-                const std::string prefix = std::string("db.pressure.") + std::to_string(id) + ".";
-                const int dbNumber = cfg.getInt(prefix + "number", cfg.getInt("db.pressure.number", DB_PRESSURE_SENSORS));
-                const int itemSize = cfg.getInt(prefix + "item_size", cfg.getInt("db.pressure.item_size", 8));
-                const int valueOffset = cfg.getInt(prefix + "value_offset", cfg.getInt("db.pressure.value_offset", 2));
-                const float scale = cfg.getFloat(prefix + "scale", cfg.getFloat("db.pressure.scale", 1.0f));
+            float mainValueReal = 0.0f;
+            auto r = m_plcClient->readReal(sensorDbNumber, realOffset, mainValueReal);
+            if (r != S7PLCClient::Result::SUCCESS)
+            {
+                std::ostringstream oss;
+                oss << "[DEVICE][PRESSURE][UDT] sensor=" << id
+                    << " db=" << sensorDbNumber
+                    << " itemBase=" << itemBase
+                    << " realOffset=" << realOffset
+                    << " decimalOffset=" << decimalOffset
+                    << " result=readReal_failed"
+                    << " error=\"" << m_plcClient->getLastError() << "\"";
+                appendPressureDebugLog(oss.str());
+                continue;
+            }
 
-                int statusOffset = 0;
-                int pressureOffset = 0;
-                if (itemSize > 0)
+            float engineeringValue = mainValueReal;
+            if (decimalOffset >= 0)
+            {
+                uint8_t rawDecimalBytes[2] = {0, 0};
+                auto rDec = m_plcClient->readDB(sensorDbNumber, itemBase + decimalOffset, 2, rawDecimalBytes);
+                if (rDec == S7PLCClient::Result::SUCCESS)
                 {
-                    const int base = (static_cast<int>(id) - 1) * itemSize;
-                    statusOffset = base + 0;
-                    pressureOffset = base + valueOffset;
+                    // S7 大端序：高字节在前；MainDecimal 定义为 UInt
+                    const uint16_t mainDecimalRaw = static_cast<uint16_t>((static_cast<uint16_t>(rawDecimalBytes[0]) << 8) |
+                                                                          static_cast<uint16_t>(rawDecimalBytes[1]));
+                    int decimals = static_cast<int>(mainDecimalRaw);
+                    if (decimals < 0)
+                        decimals = 0;
+                    else if (decimals > 6)
+                        decimals = 6;
+                    engineeringValue = mainValueReal / std::pow(10.0f, static_cast<float>(decimals));
                 }
                 else
                 {
-                    statusOffset = 0;
-                    pressureOffset = valueOffset;
-                }
-
-                int16_t status = 0;
-                float pressure = 0.0f;
-
-                auto r1 = m_plcClient->readInt16(dbNumber, statusOffset, status);
-                auto r2 = m_plcClient->readReal(dbNumber, pressureOffset, pressure);
-
-                bool updated = false;
-                if (r2 == S7PLCClient::Result::SUCCESS)
-                {
-                    sensor.pressure = pressure * scale;
-                    updated = true;
-                }
-                if (r1 == S7PLCClient::Result::SUCCESS)
-                {
-                    sensor.status = static_cast<DeviceStatus>(status);
-                    updated = true;
-                }
-                if (updated)
-                {
-                    sensor.timestamp = std::chrono::system_clock::now();
+                    std::ostringstream oss;
+                    oss << "[DEVICE][PRESSURE][UDT] sensor=" << id
+                        << " db=" << sensorDbNumber
+                        << " decimalReadOffset=" << (itemBase + decimalOffset)
+                        << " result=readDecimal_failed"
+                        << " error=\"" << m_plcClient->getLastError() << "\"";
+                    appendPressureDebugLog(oss.str());
                 }
             }
 
-            return true;
+            sensor.pressure = engineeringValue * sensorScale;
+            sensor.status = DeviceStatus::ONLINE;
+            sensor.timestamp = std::chrono::system_clock::now();
+            anyUdtReadSuccess = true;
+
+            std::ostringstream oss;
+            oss << "[DEVICE][PRESSURE][UDT] sensor=" << id
+                << " db=" << sensorDbNumber
+                << " itemBase=" << itemBase
+                << " realOffset=" << realOffset
+                << " decimalOffset=" << decimalOffset
+                << " rawBytes=0x"
+                << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(rawRealBytes[0])
+                << std::setw(2) << static_cast<int>(rawRealBytes[1])
+                << std::setw(2) << static_cast<int>(rawRealBytes[2])
+                << std::setw(2) << static_cast<int>(rawRealBytes[3])
+                << std::dec
+                << " rawReal=" << mainValueReal
+                << " engineering=" << engineeringValue
+                << " scale=" << sensorScale
+                << " pressureKPa=" << sensor.pressure
+                << " status=" << static_cast<int>(sensor.status);
+            appendPressureDebugLog(oss.str());
         }
+
+        if (!anyUdtReadSuccess)
+        {
+            appendPressureDebugLog("[DEVICE][PRESSURE][UDT] all sensors read failed");
+        }
+
+        return anyUdtReadSuccess;
     }
 
     bool DeviceManager::readFlowMeters()

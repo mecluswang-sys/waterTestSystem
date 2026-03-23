@@ -82,19 +82,19 @@ namespace WaterTest
         m_pressureMaxLimitSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureMaxLimitSpinBox->setRange(0.0, 100000.0);
         m_pressureMaxLimitSpinBox->setDecimals(1);
-        m_pressureMaxLimitSpinBox->setSuffix(" kPa");
+        m_pressureMaxLimitSpinBox->setSuffix(" kpa");
         pressureLayout->addRow("最大压力:", m_pressureMaxLimitSpinBox);
 
         m_pressureMinLimitSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureMinLimitSpinBox->setRange(0.0, 100000.0);
         m_pressureMinLimitSpinBox->setDecimals(1);
-        m_pressureMinLimitSpinBox->setSuffix(" kPa");
+        m_pressureMinLimitSpinBox->setSuffix(" kpa");
         pressureLayout->addRow("最小压力:", m_pressureMinLimitSpinBox);
 
         m_pressureAlarmThresholdSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureAlarmThresholdSpinBox->setRange(0.0, 100000.0);
         m_pressureAlarmThresholdSpinBox->setDecimals(1);
-        m_pressureAlarmThresholdSpinBox->setSuffix(" kPa");
+        m_pressureAlarmThresholdSpinBox->setSuffix(" kpa");
         pressureLayout->addRow("报警阈值:", m_pressureAlarmThresholdSpinBox);
 
         sensorLayout->addWidget(pressureGroup);
@@ -195,9 +195,9 @@ namespace WaterTest
         m_collectionIntervalSpinBox->setValue(config.getInt("data.collection_interval", 1000));
 
         // ============ 加载压力传感器配置 ============
-        m_pressureMaxLimitSpinBox->setValue(config.getFloat("pressure.max_limit", 1000000.0f) / 1000.0f);
-        m_pressureMinLimitSpinBox->setValue(config.getFloat("pressure.min_limit", 0.0f) / 1000.0f);
-        m_pressureAlarmThresholdSpinBox->setValue(config.getFloat("pressure.alarm_threshold", 950000.0f) / 1000.0f);
+        m_pressureMaxLimitSpinBox->setValue(config.getFloat("pressure.max_limit", 1000.0f));
+        m_pressureMinLimitSpinBox->setValue(config.getFloat("pressure.min_limit", 0.0f));
+        m_pressureAlarmThresholdSpinBox->setValue(config.getFloat("pressure.alarm_threshold", 950.0f));
 
         // ============ 加载流量计配置 ============
         m_flowMaxRateSpinBox->setValue(config.getFloat("flow.max_rate", 100.0));
@@ -236,9 +236,9 @@ namespace WaterTest
         config.setInt("data.collection_interval", m_collectionIntervalSpinBox->value());
 
         // ============ 保存压力传感器配置 ============
-        config.setFloat("pressure.max_limit", static_cast<float>(m_pressureMaxLimitSpinBox->value() * 1000.0));
-        config.setFloat("pressure.min_limit", static_cast<float>(m_pressureMinLimitSpinBox->value() * 1000.0));
-        config.setFloat("pressure.alarm_threshold", static_cast<float>(m_pressureAlarmThresholdSpinBox->value() * 1000.0));
+        config.setFloat("pressure.max_limit", static_cast<float>(m_pressureMaxLimitSpinBox->value()));
+        config.setFloat("pressure.min_limit", static_cast<float>(m_pressureMinLimitSpinBox->value()));
+        config.setFloat("pressure.alarm_threshold", static_cast<float>(m_pressureAlarmThresholdSpinBox->value()));
 
         // ============ 保存流量计配置 ============
         config.setFloat("flow.max_rate", m_flowMaxRateSpinBox->value());

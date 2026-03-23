@@ -23,6 +23,7 @@
 #include <QTimer>
 #include <QtMath>
 #include <QDir>
+#include <vector>
 
 namespace WaterTest
 {
@@ -609,7 +610,7 @@ namespace WaterTest
             static QPointF inletPortLocal() { return QPointF(-52, 14); }
             static QPointF outletPortLocal() { return QPointF(52, 14); }
 
-            explicit SensorItem(const QString &name, const QString &unit = "kPa", QColor typeColor = QColor())
+            explicit SensorItem(const QString &name, const QString &unit = "kpa", QColor typeColor = QColor())
                 : m_name(name), m_value(0.0), m_unit(unit), m_typeColor(typeColor.isValid() ? typeColor : kUiPurple)
             {
                 setCacheMode(DeviceCoordinateCache);
@@ -668,7 +669,7 @@ namespace WaterTest
                 valFont.setFamily("Consolas");
                 p->setFont(valFont);
                 p->setPen(valueColor);
-                const QString v = QString::number(m_value, 'f', 3);
+                const QString v = QString::number(m_value, 'f', 2);
                 p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
 
                 // Unit
@@ -906,6 +907,7 @@ namespace WaterTest
           m_view(nullptr),
           m_scene(nullptr),
           m_flowTimer(nullptr),
+          m_dataTimer(nullptr),
           m_flowDashOffset(0.0)
     {
         setupUI();
@@ -950,6 +952,10 @@ namespace WaterTest
         connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
         m_flowTimer->start(50);
 
+        m_dataTimer = new QTimer(this);
+        connect(m_dataTimer, &QTimer::timeout, this, &Station1Panel::updateSensorValues);
+        m_dataTimer->start(200);
+
         buildScene();
     }
 
@@ -980,7 +986,8 @@ namespace WaterTest
         caption->setZValue(5);
 
         // ==== 图标化设备布局（两排蛇形：7 + 7）====
-        // 第一排：左->右；第二排：右->左。
+        // 布局原则：第一排按“左 -> 右”排列，第二排按“右 -> 左”回折。
+        // 目的：在有限宽度内保持流程连续，并增强工艺流向可读性。
         const qreal step = 320;
         const qreal x0 = 10;
         const qreal leftTwoColsShiftX = 200;
@@ -1020,7 +1027,7 @@ namespace WaterTest
         };
 
         // 第一排（从左到右，列 0..6）
-        auto *acc = new AccumulatorItem("蓄能器");
+        auto *acc = new AccumulatorItem("压力罐");
         place(acc, xAcc, yRow1);
 
         auto *v3w = new ThreeWayValveItem("电动三通切换阀");
@@ -1030,13 +1037,15 @@ namespace WaterTest
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
 
         // 压力传感器上置：使底部红点与主干管道平齐。
-        auto *ps1 = new SensorItem("压力传感器", "kPa", kUiPurple);
+        auto *ps1 = new SensorItem("压力传感器", "kpa", kUiPurple);
+        ps1->setData(1, 4); // 1号操作台映射：4号压力传感器
         place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *v2 = new ValveItem("电动阀", true, 100.0);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
 
-        auto *ps2 = new SensorItem("压力传感器", "kPa", kUiPurple);
+        auto *ps2 = new SensorItem("压力传感器", "kpa", kUiPurple);
+        ps2->setData(1, 5); // 1号操作台映射：5号压力传感器
         place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
         auto *vReg = new ValveItem("电动调压阀", true, 65.0);
@@ -1046,13 +1055,17 @@ namespace WaterTest
         auto *fm = new FlowMeterItem("流量计");
         place(fm, xFm, yRow2);
 
-        auto *pt1 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
+        auto *pt1 = new SensorItem("压力温度传感器", "kpa", kUiOrange);
+        pt1->setData(1, 6); // 1号操作台映射：6号压力传感器
+        pt1->setData(2, "kpa");
         place(pt1, xPt1, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *testValve = new ValveItem("待测试阀", false, 0.0);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
 
-        auto *pt2 = new SensorItem("压力温度传感器", "P/T", kUiOrange);
+        auto *pt2 = new SensorItem("压力温度传感器", "kpa", kUiOrange);
+        pt2->setData(1, 7); // 1号操作台映射：7号压力传感器
+        pt2->setData(2, "kpa");
         place(pt2, xPt2, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *vBack1 = new ValveItem("电动阀", true, 100.0);
@@ -1066,24 +1079,25 @@ namespace WaterTest
 
         // ==== 管道连接（四段主流程，按工艺流向编号）====
 
-        // 管路1（上排供压主线）
-        // 路径：蓄能器 -> 电动三通切换阀 -> 电动阀V1 -> 电动阀V2 -> 电动调压阀
-        // 作用：构建测试介质进入测试段前的供压与切换主通道。
-        // 特点：全部走上排主干，使用 connectPorts 保持横平竖直并自动端口对齐。
+        // 管路 1：上排供压主线
+        // 路径：蓄能器 -> 电动三通切换阀 -> 电动阀 V1 -> 电动阀 V2 -> 电动调压阀。
+        // 描述：该段用于建立测试介质进入测试段前的供压与切换主通道；
+        //       全程沿上排主干布置，通过 connectPorts 保持横平竖直并自动端口对齐。
         connectPorts(m_scene, acc->mapToScene(AccumulatorItem::outletPortLocal()), v3w->mapToScene(ThreeWayValveItem::inletPortLocal()));
         connectPorts(m_scene, v3w->mapToScene(ThreeWayValveItem::outletPortLocal()), v1->mapToScene(ValveItem::inletPortLocal()));
         connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()));
         connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()));
 
-        // 管路2（上排到下排的跨排过渡线）
-        // 路径：电动调压阀出口 ->（向右预留）->（垂直下行）-> 流量计出口侧
-        // 作用：完成上排主线到下排测试回路的“换行”连接。
-        // 特点：先水平后垂直再水平，确保跨排连接无斜线；其中 +50 为过渡水平段长度。
+        // 管路 2：上排到下排的跨排过渡线
+        // 路径：电动调压阀出口 ->（向右预留）->（垂直下行）-> 流量计出口侧。
+        // 描述：该段负责完成上排主线到下排测试回路的“换行”连接；
+        //       走线采用“水平 -> 垂直 -> 水平”折线，确保跨排连接无斜线。
+        //       其中 +50 为预留水平过渡段长度，用于避免与设备本体过近。
         {
             const QPointF start = vReg->mapToScene(ValveItem::outletPortLocal());
             const QPointF end = fm->mapToScene(FlowMeterItem::outletPortLocal());
             QPainterPath path(start);
-            const QPointF p1(start.x() + 50.0, start.y());
+            const QPointF p1(start.x() + 100.0, start.y());
             const QPointF p2(p1.x(), end.y());
             path.lineTo(p1);
             path.lineTo(p2);
@@ -1091,17 +1105,17 @@ namespace WaterTest
             addHmiPipeWithArrow(m_scene, path, end, p2);
         }
 
-        // 管路3（下排测试主线）
-        // 路径：流量计 -> 待测试阀 -> 回路电动阀（vBack1）
-        // 作用：形成测试段核心路径，覆盖流量计量与被测阀通路。
-        // 特点：按下排主干反向布置，方向与上排相反，但连接规则一致。
+        // 管路 3：下排测试主线
+        // 路径：流量计 -> 待测试阀 -> 回路电动阀（vBack1）。
+        // 描述：该段构成测试核心路径，覆盖流量计量与被测阀通路；
+        //       方向与上排相反（回折方向），但仍使用同一连接规则以保持视觉一致。
         connectPorts(m_scene, fm->mapToScene(FlowMeterItem::inletPortLocal()), testValve->mapToScene(ValveItem::outletPortLocal()));
         connectPorts(m_scene, testValve->mapToScene(ValveItem::inletPortLocal()), vBack1->mapToScene(ValveItem::outletPortLocal()));
 
-        // 管路4（下排回路收口段）
-        // 路径：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 回路节点（loopNode）
-        // 作用：对测试后介质进行回路调节并导入回路节点，完成流程收口。
-        // 特点：保持与管路3同一基准高度，便于视觉识别与后续长度微调。
+        // 管路 4：下排回路收口段
+        // 路径：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 回路节点（loopNode）。
+        // 描述：该段用于对测试后介质进行回路调节并导入回路节点，完成流程收口；
+        //       走线与管路 3 共享基准高度，便于视觉识别与后续长度微调。
         connectPorts(m_scene, vBack1->mapToScene(ValveItem::inletPortLocal()), vBackReg->mapToScene(ValveItem::outletPortLocal()));
         connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), loopNode->mapToScene(LoopItem::outletPortLocal()));
 
@@ -1110,6 +1124,8 @@ namespace WaterTest
         // 让 fitInView 在控件完成布局（viewport 有真实尺寸）后执行
         QTimer::singleShot(0, this, [this]()
                            { applyAutoFit(); });
+
+        updateSensorValues();
     }
 
     void Station1Panel::applyAutoFit()
@@ -1146,6 +1162,34 @@ namespace WaterTest
             QPen pen = pathItem->pen();
             pen.setDashOffset(m_flowDashOffset);
             pathItem->setPen(pen);
+        }
+    }
+
+    void Station1Panel::updateSensorValues()
+    {
+        if (!m_scene || !m_deviceManager)
+            return;
+
+        const std::vector<int> mappedSensorIds = {4, 5, 6, 7};
+        for (int sensorId : mappedSensorIds)
+        {
+            const auto sensor = m_deviceManager->getPressureSensor(static_cast<uint16_t>(sensorId));
+            const auto items = m_scene->items();
+            for (auto *it : items)
+            {
+                if (!it)
+                    continue;
+
+                const QVariant v = it->data(1);
+                if (!v.isValid() || v.toInt() != sensorId)
+                    continue;
+
+                auto *sensorItem = dynamic_cast<SensorItem *>(it);
+                if (!sensorItem)
+                    continue;
+
+                sensorItem->setValue(static_cast<double>(sensor.pressure));
+            }
         }
     }
 

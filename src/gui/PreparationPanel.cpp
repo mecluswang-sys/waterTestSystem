@@ -334,7 +334,7 @@ namespace WaterTest
 
         static QString fmtKPa(double pa)
         {
-            return QString::number(pa / 1e3, 'f', 1) + " kPa";
+            return QString::number(pa / 1e3, 'f', 1) + " kpa";
         }
 
         constexpr qreal kPumpItemWidth = 110;
@@ -883,7 +883,7 @@ namespace WaterTest
                 valFont.setFamily("Consolas");
                 p->setFont(valFont);
                 p->setPen(valueColor);
-                const QString v = QString::number(m_pressureMPa, 'f', 3);
+                const QString v = QString::number(m_pressureMPa, 'f', 2);
                 p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
 
                 // Unit
@@ -893,7 +893,7 @@ namespace WaterTest
                 unitFont.setFamily("Consolas");
                 p->setFont(unitFont);
                 p->setPen(kUiTextDim);
-                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "kPa");
+                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "kpa");
 
                 // Status（简化：固定 GOOD）
                 p->setBrush(kUiGreen);
@@ -1082,7 +1082,7 @@ namespace WaterTest
                 p->setFont(f2);
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-70, 62, 140, 16), Qt::AlignCenter,
-                            QString("LV:%1%%  PT:%2kPa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 1)));
+                            QString("LV:%1%%  PT:%2kpa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 2)));
 
                 // 入口/出口触点（用于管道吸附）
                 p->setPen(QPen(kUiBorder, 1));
@@ -2563,7 +2563,7 @@ namespace WaterTest
         addRow("系统运行", sys.isRunning, sys.isRunning ? "运行中" : "未运行");
 
         const auto p1 = m_deviceManager->getPressureSensor(1);
-        addRow("压力传感器1", p1.id != 0, QString("%1, %2 kPa").arg(statusToText(p1.status)).arg(p1.pressure / 1e3, 0, 'f', 1));
+        addRow("压力传感器1", p1.id != 0, QString("%1, %2 kpa").arg(statusToText(p1.status)).arg(p1.pressure, 0, 'f', 1));
 
         const QString html =
             "<h3>系统自检结果</h3>"
@@ -2668,14 +2668,14 @@ namespace WaterTest
         auto s3 = m_deviceManager->getPressureSensor(3);
 
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS1))
-            item->setPressureMPa(s1.pressure / 1e3);
+            item->setPressureMPa(s1.pressure);
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS2))
-            item->setPressureMPa(s2.pressure / 1e3);
+            item->setPressureMPa(s2.pressure);
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS3))
-            item->setPressureMPa(s3.pressure / 1e3);
+            item->setPressureMPa(s3.pressure);
 
         // 以传感器3作为分水罐压力（对应 docs/测试准备区流程图.mmd）
-        m_currentPressure = static_cast<float>(s3.pressure / 1e3);
+        m_currentPressure = static_cast<float>(s3.pressure);
         // 根据压力计算水位百分比（假设目标压力对应满罐）
         int waterLevel = static_cast<int>((m_targetPressure <= 0.0001f) ? 0.0f : (m_currentPressure / m_targetPressure) * 100.0f);
         if (waterLevel > 100)
@@ -2781,7 +2781,7 @@ namespace WaterTest
 
         // 确认操作
         auto reply = QMessageBox::question(this, "确认",
-                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kPa")
+                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kpa")
                                                .arg(m_pumpFrequency, 0, 'f', 1)
                                                .arg(m_targetPressure, 0, 'f', 2),
                                            QMessageBox::Yes | QMessageBox::No);

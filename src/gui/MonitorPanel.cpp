@@ -6,16 +6,38 @@
 #include "gui/MonitorPanel.h"
 #include "DeviceManager.h"
 #include "DeviceTypes.h"
+#include "ConfigManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QHeaderView>
 #include <QGroupBox>
 #include <QGridLayout>
+#include <QDateTime>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace WaterTest
 {
+
+    namespace
+    {
+        void appendPressureUiDebugLog(const std::string &message)
+        {
+            std::filesystem::create_directories("deploy/logs");
+
+            std::ofstream logFile("deploy/logs/pressure_ui_debug.log", std::ios::app);
+            if (!logFile.is_open())
+            {
+                return;
+            }
+
+            logFile << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz").toStdString()
+                    << ' ' << message << '\n';
+        }
+    }
 
     MonitorPanel::MonitorPanel(std::shared_ptr<DeviceManager> deviceMgr, QWidget *parent)
         : QWidget(parent), m_deviceManager(deviceMgr), m_updateTimer(nullptr)
@@ -36,6 +58,9 @@ namespace WaterTest
 
     void MonitorPanel::setupUI()
     {
+        auto &cfg = ConfigManager::getInstance();
+        const bool showTemperatureColumn = cfg.getInt("temp.count", 1) > 0;
+
         QGridLayout *mainLayout = new QGridLayout(this);
         // 统一主布局的边距与间距，使整体更紧凑
         mainLayout->setContentsMargins(8, 8, 8, 8);
@@ -49,7 +74,7 @@ namespace WaterTest
         sensorLayout->setSpacing(4);
 
         m_sensorTable = new QTableWidget(0, 5, this);
-        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kPa)", "温度 (℃)", "状态"});
+        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kpa)", "温度 (℃)", "状态"});
         m_sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_sensorTable->horizontalHeader()->setMinimumSectionSize(70);
         m_sensorTable->horizontalHeader()->setDefaultSectionSize(100);
@@ -61,6 +86,10 @@ namespace WaterTest
         m_sensorTable->verticalHeader()->setVisible(false);
         m_sensorTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_sensorTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        if (!showTemperatureColumn)
+        {
+            m_sensorTable->setColumnHidden(3, true);
+        }
         sensorLayout->addWidget(m_sensorTable);
 
         // 放置到网格：第0行第0列
@@ -175,11 +204,24 @@ namespace WaterTest
     void MonitorPanel::updateSensorTable()
     {
         if (!m_deviceManager)
+        {
+            appendPressureUiDebugLog("[UI][PRESSURE] skipped: device manager not ready");
             return;
+        }
 
         auto pSensors = m_deviceManager->getAllPressureSensors();
         auto tSensors = m_deviceManager->getAllTemperatureSensors();
-        size_t rows = (pSensors.size() > tSensors.size()) ? pSensors.size() : tSensors.size();
+        auto &cfg = ConfigManager::getInstance();
+        const bool showTemperatureColumn = cfg.getInt("temp.count", 1) > 0;
+        size_t rows = showTemperatureColumn ? ((pSensors.size() > tSensors.size()) ? pSensors.size() : tSensors.size()) : pSensors.size();
+
+        {
+            std::ostringstream oss;
+            oss << "[UI][PRESSURE] refresh rows=" << rows
+                << " pressureSensors=" << pSensors.size()
+                << " temperatureSensors=" << tSensors.size();
+            appendPressureUiDebugLog(oss.str());
+        }
 
         m_sensorTable->setRowCount(static_cast<int>(rows));
 
@@ -190,25 +232,38 @@ namespace WaterTest
             m_sensorTable->setItem(i, 0, new QTableWidgetItem(QString::number(id)));
             m_sensorTable->setItem(i, 1, new QTableWidgetItem(QString("传感器 %1").arg(id)));
 
-            // 压力显示（Pa→kPa），若不存在则留空
+            // 压力显示（当前内部单位即 kpa），若不存在则留空
             if (i < pSensors.size())
             {
-                double kpa = static_cast<double>(pSensors[i].pressure) / 1000.0;
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kpa, 'f', 1)));
+                double kpa = static_cast<double>(pSensors[i].pressure);
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kpa, 'f', 2)));
+
+                std::ostringstream oss;
+                oss << "[UI][PRESSURE] sensor=" << pSensors[i].id
+                    << " pressureKPa=" << pSensors[i].pressure
+                    << " displayKPa=" << kpa
+                    << " status=" << static_cast<int>(pSensors[i].status);
+                appendPressureUiDebugLog(oss.str());
             }
             else
             {
                 m_sensorTable->setItem(i, 2, new QTableWidgetItem(""));
+                std::ostringstream oss;
+                oss << "[UI][PRESSURE] sensor=" << id << " missing-pressure-data";
+                appendPressureUiDebugLog(oss.str());
             }
 
-            // 温度显示（℃），若不存在则留空
-            if (i < tSensors.size())
+            // 温度显示（℃），若配置禁用则保持为空并隐藏该列
+            if (showTemperatureColumn)
             {
-                m_sensorTable->setItem(i, 3, new QTableWidgetItem(QString::number(tSensors[i].temperature, 'f', 2)));
-            }
-            else
-            {
-                m_sensorTable->setItem(i, 3, new QTableWidgetItem(""));
+                if (i < tSensors.size())
+                {
+                    m_sensorTable->setItem(i, 3, new QTableWidgetItem(QString::number(tSensors[i].temperature, 'f', 2)));
+                }
+                else
+                {
+                    m_sensorTable->setItem(i, 3, new QTableWidgetItem(""));
+                }
             }
 
             // 合并状态：Fault优先，其次Maintenance，其次Online，否则Offline/Unknown

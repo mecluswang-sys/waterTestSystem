@@ -59,7 +59,7 @@ namespace WaterTest
         {
             m_logFile << getCurrentTimestamp()
                       << " [PRESSURE] ID:" << sensor.id
-                      << " Value:" << sensor.pressure << " Pa"
+                      << " Value:" << sensor.pressure << " kPa"
                       << " Status:" << static_cast<int>(sensor.status) << "\n";
         }
     }
