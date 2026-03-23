@@ -21,6 +21,10 @@
 #include <QFont>
 #include <QShowEvent>
 #include <QTimer>
+#include <QDialog>
+#include <QLabel>
+#include <QPushButton>
+#include <QHBoxLayout>
 #include <QtMath>
 #include <QDir>
 #include <vector>
@@ -305,12 +309,6 @@ namespace WaterTest
                 outer->setZValue(1);
                 auto *inner = scene->addPath(path, QPen(kUiPipeInner, kPipeInnerWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 inner->setZValue(2);
-
-                QPen flowPen(kUiCyan, kPipeFlowWidth, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
-                flowPen.setDashPattern({4, 4});
-                auto *flow = scene->addPath(path, flowPen);
-                flow->setZValue(3);
-                flow->setData(0, "hmi_pipe_flow");
             }
 
             Q_UNUSED(arrowTip);
@@ -407,6 +405,24 @@ namespace WaterTest
             }
 
             QRectF boundingRect() const override { return QRectF(-50, -40, 104, 100); }
+
+            void setOpen(bool open)
+            {
+                if (m_open == open)
+                    return;
+                m_open = open;
+                update();
+            }
+
+            void setDegree(double degree)
+            {
+                if (qFuzzyCompare(m_degree, degree))
+                    return;
+                m_degree = degree;
+                update();
+            }
+
+            const QString &getName() const { return m_name; }
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
@@ -957,6 +973,67 @@ namespace WaterTest
         m_dataTimer->start(200);
 
         buildScene();
+
+        // 点击阀门图元后弹出控制面板，避免误触：选中后立即清除选中态
+        connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]()
+                {
+            if (!m_scene || !m_deviceManager)
+                return;
+
+            const auto selected = m_scene->selectedItems();
+            if (selected.isEmpty())
+                return;
+
+            auto *item = selected.first();
+            const QVariant idVar = item->data(3);
+            if (!idVar.isValid())
+                return;
+
+            const int valveId = idVar.toInt();
+            if (valveId <= 0)
+                return;
+
+            m_scene->blockSignals(true);
+            m_scene->clearSelection();
+            m_scene->blockSignals(false);
+
+            auto *valveItem = dynamic_cast<ValveItem *>(item);
+            const QString valveName = valveItem ? valveItem->getName() : QString("阀门 #%1").arg(valveId);
+
+            const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
+            const bool isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+
+            QDialog dialog(this);
+            dialog.setWindowTitle("阀门控制");
+            dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+            auto *mainLayout = new QVBoxLayout(&dialog);
+            auto *infoLabel = new QLabel(QString("%1\n当前状态: %2")
+                                             .arg(valveName)
+                                             .arg(isOpen ? "开启" : "关闭"),
+                                         &dialog);
+            mainLayout->addWidget(infoLabel);
+
+            auto *buttons = new QHBoxLayout();
+            auto *openBtn = new QPushButton("开阀", &dialog);
+            auto *closeBtn = new QPushButton("关阀", &dialog);
+            auto *cancelBtn = new QPushButton("取消", &dialog);
+            buttons->addWidget(openBtn);
+            buttons->addWidget(closeBtn);
+            buttons->addWidget(cancelBtn);
+            mainLayout->addLayout(buttons);
+
+            connect(openBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
+                m_deviceManager->controlValve(static_cast<uint16_t>(valveId), true);
+                dialog.accept();
+            });
+            connect(closeBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
+                m_deviceManager->controlValve(static_cast<uint16_t>(valveId), false);
+                dialog.accept();
+            });
+            connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+            dialog.exec(); });
     }
 
     void Station1Panel::buildScene()
@@ -1035,6 +1112,7 @@ namespace WaterTest
 
         auto *v1 = new ValveItem("电动阀", true, 100.0);
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
+        v1->setData(3, 4);
 
         // 压力传感器上置：使底部红点与主干管道平齐。
         auto *ps1 = new SensorItem("压力传感器", "kpa", kUiPurple);
@@ -1043,6 +1121,7 @@ namespace WaterTest
 
         auto *v2 = new ValveItem("电动阀", true, 100.0);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
+        v2->setData(3, 5);
 
         auto *ps2 = new SensorItem("压力传感器", "kpa", kUiPurple);
         ps2->setData(1, 5); // 1号操作台映射：5号压力传感器
@@ -1050,6 +1129,7 @@ namespace WaterTest
 
         auto *vReg = new ValveItem("电动调压阀", true, 65.0);
         place(vReg, xVReg, yRow1 + row1AfterAccumulatorYOffset);
+        vReg->setData(3, 6);
 
         // 第二排（从右到左，列 6..0）
         auto *fm = new FlowMeterItem("流量计");
@@ -1062,6 +1142,7 @@ namespace WaterTest
 
         auto *testValve = new ValveItem("待测试阀", false, 0.0);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
+        testValve->setData(3, 7);
 
         auto *pt2 = new SensorItem("压力温度传感器", "kpa", kUiOrange);
         pt2->setData(1, 7); // 1号操作台映射：7号压力传感器
@@ -1070,9 +1151,11 @@ namespace WaterTest
 
         auto *vBack1 = new ValveItem("电动阀", true, 100.0);
         place(vBack1, xVBack1, yRow2 + row2AfterFlowMeterYOffset);
+        vBack1->setData(3, 8);
 
         auto *vBackReg = new ValveItem("电动调压阀", true, 75.0);
         place(vBackReg, xVBackReg, yRow2 + row2AfterFlowMeterYOffset);
+        vBackReg->setData(3, 9);
 
         auto *loopNode = new LoopItem("回路");
         place(loopNode, xLoop, yRow2);
@@ -1142,7 +1225,13 @@ namespace WaterTest
 
     void Station1Panel::updatePipeFlowAnimation()
     {
-        if (!m_scene)
+        if (!m_scene || !m_deviceManager)
+            return;
+
+        // 与准备区联动：至少一台供压泵运行时才显示流动动画
+        const bool anyPumpRunning = m_deviceManager->getPump(1).isRunning ||
+                                    m_deviceManager->getPump(2).isRunning;
+        if (!anyPumpRunning)
             return;
 
         m_flowDashOffset -= 1.0;
@@ -1170,12 +1259,13 @@ namespace WaterTest
         if (!m_scene || !m_deviceManager)
             return;
 
+        const auto allItems = m_scene->items();
+
         const std::vector<int> mappedSensorIds = {4, 5, 6, 7};
         for (int sensorId : mappedSensorIds)
         {
             const auto sensor = m_deviceManager->getPressureSensor(static_cast<uint16_t>(sensorId));
-            const auto items = m_scene->items();
-            for (auto *it : items)
+            for (auto *it : allItems)
             {
                 if (!it)
                     continue;
@@ -1189,6 +1279,30 @@ namespace WaterTest
                     continue;
 
                 sensorItem->setValue(static_cast<double>(sensor.pressure));
+            }
+        }
+
+        const std::vector<int> mappedValveIds = {4, 5, 6, 7, 8, 9};
+        for (int valveId : mappedValveIds)
+        {
+            const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
+            const bool open = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+
+            for (auto *it : allItems)
+            {
+                if (!it)
+                    continue;
+
+                const QVariant v = it->data(3);
+                if (!v.isValid() || v.toInt() != valveId)
+                    continue;
+
+                auto *valveItem = dynamic_cast<ValveItem *>(it);
+                if (!valveItem)
+                    continue;
+
+                valveItem->setOpen(open);
+                valveItem->setDegree(static_cast<double>(valve.openingDegree));
             }
         }
     }

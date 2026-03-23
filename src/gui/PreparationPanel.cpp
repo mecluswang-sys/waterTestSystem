@@ -19,7 +19,11 @@
 #include <QGraphicsScene>
 #include <QGraphicsTextItem>
 #include <QGraphicsView>
+#include <QDialog>
 #include <QMessageBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QHBoxLayout>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollArea>
@@ -586,18 +590,6 @@ namespace WaterTest
                 p->setPen(kUiTextDim);
                 p->drawText(QRectF(-55, 40, 110, 18), Qt::AlignCenter, freqText);
 
-                const QString voltText = QString("%1V").arg(QString::number(m_voltage, 'f', 1));
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(-55, 50, 110, 18), Qt::AlignCenter, voltText);
-
-                const QString ampText = QString("%1A").arg(QString::number(m_amperage, 'f', 1));
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(-55, 60, 110, 18), Qt::AlignCenter, ampText);
-
-                const QString powerText = QString("%1W").arg(QString::number(m_power, 'f', 1));
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(-55, 70, 110, 18), Qt::AlignCenter, powerText);
-
                 // 入口/出口触点（用于管道吸附）
                 p->setPen(QPen(kUiBorder, 1));
                 p->setBrush(kUiCyan);
@@ -609,9 +601,6 @@ namespace WaterTest
             QString m_name;
             bool m_running;
             double m_frequencyHz;
-            double m_voltage;
-            double m_amperage;
-            double m_power;
         };
 
         class ValveItem : public QGraphicsItem
@@ -1985,6 +1974,93 @@ namespace WaterTest
         m_scene = new QGraphicsScene(this);
         m_view->setScene(m_scene);
         buildHmiScene();
+
+        // 点击设备图元弹出控制对话框：泵启停、阀门开关
+        connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]()
+                {
+            if (!m_scene || !m_deviceManager)
+                return;
+
+            const auto selected = m_scene->selectedItems();
+            if (selected.isEmpty())
+                return;
+
+            auto *item = selected.first();
+            const QString devType = item->data(4).toString();
+            const int devId = item->data(3).toInt();
+            if (devType.isEmpty() || devId <= 0)
+                return;
+
+            m_scene->blockSignals(true);
+            m_scene->clearSelection();
+            m_scene->blockSignals(false);
+
+            if (devType == "pump")
+            {
+                const auto pump = m_deviceManager->getPump(static_cast<uint16_t>(devId));
+                QDialog dialog(this);
+                dialog.setWindowTitle("泵控制");
+                dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+                auto *mainLayout = new QVBoxLayout(&dialog);
+                mainLayout->addWidget(new QLabel(QString("P%1 当前状态: %2")
+                                                     .arg(devId)
+                                                     .arg(pump.isRunning ? "运行" : "停止"),
+                                                 &dialog));
+                auto *btnRow = new QHBoxLayout();
+                auto *startBtn = new QPushButton("启动", &dialog);
+                auto *stopBtn = new QPushButton("停止", &dialog);
+                auto *cancelBtn = new QPushButton("取消", &dialog);
+                btnRow->addWidget(startBtn);
+                btnRow->addWidget(stopBtn);
+                btnRow->addWidget(cancelBtn);
+                mainLayout->addLayout(btnRow);
+
+                connect(startBtn, &QPushButton::clicked, &dialog, [&, devId]() {
+                    m_deviceManager->controlPump(static_cast<uint16_t>(devId), true);
+                    dialog.accept();
+                });
+                connect(stopBtn, &QPushButton::clicked, &dialog, [&, devId]() {
+                    m_deviceManager->controlPump(static_cast<uint16_t>(devId), false);
+                    dialog.accept();
+                });
+                connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+                dialog.exec();
+                return;
+            }
+
+            if (devType == "valve")
+            {
+                const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(devId));
+                const bool isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+                QDialog dialog(this);
+                dialog.setWindowTitle("阀门控制");
+                dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+                auto *mainLayout = new QVBoxLayout(&dialog);
+                mainLayout->addWidget(new QLabel(QString("V%1 当前状态: %2")
+                                                     .arg(devId)
+                                                     .arg(isOpen ? "开启" : "关闭"),
+                                                 &dialog));
+                auto *btnRow = new QHBoxLayout();
+                auto *openBtn = new QPushButton("开阀", &dialog);
+                auto *closeBtn = new QPushButton("关阀", &dialog);
+                auto *cancelBtn = new QPushButton("取消", &dialog);
+                btnRow->addWidget(openBtn);
+                btnRow->addWidget(closeBtn);
+                btnRow->addWidget(cancelBtn);
+                mainLayout->addLayout(btnRow);
+
+                connect(openBtn, &QPushButton::clicked, &dialog, [&, devId]() {
+                    m_deviceManager->controlValve(static_cast<uint16_t>(devId), true);
+                    dialog.accept();
+                });
+                connect(closeBtn, &QPushButton::clicked, &dialog, [&, devId]() {
+                    m_deviceManager->controlValve(static_cast<uint16_t>(devId), false);
+                    dialog.accept();
+                });
+                connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+                dialog.exec();
+            } });
+
         rootLayout->addWidget(m_view, 1);
 
         // ========== 操作按钮栏：叠加在流程区内部靠下（不占用外部布局） ==========
@@ -2127,6 +2203,8 @@ namespace WaterTest
         pump1->setPos(p1);
         pump1->setZValue(2);
         pump1->setScale(kPumpScale);
+        pump1->setData(3, 1);
+        pump1->setData(4, "pump");
         m_scene->addItem(pump1);
         m_itemPump1 = pump1;
 
@@ -2134,6 +2212,8 @@ namespace WaterTest
         pump2->setPos(p2);
         pump2->setZValue(2);
         pump2->setScale(kPumpScale);
+        pump2->setData(3, 2);
+        pump2->setData(4, "pump");
         m_scene->addItem(pump2);
         m_itemPump2 = pump2;
 
@@ -2141,6 +2221,8 @@ namespace WaterTest
         valve1->setPos(v1);
         valve1->setZValue(2);
         valve1->setScale(kValveScale);
+        valve1->setData(3, 1);
+        valve1->setData(4, "valve");
         m_scene->addItem(valve1);
         m_itemValve1 = valve1;
 
@@ -2148,6 +2230,8 @@ namespace WaterTest
         valve2->setPos(v2);
         valve2->setZValue(2);
         valve2->setScale(kValveScale);
+        valve2->setData(3, 2);
+        valve2->setData(4, "valve");
         m_scene->addItem(valve2);
         m_itemValve2 = valve2;
 
@@ -2324,10 +2408,12 @@ namespace WaterTest
         m_pipes.append(pipeV2Tee);
 
         // 打开管道动画（流动虚线）
+        const bool anyPumpRunningAtInit = m_deviceManager &&
+                                          (m_deviceManager->getPump(1).isRunning || m_deviceManager->getPump(2).isRunning);
         for (auto *pipe : m_pipes)
         {
             if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
-                dp->setFlowing(true);
+                dp->setFlowing(anyPumpRunningAtInit);
         }
 
         // 启动管道更新定时器
@@ -2605,6 +2691,15 @@ namespace WaterTest
 
         updatePumpStatus();
         updateValveStatus();
+
+        const bool anyPumpRunning = m_deviceManager->getPump(1).isRunning ||
+                                    m_deviceManager->getPump(2).isRunning;
+        for (auto *pipe : m_pipes)
+        {
+            if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
+                dp->setFlowing(anyPumpRunning);
+        }
+
         updateWaterLevel();
         updateRelayStates();
         updateReliefValveStatus();
