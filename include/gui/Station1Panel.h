@@ -8,9 +8,11 @@
 
 #include <QWidget>
 #include <memory>
+#include <vector>
 
 class QShowEvent;
 class QTimer;
+class QPushButton;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -38,12 +40,20 @@ namespace WaterTest
         void updatePipeFlowAnimation();
         void updateSensorValues();
 
+        // DQ 继电器控制
+        void buildRelayPanel(QWidget *parent);
+        void updateRelayButtons();
+        void onRelayBtnClicked(uint8_t index);
+
         std::shared_ptr<DeviceManager> m_deviceManager;
         QGraphicsView *m_view;
         QGraphicsScene *m_scene;
         QTimer *m_flowTimer;
         QTimer *m_dataTimer;
         qreal m_flowDashOffset;
+
+        // DQ 继电器按钮列表（与 kStation1Relays 同序）
+        std::vector<QPushButton *> m_relayBtns;
     };
 
 } // namespace WaterTest

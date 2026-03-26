@@ -175,6 +175,22 @@ namespace WaterTest
         Result writeOutputBool(int byteOffset, int bit, bool value);
 
         /**
+         * @brief 读取外设输入区 (I/PE) 的 16-bit Word，用于读取 AI 模拟量反馈
+         * @param byteOffset 字节偏移（如 IW64 对应 byteOffset=64）
+         * @param value      输出的 16-bit 原始值（Siemens 工程量格式）
+         * @return 操作结果
+         */
+        Result readPeripheralWord(int byteOffset, int16_t &value);
+
+        /**
+         * @brief 写入外设输出区 (Q/PQ) 的 16-bit Word，用于写入 AO 开度命令
+         * @param byteOffset 字节偏移（如 QW80 对应 byteOffset=80）
+         * @param value      16-bit 原始值（Siemens 工程量格式，4-20mA: 5530-27648）
+         * @return 操作结果
+         */
+        Result writePeripheralWord(int byteOffset, int16_t value);
+
+        /**
          * @brief 获取最后的错误信息
          * @return 错误描述
          */

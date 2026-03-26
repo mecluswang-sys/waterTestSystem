@@ -309,6 +309,65 @@ namespace WaterTest
         }
     }
 
+    S7PLCClient::Result S7PLCClient::readPeripheralWord(int byteOffset, int16_t &value)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
+        if (!m_connected)
+        {
+            return Result::CONNECTION_ERROR;
+        }
+
+        uint16_t buffer = 0;
+        // S7AreaPE = 外设输入区（AI 映射）
+        int result = Cli_ReadArea(m_client, S7AreaPE, 0, byteOffset, 2, S7WLByte, &buffer);
+        if (result == 0)
+        {
+            value = static_cast<int16_t>(swapUInt16(buffer));
+            return Result::SUCCESS;
+        }
+        else
+        {
+            updateLastError(result);
+            return Result::READ_ERROR;
+        }
+    }
+
+    S7PLCClient::Result S7PLCClient::writePeripheralWord(int byteOffset, int16_t value)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
+        if (!m_connected)
+        {
+            return Result::CONNECTION_ERROR;
+        }
+
+        uint16_t buffer = swapUInt16(static_cast<uint16_t>(value));
+        // S7AreaPA = 外设输出区（AO 映射）
+        int result = Cli_WriteArea(m_client, S7AreaPA, 0, byteOffset, 2, S7WLByte, &buffer);
+        if (result == 0)
+        {
+            return Result::SUCCESS;
+        }
+        else
+        {
+            updateLastError(result);
+            return Result::WRITE_ERROR;
+        }
+    }
+
     std::string S7PLCClient::getLastError() const
     {
         std::lock_guard<std::mutex> lock(m_mutex);

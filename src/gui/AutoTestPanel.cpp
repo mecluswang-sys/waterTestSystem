@@ -112,7 +112,7 @@ namespace WaterTest
         // 测试条件表格
         m_testConditionTable = new QTableWidget(this);
         m_testConditionTable->setColumnCount(8);
-        m_testConditionTable->setHorizontalHeaderLabels({"条件名称", "供电类型", "目标压力(kpa)", "流量(L/min)",
+        m_testConditionTable->setHorizontalHeaderLabels({"条件名称", "供电类型", "目标压力(kPa)", "流量(L/min)",
                                                          "温度(°C)", "阀门电压(V)", "循环次数", "测试时长(秒)"});
         m_testConditionTable->horizontalHeader()->setStretchLastSection(true);
         m_testConditionTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -355,7 +355,7 @@ namespace WaterTest
         auto *pressureSpinBox = new QDoubleSpinBox(&dialog);
         pressureSpinBox->setRange(0.0, 2000.0);
         pressureSpinBox->setValue(500.0);
-        pressureSpinBox->setSuffix(" kpa");
+        pressureSpinBox->setSuffix(" kPa");
         pressureSpinBox->setDecimals(1);
 
         auto *flowRateSpinBox = new QDoubleSpinBox(&dialog);
@@ -457,7 +457,7 @@ namespace WaterTest
         auto *pressureSpinBox = new QDoubleSpinBox(&dialog);
         pressureSpinBox->setRange(0.0, 2000.0);
         pressureSpinBox->setValue(condition.targetPressure);
-        pressureSpinBox->setSuffix(" kpa");
+        pressureSpinBox->setSuffix(" kPa");
         pressureSpinBox->setDecimals(1);
 
         auto *flowRateSpinBox = new QDoubleSpinBox(&dialog);

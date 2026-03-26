@@ -111,20 +111,36 @@ namespace WaterTest
                               minTemperature(-20.0f), status(DeviceStatus::OFFLINE) {}
     };
 
+    // Regulating valve control mode
+    enum class ValveControlMode
+    {
+        OPEN_LOOP = 0,             // 开环：直接手动设定开度百分比
+        CLOSED_LOOP_PRESSURE = 1,  // 闭环：按目标压力由 PID 自动调节开度
+    };
+
     // Regulating valve data
     struct RegulatingValve
     {
         uint16_t id;               // Regulating valve ID
-        std::string name;          // Name (High pressure/Low pressure/Electric regulating valve)
-        float setPressure;         // Set pressure (Pa)
-        float actualPressure;      // Actual pressure (Pa)
+        std::string name;          // Name
+        float setPressure;         // Target pressure for closed-loop (kPa)
+        float actualPressure;      // Actual measured pressure (kPa)
+        float openingSetpoint;     // Commanded opening degree (0-100%)
+        float openingPercent;      // Actual opening feedback (0-100%)
         ValveStatus status;        // Valve status
         DeviceStatus deviceStatus; // Device status
+        ValveControlMode controlMode; // Control mode
+        bool isOpenLimit;          // Open limit DI (terminal 12-13)
+        bool isCloseLimit;         // Close limit DI (terminal 14-15)
+        bool alarmActive;          // Comprehensive alarm DI (terminal 22-23)
         std::chrono::system_clock::time_point timestamp;
 
         RegulatingValve() : id(0), setPressure(0.0f), actualPressure(0.0f),
+                            openingSetpoint(0.0f), openingPercent(0.0f),
                             status(ValveStatus::CLOSED),
-                            deviceStatus(DeviceStatus::OFFLINE) {}
+                            deviceStatus(DeviceStatus::OFFLINE),
+                            controlMode(ValveControlMode::OPEN_LOOP),
+                            isOpenLimit(false), isCloseLimit(true), alarmActive(false) {}
     };
 
     // System operation mode

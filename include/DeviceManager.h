@@ -9,6 +9,7 @@
 
 #include "DeviceTypes.h"
 #include "S7PLCClient.h"
+#include "PIDController.h"
 #include <vector>
 #include <memory>
 #include <map>
@@ -162,12 +163,37 @@ namespace WaterTest
 
         // ======== 电动调压阀相关 ========
         /**
-         * @brief 设置调压阀压力
-         * @param id 调压阀ID (1-2)
-         * @param pressure 目标压力 (Pa)
+         * @brief 设置调压阀控制模式
+         * @param id           调压阀ID (1-2)
+         * @param mode         开环 / 闭环压力模式
+         * @return 是否成功
+         */
+        bool setValveControlMode(uint16_t id, ValveControlMode mode);
+
+        /**
+         * @brief 开环模式：直接设定阀门开度，写入 AO (端子10-11, 4-20mA)
+         * @param id      调压阀ID (1-2)
+         * @param percent 开度百分比 (0-100%)
+         * @return 是否成功
+         */
+        bool setValveOpeningPercent(uint16_t id, float percent);
+
+        /**
+         * @brief 闭环模式：设置目标压力，由 PID 自动调节开度
+         * @param id       调压阀ID (1-2)
+         * @param pressure 目标压力 (kPa)
          * @return 是否成功
          */
         bool setRegulatingValvePressure(uint16_t id, float pressure);
+
+        /**
+         * @brief 设置 PID 参数（现场调试用）
+         * @param id  调压阀ID
+         * @param kp  比例增益
+         * @param ki  积分增益
+         * @param kd  微分增益
+         */
+        void setValvePIDGains(uint16_t id, double kp, double ki, double kd);
 
         /**
          * @brief 获取电动调压阀状态
@@ -184,17 +210,17 @@ namespace WaterTest
 
         // ======== 继电器/输出控制(Q区) ========
         /**
-         * @brief 控制Q0.0/Q0.1/Q0.2继电器通断
-         * @param index 0→Q0.0, 1→Q0.1, 2→Q0.2
-         * @param on true=闭合(通), false=断开
+         * @brief 控制继电器（DQ输出）通断，支持 Q0.0-Q1.7
+         * @param index 线性索引：0-7 → Q0.0-Q0.7，8-15 → Q1.0-Q1.7
+         * @param on true=闭合(通/得电), false=断开(失电)
          * @return 是否成功
          */
         bool setRelay(uint8_t index, bool on);
 
         /**
-         * @brief 读取Q0.0/Q0.1/Q0.2继电器当前状态
-         * @param index 0→Q0.0, 1→Q0.1, 2→Q0.2
-         * @param on 输出参数，读取到的状态
+         * @brief 读取继电器（DQ输出）当前状态，支持 Q0.0-Q1.7
+         * @param index 线性索引：0-7 → Q0.0-Q0.7，8-15 → Q1.0-Q1.7
+         * @param on 输出参数，读取到的状态（true=通/得电）
          * @return 是否读取成功
          */
         bool getRelayState(uint8_t index, bool &on) const;
@@ -262,6 +288,24 @@ namespace WaterTest
         std::map<uint16_t, FrequencyPump> m_pumps;
         std::map<uint16_t, TemperatureSensor> m_tempSensors;
         std::map<uint16_t, RegulatingValve> m_regulatingValves;
+
+        // 电动调压阀闭环控制相关
+        std::map<uint16_t, PIDController> m_valvePIDs;  // 每个调压阀一个 PID 实例
+        // AO/AI 外设地址（字节偏移，从配置文件加载，默认值仅供展示）
+        // S7-1200 SM1232 AO: QW80/QW82..., SM1231 AI: IW96/IW98...
+        std::map<uint16_t, int> m_valveAoByteOffset; // id -> AO 字节偏移
+        std::map<uint16_t, int> m_valveAiByteOffset; // id -> AI 字节偏移（位置反馈）
+        // 压力反馈 AI（4-20mA 直接输入，供 PID 闭环使用）
+        std::map<uint16_t, int>   m_valvePressureAiByteOffset; // id -> 压力 AI 字节偏移
+        std::map<uint16_t, float> m_valvePressureRangeMin;     // id -> 量程下限 kPa
+        std::map<uint16_t, float> m_valvePressureRangeMax;     // id -> 量程上限 kPa
+        // DI 字节/位描述（限位开关、报警）
+        std::map<uint16_t, int> m_valveOpenLimitByte; // 开到位 DI 字节
+        std::map<uint16_t, int> m_valveOpenLimitBit;  // 开到位 DI 位
+        std::map<uint16_t, int> m_valveCloseLimitByte;
+        std::map<uint16_t, int> m_valveCloseLimitBit;
+        std::map<uint16_t, int> m_valveAlarmByte;
+        std::map<uint16_t, int> m_valveAlarmBit;
 
         SystemStatus m_systemStatus;
         std::vector<AlarmInfo> m_alarms;

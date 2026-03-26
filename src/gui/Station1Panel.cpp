@@ -25,9 +25,14 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QHBoxLayout>
+#include <QGroupBox>
+#include <QScrollArea>
+#include <QMessageBox>
+#include <QStyle>
 #include <QtMath>
 #include <QDir>
 #include <vector>
+#include <array>
 
 namespace WaterTest
 {
@@ -41,6 +46,30 @@ namespace WaterTest
         // 说明：Station1Panel 需要与“测试准备区(PreparationPanel)”保持一致的拟物/HMI风格。
         // PreparationPanel 的 HMI 图元类都内联在 cpp 中，无法直接复用；这里复用同一套“主题 token + 网格背景”，
         // 并把节点/连线改成拟物面板与“管道”风格（外圈/内圈）。
+
+        // ===== DQ 继电器定义表（映射到 Q区输出地址） =====
+        struct RelayDef
+        {
+            uint8_t index;  // 线性索引：0-7=Q0.0-Q0.7, 8-15=Q1.0-Q1.7
+            QString label;  // 设备名称
+            QString addr;   // 显示地址（如 "Q0.0"）
+            QString type;   // 类型提示："valve" 或 "pump"
+        };
+
+        // 1号操作台 DQ 输出匹配表
+        // Q0.0-Q0.5: 电磁阀；Q0.6-Q0.7: 备用；Q1.0-Q1.1: 供压泵（现场联调）
+        static const std::array<RelayDef, 10> kStation1Relays{{
+            {0,  "进水电磁阀",  "Q0.0", "valve"},
+            {1,  "出水电磁阀",  "Q0.1", "valve"},
+            {2,  "排气电磁阀",  "Q0.2", "valve"},
+            {3,  "待测阀电磁阀", "Q0.3", "valve"},
+            {4,  "调压阀电磁阀", "Q0.4", "valve"},
+            {5,  "回流阀电磁阀", "Q0.5", "valve"},
+            {6,  "备用继电器",  "Q0.6", "valve"},
+            {7,  "备用继电器",  "Q0.7", "valve"},
+            {8,  "供压泵1启停",  "Q1.0", "pump"},
+            {9,  "供压泵2启停",  "Q1.1", "pump"},
+        }};
 
         static void ensureHmiConfigLoadedOnce()
         {
@@ -626,7 +655,7 @@ namespace WaterTest
             static QPointF inletPortLocal() { return QPointF(-52, 14); }
             static QPointF outletPortLocal() { return QPointF(52, 14); }
 
-            explicit SensorItem(const QString &name, const QString &unit = "kpa", QColor typeColor = QColor())
+            explicit SensorItem(const QString &name, const QString &unit = "kPa", QColor typeColor = QColor())
                 : m_name(name), m_value(0.0), m_unit(unit), m_typeColor(typeColor.isValid() ? typeColor : kUiPurple)
             {
                 setCacheMode(DeviceCoordinateCache);
@@ -964,6 +993,11 @@ namespace WaterTest
         m_view->setScene(m_scene);
         layout->addWidget(m_view, 1);
 
+        // DQ 继电器控制面板（流程图下方）
+        auto *relayContainer = new QWidget(this);
+        buildRelayPanel(relayContainer);
+        layout->addWidget(relayContainer, 0);
+
         m_flowTimer = new QTimer(this);
         connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
         m_flowTimer->start(50);
@@ -971,6 +1005,11 @@ namespace WaterTest
         m_dataTimer = new QTimer(this);
         connect(m_dataTimer, &QTimer::timeout, this, &Station1Panel::updateSensorValues);
         m_dataTimer->start(200);
+
+        // 继电器状态刷新：1 秒一次（降低无意义的 Q 区轮询频率）
+        auto *relayTimer = new QTimer(this);
+        connect(relayTimer, &QTimer::timeout, this, &Station1Panel::updateRelayButtons);
+        relayTimer->start(1000);
 
         buildScene();
 
@@ -1034,6 +1073,121 @@ namespace WaterTest
             connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
 
             dialog.exec(); });
+    }
+
+    void Station1Panel::buildRelayPanel(QWidget *container)
+    {
+        auto *outerLayout = new QVBoxLayout(container);
+        outerLayout->setContentsMargins(4, 2, 4, 4);
+        outerLayout->setSpacing(2);
+
+        auto *group = new QGroupBox("继电器输出控制 (DQ)", container);
+        group->setMaximumHeight(110);
+        auto *hLayout = new QHBoxLayout(group);
+        hLayout->setContentsMargins(6, 6, 6, 6);
+        hLayout->setSpacing(6);
+
+        // 辅助 lambda：根据通/断状态更新按钮文字和样式
+        auto refreshBtn = [](QPushButton *btn, const QString &addr, const QString &label, bool on)
+        {
+            btn->setText(QString("<b>%1</b><br><small>%2</small><br>%3")
+                             .arg(addr, label, on ? "● 通/得电" : "○ 断/失电"));
+            btn->setProperty("dqOn", on);
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
+        };
+
+        m_relayBtns.clear();
+        m_relayBtns.reserve(kStation1Relays.size());
+
+        for (const auto &def : kStation1Relays)
+        {
+            auto *btn = new QPushButton(group);
+            btn->setMinimumWidth(88);
+            btn->setMinimumHeight(72);
+            // 泵使用不同的语义色（暖色），阀使用默认
+            if (def.type == "pump")
+            {
+                btn->setProperty("tone", "warn");
+                btn->setToolTip("泵输出位需要现场联调，当前界面仅显示状态");
+            }
+            else
+                btn->setProperty("tone", "neutral");
+
+            refreshBtn(btn, def.addr, def.label, false);
+
+            const uint8_t idx = def.index;
+            connect(btn, &QPushButton::clicked, this, [this, idx]()
+                    { onRelayBtnClicked(idx); });
+
+            hLayout->addWidget(btn);
+            m_relayBtns.push_back(btn);
+        }
+
+        hLayout->addStretch(1);
+        outerLayout->addWidget(group);
+    }
+
+    void Station1Panel::updateRelayButtons()
+    {
+        if (!m_deviceManager || m_relayBtns.empty())
+            return;
+
+        const auto &relays = kStation1Relays;
+        for (size_t i = 0; i < relays.size() && i < m_relayBtns.size(); ++i)
+        {
+            bool on = false;
+            const bool ok = m_deviceManager->getRelayState(relays[i].index, on);
+            if (!ok)
+                continue; // PLC 未连接时跳过，不改变显示
+
+            auto *btn = m_relayBtns[i];
+            const bool current = btn->property("dqOn").toBool();
+            if (current == on)
+                continue; // 无变化，避免重绘闪烁
+
+            btn->setText(QString("<b>%1</b><br><small>%2</small><br>%3")
+                             .arg(relays[i].addr, relays[i].label, on ? "● 通/得电" : "○ 断/失电"));
+            btn->setProperty("dqOn", on);
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
+        }
+    }
+
+    void Station1Panel::onRelayBtnClicked(uint8_t index)
+    {
+        if (!m_deviceManager)
+            return;
+
+        // 泵输出位(Q1.0/Q1.1)暂不开放本地切换，仅做状态观察。
+        if (index == 8 || index == 9)
+        {
+            const int byteOff = index / 8;
+            const int bit = index % 8;
+            QMessageBox::information(this,
+                                     "现场联调项",
+                                     QString("Q%1.%2 为泵控制位，需到现场联调，当前仅支持状态查看。")
+                                         .arg(byteOff)
+                                         .arg(bit));
+            return;
+        }
+
+        bool current = false;
+        m_deviceManager->getRelayState(index, current);
+        const bool target = !current;
+
+        if (!m_deviceManager->setRelay(index, target))
+        {
+            // byteOff = index/8, bit = index%8
+            const int byteOff = index / 8;
+            const int bit     = index % 8;
+            QMessageBox::warning(this, "操作失败",
+                QString("切换 Q%1.%2 失败，请检查 PLC 连接状态。").arg(byteOff).arg(bit));
+            return;
+        }
+
+        // 写入成功后立即刷新所有按钮（含回读）
+        updateRelayButtons();
     }
 
     void Station1Panel::buildScene()
@@ -1115,7 +1269,7 @@ namespace WaterTest
         v1->setData(3, 4);
 
         // 压力传感器上置：使底部红点与主干管道平齐。
-        auto *ps1 = new SensorItem("压力传感器", "kpa", kUiPurple);
+        auto *ps1 = new SensorItem("压力传感器", "kPa", kUiPurple);
         ps1->setData(1, 4); // 1号操作台映射：4号压力传感器
         place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
@@ -1123,7 +1277,7 @@ namespace WaterTest
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
         v2->setData(3, 5);
 
-        auto *ps2 = new SensorItem("压力传感器", "kpa", kUiPurple);
+        auto *ps2 = new SensorItem("压力传感器", "kPa", kUiPurple);
         ps2->setData(1, 5); // 1号操作台映射：5号压力传感器
         place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
@@ -1135,18 +1289,18 @@ namespace WaterTest
         auto *fm = new FlowMeterItem("流量计");
         place(fm, xFm, yRow2);
 
-        auto *pt1 = new SensorItem("压力温度传感器", "kpa", kUiOrange);
+        auto *pt1 = new SensorItem("压力温度传感器", "kPa", kUiOrange);
         pt1->setData(1, 6); // 1号操作台映射：6号压力传感器
-        pt1->setData(2, "kpa");
+        pt1->setData(2, "kPa");
         place(pt1, xPt1, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *testValve = new ValveItem("待测试阀", false, 0.0);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
         testValve->setData(3, 7);
 
-        auto *pt2 = new SensorItem("压力温度传感器", "kpa", kUiOrange);
+        auto *pt2 = new SensorItem("压力温度传感器", "kPa", kUiOrange);
         pt2->setData(1, 7); // 1号操作台映射：7号压力传感器
-        pt2->setData(2, "kpa");
+        pt2->setData(2, "kPa");
         place(pt2, xPt2, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
 
         auto *vBack1 = new ValveItem("电动阀", true, 100.0);

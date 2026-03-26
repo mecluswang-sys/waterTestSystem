@@ -217,9 +217,9 @@ namespace WaterTest
         }
     }
 
-    static QString fmtKPa(double kpa)
+    static QString fmtKPa(double kPa)
     {
-        return QString::number(kpa, 'f', 2) + " kpa";
+        return QString::number(kPa, 'f', 2) + " kPa";
     }
 
     static QString fmtC(double c)
@@ -342,10 +342,10 @@ namespace WaterTest
         m_testRecordTable->setColumnCount(13);
         QStringList headers;
         headers << "时间" << "事件"
-                << "P1(kpa)" << "T1(℃)"
-                << "P2(kpa)" << "T2(℃)"
-                << "P3(kpa)" << "T3(℃)"
-                << "P4(kpa)" << "T4(℃)"
+                << "P1(kPa)" << "T1(℃)"
+                << "P2(kPa)" << "T2(℃)"
+                << "P3(kPa)" << "T3(℃)"
+                << "P4(kPa)" << "T4(℃)"
                 << "阀1" << "阀2" << "待测阀";
         m_testRecordTable->setHorizontalHeaderLabels(headers);
         m_testRecordTable->horizontalHeader()->setStretchLastSection(true);
@@ -465,7 +465,7 @@ namespace WaterTest
 
         auto sensor = m_deviceManager->getPressureSensor(sensorId);
         const double pressureKPa = static_cast<double>(sensor.pressure);
-        valueLabel->setText(QString("%1 kpa").arg(pressureKPa, 0, 'f', 1));
+        valueLabel->setText(QString("%1 kPa").arg(pressureKPa, 0, 'f', 1));
 
         // 根据压力值设置颜色
         if (pressureKPa > 800.0)

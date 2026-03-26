@@ -105,13 +105,40 @@ namespace WaterTest
 
         // 温度传感器：由 initialize() 根据配置重建
 
-        // 电动调压阀：2个
+        // 电动调压阀：2个，并初始化 PID / AO / AI 默认地址
+        // 接线图 AOX SRCU1TA:
+        //   AO 命令  → 端子 10-11 (4-20mA)  : 默认 QW80(阀1) / QW82(阀2)
+        //   AI 反馈  ← 端子 16-17 (4-20mA)  : 默认 IW96(阀1) / IW98(阀2)
+        //   DI 开到位 ← 端子 12-13           : 默认 I1.0(阀1) / I1.2(阀2)
+        //   DI 关到位 ← 端子 14-15           : 默认 I1.1(阀1) / I1.3(阀2)
+        //   DI 报警   ← 端子 22-23           : 默认 I1.4(阀1) / I1.5(阀2)
         for (int i = 1; i <= 2; ++i)
         {
             RegulatingValve regValve;
-            regValve.id = i;
-            regValve.name = "RegulatingValve" + std::to_string(i);
+            regValve.id = static_cast<uint16_t>(i);
+            regValve.name = (i == 1) ? "调节阀1" : "调节阀2";
             m_regulatingValves[i] = regValve;
+
+            // PID 默认参数（现场调试后可通过 setValvePIDGains 覆盖）
+            m_valvePIDs.emplace(static_cast<uint16_t>(i),
+                                PIDController(0.5, 0.01, 0.1, 0.0, 100.0, 1000.0));
+
+            // AO/AI 默认地址（字节偏移）
+            m_valveAoByteOffset[i] = 80 + (i - 1) * 2; // QW80, QW82
+            m_valveAiByteOffset[i] = 96 + (i - 1) * 2; // IW96, IW98
+
+            // DI 默认地址（字节 1，偏移按顺序分配）：I1.0/I1.1... → byte=1, bit=0/1/...
+            m_valveOpenLimitByte[i]  = 1;
+            m_valveOpenLimitBit[i]   = (i - 1) * 3;         // I1.0 / I1.3
+            m_valveCloseLimitByte[i] = 1;
+            m_valveCloseLimitBit[i]  = (i - 1) * 3 + 1;     // I1.1 / I1.4
+            m_valveAlarmByte[i]      = 1;
+            m_valveAlarmBit[i]       = (i - 1) * 3 + 2;     // I1.2 / I1.5
+
+            // 压力反馈 AI 默认地址（IW100/IW102），量程 0-1000 kPa
+            m_valvePressureAiByteOffset[i] = 100 + (i - 1) * 2; // IW100, IW102
+            m_valvePressureRangeMin[i]     = 0.0f;
+            m_valvePressureRangeMax[i]     = 1000.0f;
         }
     }
 
@@ -156,6 +183,39 @@ namespace WaterTest
                 TemperatureSensor temp;
                 temp.id = static_cast<uint16_t>(i);
                 m_tempSensors[i] = temp;
+            }
+
+            // 从配置文件加载调节阀 AO/AI/DI 地址（支持现场灵活配置）
+            for (int i = 1; i <= 2; ++i)
+            {
+                const std::string pfx = "valve." + std::to_string(i) + ".";
+                const int aoDefault = 80 + (i - 1) * 2;
+                const int aiDefault = 96 + (i - 1) * 2;
+                m_valveAoByteOffset[i] = cfg.getInt(pfx + "ao.byte_offset", aoDefault);
+                m_valveAiByteOffset[i] = cfg.getInt(pfx + "ai.byte_offset", aiDefault);
+                m_valveOpenLimitByte[i]  = cfg.getInt(pfx + "di.open_limit.byte",  1);
+                m_valveOpenLimitBit[i]   = cfg.getInt(pfx + "di.open_limit.bit",   (i - 1) * 3);
+                m_valveCloseLimitByte[i] = cfg.getInt(pfx + "di.close_limit.byte", 1);
+                m_valveCloseLimitBit[i]  = cfg.getInt(pfx + "di.close_limit.bit",  (i - 1) * 3 + 1);
+                m_valveAlarmByte[i]      = cfg.getInt(pfx + "di.alarm.byte",       1);
+                m_valveAlarmBit[i]       = cfg.getInt(pfx + "di.alarm.bit",        (i - 1) * 3 + 2);
+
+                // PID 参数也可从配置文件覆盖
+                auto pidIt = m_valvePIDs.find(static_cast<uint16_t>(i));
+                if (pidIt != m_valvePIDs.end())
+                {
+                    pidIt->second.setGains(
+                        cfg.getFloat(pfx + "pid.kp", 0.5f),
+                        cfg.getFloat(pfx + "pid.ki", 0.01f),
+                        cfg.getFloat(pfx + "pid.kd", 0.1f));
+                }
+
+                // 压力反馈 AI：IW100/IW102 为默认地址，量程继承 pressure.max_limit
+                const int pressAiDefault      = 100 + (i - 1) * 2;
+                const float pressMaxDefault   = cfg.getFloat("pressure.max_limit", 1000.0f);
+                m_valvePressureAiByteOffset[i] = cfg.getInt(pfx + "pressure_ai.byte_offset", pressAiDefault);
+                m_valvePressureRangeMin[i]     = cfg.getFloat(pfx + "pressure_range_min", 0.0f);
+                m_valvePressureRangeMax[i]     = cfg.getFloat(pfx + "pressure_range_max", pressMaxDefault);
             }
         }
         return true;
@@ -408,29 +468,71 @@ namespace WaterTest
     }
 
     // ======== 电动调压阀相关 ========
-    bool DeviceManager::setRegulatingValvePressure(uint16_t id, float pressure)
+    bool DeviceManager::setValveControlMode(uint16_t id, ValveControlMode mode)
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        auto it = m_regulatingValves.find(id);
+        if (it == m_regulatingValves.end())
+            return false;
+
+        it->second.controlMode = mode;
+
+        // 切换到闭环时重置 PID 积分，防止历史误差导致突变
+        if (mode == ValveControlMode::CLOSED_LOOP_PRESSURE)
+        {
+            auto pidIt = m_valvePIDs.find(id);
+            if (pidIt != m_valvePIDs.end())
+                pidIt->second.reset();
+        }
+        return true;
+    }
+
+    bool DeviceManager::setValveOpeningPercent(uint16_t id, float percent)
     {
         if (!m_plcClient || !m_plcClient->isConnected())
-        {
             return false;
-        }
 
-        // 写入目标压力到PLC（地址需要根据实际PLC程序调整）
-        int offset = (id - 1) * 8; // 假设每个调压阀占用8字节
-        auto result = m_plcClient->writeReal(DB_SYSTEM, offset + 20, pressure);
+        auto aoIt = m_valveAoByteOffset.find(id);
+        if (aoIt == m_valveAoByteOffset.end())
+            return false;
 
-        if (result == S7PLCClient::Result::SUCCESS)
+        // 转换为 Siemens 4-20mA AO 原始值并写入外设输出区
+        const int16_t rawVal = static_cast<int16_t>(percentToAO(percent));
+        auto res = m_plcClient->writePeripheralWord(aoIt->second, rawVal);
+        if (res == S7PLCClient::Result::SUCCESS)
         {
             std::lock_guard<std::mutex> lock(m_dataMutex);
             auto it = m_regulatingValves.find(id);
             if (it != m_regulatingValves.end())
-            {
-                it->second.setPressure = pressure;
-            }
+                it->second.openingSetpoint = percent;
             return true;
         }
-
         return false;
+    }
+
+    bool DeviceManager::setRegulatingValvePressure(uint16_t id, float pressure)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_dataMutex);
+            auto it = m_regulatingValves.find(id);
+            if (it == m_regulatingValves.end())
+                return false;
+            it->second.setPressure = pressure;
+            // 如果当前不是闭环模式，自动切换
+            it->second.controlMode = ValveControlMode::CLOSED_LOOP_PRESSURE;
+        }
+        // 重置对应 PID
+        auto pidIt = m_valvePIDs.find(id);
+        if (pidIt != m_valvePIDs.end())
+            pidIt->second.reset();
+        return true;
+    }
+
+    void DeviceManager::setValvePIDGains(uint16_t id, double kp, double ki, double kd)
+    {
+        auto pidIt = m_valvePIDs.find(id);
+        if (pidIt != m_valvePIDs.end())
+            pidIt->second.setGains(kp, ki, kd);
     }
 
     RegulatingValve DeviceManager::getRegulatingValve(uint16_t id) const
@@ -466,12 +568,15 @@ namespace WaterTest
             return false;
         }
 
-        if (index > 7)
+        // 支持 Q0.0-Q1.7（index 0-15）：byteOffset = index/8，bit = index%8
+        if (index > 15)
         {
             return false;
         }
 
-        auto res = m_plcClient->writeOutputBool(0, static_cast<int>(index), on);
+        const int byteOff = static_cast<int>(index) / 8;
+        const int bit     = static_cast<int>(index) % 8;
+        auto res = m_plcClient->writeOutputBool(byteOff, bit, on);
         return res == S7PLCClient::Result::SUCCESS;
     }
 
@@ -482,13 +587,16 @@ namespace WaterTest
             return false;
         }
 
-        if (index > 7)
+        // 支持 Q0.0-Q1.7（index 0-15）
+        if (index > 15)
         {
             return false;
         }
 
+        const int byteOff = static_cast<int>(index) / 8;
+        const int bit     = static_cast<int>(index) % 8;
         bool value = false;
-        auto res = m_plcClient->readOutputBool(0, static_cast<int>(index), value);
+        auto res = m_plcClient->readOutputBool(byteOff, bit, value);
         if (res == S7PLCClient::Result::SUCCESS)
         {
             on = value;
@@ -969,33 +1077,106 @@ namespace WaterTest
     bool DeviceManager::readRegulatingValves()
     {
         if (!m_plcClient)
-        {
             return false;
-        }
 
         std::lock_guard<std::mutex> lock(m_dataMutex);
 
         for (auto &pair : m_regulatingValves)
         {
-            uint16_t id = pair.first;
+            const uint16_t id = pair.first;
             RegulatingValve &valve = pair.second;
 
-            // DB block 6, 每个电动调压阀占用20字节
-            int offset = (id - 1) * 20;
-
-            float setPressure, actualPressure;
-            int16_t valveStatus, deviceStatus;
-
-            if (m_plcClient->readReal(DB_SYSTEM, offset + 40, setPressure) == S7PLCClient::Result::SUCCESS &&
-                m_plcClient->readReal(DB_SYSTEM, offset + 44, actualPressure) == S7PLCClient::Result::SUCCESS &&
-                m_plcClient->readInt16(DB_SYSTEM, offset + 48, valveStatus) == S7PLCClient::Result::SUCCESS &&
-                m_plcClient->readInt16(DB_SYSTEM, offset + 50, deviceStatus) == S7PLCClient::Result::SUCCESS)
+            // --- 读取 AI 反馈（端子 16-17，4-20mA 位置反馈）---
+            auto aiIt = m_valveAiByteOffset.find(id);
+            if (aiIt != m_valveAiByteOffset.end())
             {
-                valve.setPressure = setPressure;
-                valve.actualPressure = actualPressure;
-                valve.status = static_cast<ValveStatus>(valveStatus);
-                valve.deviceStatus = static_cast<DeviceStatus>(deviceStatus);
-                valve.timestamp = std::chrono::system_clock::now();
+                int16_t rawAI = 0;
+                if (m_plcClient->readPeripheralWord(aiIt->second, rawAI) == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.openingPercent = aiToPercent(static_cast<int>(rawAI));
+                    valve.deviceStatus   = DeviceStatus::ONLINE;
+                }
+            }
+
+            // --- 读取压力反馈 AI（4-20mA，供 PID 闭环计算 actualPressure）---
+            auto pressAiIt = m_valvePressureAiByteOffset.find(id);
+            if (pressAiIt != m_valvePressureAiByteOffset.end())
+            {
+                int16_t rawPressAI = 0;
+                if (m_plcClient->readPeripheralWord(pressAiIt->second, rawPressAI) == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.actualPressure = aiToPressure(
+                        static_cast<int>(rawPressAI),
+                        m_valvePressureRangeMin.at(id),
+                        m_valvePressureRangeMax.at(id));
+                }
+            }
+
+            // --- 读取 DI：开到位（端子 12-13）、关到位（端子 14-15）---
+            auto opByteIt = m_valveOpenLimitByte.find(id);
+            auto opBitIt  = m_valveOpenLimitBit.find(id);
+            if (opByteIt != m_valveOpenLimitByte.end() && opBitIt != m_valveOpenLimitBit.end())
+            {
+                bool openLim = false;
+                uint8_t buf = 0;
+                if (m_plcClient->readDB(0, opByteIt->second, 1, &buf) == S7PLCClient::Result::SUCCESS)
+                    openLim = (buf >> opBitIt->second) & 1;
+                valve.isOpenLimit = openLim;
+            }
+
+            auto clByteIt = m_valveCloseLimitByte.find(id);
+            auto clBitIt  = m_valveCloseLimitBit.find(id);
+            if (clByteIt != m_valveCloseLimitByte.end() && clBitIt != m_valveCloseLimitBit.end())
+            {
+                bool closeLim = false;
+                uint8_t buf = 0;
+                if (m_plcClient->readDB(0, clByteIt->second, 1, &buf) == S7PLCClient::Result::SUCCESS)
+                    closeLim = (buf >> clBitIt->second) & 1;
+                valve.isCloseLimit = closeLim;
+            }
+
+            // --- 读取 DI：综合报警（端子 22-23）---
+            auto alByteIt = m_valveAlarmByte.find(id);
+            auto alBitIt  = m_valveAlarmBit.find(id);
+            if (alByteIt != m_valveAlarmByte.end() && alBitIt != m_valveAlarmBit.end())
+            {
+                uint8_t buf = 0;
+                bool alarm = false;
+                if (m_plcClient->readDB(0, alByteIt->second, 1, &buf) == S7PLCClient::Result::SUCCESS)
+                    alarm = (buf >> alBitIt->second) & 1;
+                valve.alarmActive = alarm;
+                if (alarm)
+                    valve.deviceStatus = DeviceStatus::FAULT;
+            }
+
+            // --- 更新阀门状态标志 ---
+            if (valve.isOpenLimit)
+                valve.status = ValveStatus::OPEN;
+            else if (valve.isCloseLimit)
+                valve.status = ValveStatus::CLOSED;
+            else if (valve.openingPercent > 1.0f)
+                valve.status = ValveStatus::OPENING;
+            else
+                valve.status = ValveStatus::CLOSED;
+
+            valve.timestamp = std::chrono::system_clock::now();
+
+            // --- 闭环 PID 控制：计算输出开度并写 AO ---
+            if (valve.controlMode == ValveControlMode::CLOSED_LOOP_PRESSURE)
+            {
+                auto pidIt = m_valvePIDs.find(id);
+                auto aoIt  = m_valveAoByteOffset.find(id);
+                if (pidIt != m_valvePIDs.end() && aoIt != m_valveAoByteOffset.end()
+                    && m_plcClient->isConnected())
+                {
+                    const double pidOut = pidIt->second.compute(
+                        static_cast<double>(valve.setPressure),
+                        static_cast<double>(valve.actualPressure));
+                    const int16_t rawAO = static_cast<int16_t>(
+                        percentToAO(static_cast<float>(pidOut)));
+                    if (m_plcClient->writePeripheralWord(aoIt->second, rawAO) == S7PLCClient::Result::SUCCESS)
+                        valve.openingSetpoint = static_cast<float>(pidOut);
+                }
             }
         }
 

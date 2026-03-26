@@ -74,7 +74,7 @@ namespace WaterTest
         sensorLayout->setSpacing(4);
 
         m_sensorTable = new QTableWidget(0, 5, this);
-        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kpa)", "温度 (℃)", "状态"});
+        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kPa)", "温度 (℃)", "状态"});
         m_sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_sensorTable->horizontalHeader()->setMinimumSectionSize(70);
         m_sensorTable->horizontalHeader()->setDefaultSectionSize(100);
@@ -232,16 +232,16 @@ namespace WaterTest
             m_sensorTable->setItem(i, 0, new QTableWidgetItem(QString::number(id)));
             m_sensorTable->setItem(i, 1, new QTableWidgetItem(QString("传感器 %1").arg(id)));
 
-            // 压力显示（当前内部单位即 kpa），若不存在则留空
+            // 压力显示（当前内部单位即 kPa），若不存在则留空
             if (i < pSensors.size())
             {
-                double kpa = static_cast<double>(pSensors[i].pressure);
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kpa, 'f', 2)));
+                double kPa = static_cast<double>(pSensors[i].pressure);
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kPa, 'f', 2)));
 
                 std::ostringstream oss;
                 oss << "[UI][PRESSURE] sensor=" << pSensors[i].id
                     << " pressureKPa=" << pSensors[i].pressure
-                    << " displayKPa=" << kpa
+                    << " displayKPa=" << kPa
                     << " status=" << static_cast<int>(pSensors[i].status);
                 appendPressureUiDebugLog(oss.str());
             }
