@@ -13,6 +13,38 @@
 namespace WaterTest
 {
 
+    namespace
+    {
+        QString flowUnitText(const FlowMeter &meter)
+        {
+            if (!meter.unitLabel.empty() && meter.unitLabel != "unknown")
+                return QString::fromStdString(meter.unitLabel);
+            return "L/min";
+        }
+
+        QString flowAlarmText(const FlowMeter &meter)
+        {
+            QStringList alarms;
+            if (meter.emptyPipeAlarm != 0)
+                alarms << "空管";
+            if (meter.excitationAlarm != 0)
+                alarms << "励磁";
+            return alarms.isEmpty() ? "正常" : alarms.join("/");
+        }
+
+        int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals)
+        {
+            if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
+                return sensor.displayDecimals;
+            return fallbackDecimals;
+        }
+
+        QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 2)
+        {
+            return QString::number(sensor.pressure, 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kPa";
+        }
+    }
+
     TestPanel::TestPanel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent)
         : QWidget(parent), m_deviceManager(deviceManager), m_updateTimer(nullptr), m_isTesting(false), m_testTimeSeconds(0)
     {
@@ -24,7 +56,14 @@ namespace WaterTest
 
     TestPanel::~TestPanel()
     {
-        stopUpdate();
+        // Disconnect all signals before destroying
+        if (m_updateTimer)
+        {
+            disconnect(m_updateTimer, nullptr, this, nullptr);
+            m_updateTimer->stop();
+        }
+        // Clear device manager reference to prevent accessing destroyed object
+        m_deviceManager.reset();
     }
 
     void TestPanel::setupUI()
@@ -153,7 +192,31 @@ namespace WaterTest
         mainLayout->addLayout(infoLayout);
 
         // （已移动）电磁阀控制已作为独立分组置于“测试控制”之上
+        // ========== 数据保存控制 ==========
+        auto *dataLogGroup = new QGroupBox("数据保存", this);
+        auto *dataLogLayout = new QHBoxLayout(dataLogGroup);
 
+        m_enableDataLogBtn = new QPushButton("启用数据保存", this);
+        m_enableDataLogBtn->setProperty("tone", "good");
+        m_enableDataLogBtn->setMinimumHeight(36);
+        m_enableDataLogBtn->setCheckable(true);
+        connect(m_enableDataLogBtn, &QPushButton::clicked, this, &TestPanel::onToggleDataLogging);
+        dataLogLayout->addWidget(m_enableDataLogBtn);
+
+        m_exportDataBtn = new QPushButton("导出数据为CSV", this);
+        m_exportDataBtn->setProperty("tone", "neutral");
+        m_exportDataBtn->setMinimumHeight(36);
+        connect(m_exportDataBtn, &QPushButton::clicked, this, &TestPanel::onExportData);
+        dataLogLayout->addWidget(m_exportDataBtn);
+
+        m_recordCountLabel = new QLabel("已保存: 0 条记录", this);
+        m_recordCountLabel->setProperty("role", "statusBox");
+        m_recordCountLabel->setProperty("tone", "muted");
+        m_recordCountLabel->setMinimumWidth(150);
+        m_recordCountLabel->setAlignment(Qt::AlignCenter);
+        dataLogLayout->addWidget(m_recordCountLabel);
+
+        mainLayout->addWidget(dataLogGroup);
         // ========== 测试记录区域 ==========
         initTestRecordUI();
         mainLayout->addWidget(m_testRecordGroup);
@@ -208,6 +271,7 @@ namespace WaterTest
         updateFlowDiagramDynamic();
         updateDeviceStatus();
         updateSolenoidStates();
+        updateDataLogStatus();
 
         // 如果正在测试，更新测试时间
         if (m_isTesting)
@@ -215,11 +279,6 @@ namespace WaterTest
             m_testTimeSeconds++;
             m_testTimeLabel->setText(QString("测试时间: %1秒").arg(m_testTimeSeconds));
         }
-    }
-
-    static QString fmtKPa(double kPa)
-    {
-        return QString::number(kPa, 'f', 2) + " kPa";
     }
 
     static QString fmtC(double c)
@@ -259,7 +318,7 @@ namespace WaterTest
                                  .arg(QString::number(pump.frequency, 'f', 1)));
 
         m_p1t1Block->setText(QString("P1/T1\n%1  %2")
-                                 .arg(fmtKPa(p1.pressure))
+                                 .arg(fmtKPa(p1))
                                  .arg(fmtC(t1.temperature)));
         bool d0 = false, d1 = false, d2 = false;
         m_deviceManager->getRelayState(0, d0);
@@ -270,21 +329,23 @@ namespace WaterTest
                                    .arg(fmtValve(v1.status))
                                    .arg(d0 ? "通" : "断"));
         m_p2t2Block->setText(QString("P2/T2\n%1  %2")
-                                 .arg(fmtKPa(p2.pressure))
+                                 .arg(fmtKPa(p2))
                                  .arg(fmtC(t2.temperature)));
-        m_flowBlock->setText(QString("流量计\n%1 L/min")
-                                 .arg(QString::number(fm.flowRate, 'f', 2)));
+        m_flowBlock->setText(QString("流量计\n%1 %2\n%3")
+                     .arg(QString::number(fm.flowRate, 'f', 2))
+                     .arg(flowUnitText(fm))
+                     .arg(flowAlarmText(fm)));
         m_valve2Block->setText(QString("阀2\n%1  B:%2")
                                    .arg(fmtValve(v2.status))
                                    .arg(d1 ? "通" : "断"));
         m_p3t3Block->setText(QString("P3/T3\n%1  %2")
-                                 .arg(fmtKPa(p3.pressure))
+                                 .arg(fmtKPa(p3))
                                  .arg(fmtC(t3.temperature)));
         m_dutValveBlock->setText(QString("待测阀\n%1  C:%2")
                                      .arg(fmtValve(vDut.status))
                                      .arg(d2 ? "通" : "断"));
         m_p4t4Block->setText(QString("P4/T4\n%1  %2")
-                                 .arg(fmtKPa(p4.pressure))
+                                 .arg(fmtKPa(p4))
                                  .arg(fmtC(t4.temperature)));
     }
 
@@ -311,22 +372,24 @@ namespace WaterTest
 
         QString line1 = QString("增压泵[%1]  →  传感器1[P:%2  T:%3]  →  阀1[%4; A:%5]  →  传感器2[P:%6  T:%7]\n")
                             .arg(pump.isRunning ? "运行" : "停止")
-                            .arg(fmtKPa(p1.pressure))
+                            .arg(fmtKPa(p1))
                             .arg(fmtC(t1.temperature))
                             .arg(fmtValve(v1.status))
                             .arg(d0 ? "通" : "断")
-                            .arg(fmtKPa(p2.pressure))
+                            .arg(fmtKPa(p2))
                             .arg(fmtC(t2.temperature));
 
-        QString line2 = QString("流量计[%1 L/min]  →  阀2[%2; B:%3]  →  传感器3[P:%4  T:%5]  →  待测阀[%6; C:%7]  →  传感器4[P:%8  T:%9]")
-                            .arg(QString::number(fm.flowRate, 'f', 2))
+        QString line2 = QString("流量计[%1 %2, 报警:%3]  →  阀2[%4; B:%5]  →  传感器3[P:%6  T:%7]  →  待测阀[%8; C:%9]  →  传感器4[P:%10  T:%11]")
+                    .arg(QString::number(fm.flowRate, 'f', 2))
+                    .arg(flowUnitText(fm))
+                    .arg(flowAlarmText(fm))
                             .arg(fmtValve(v2.status))
                             .arg(d1 ? "通" : "断")
-                            .arg(fmtKPa(p3.pressure))
+                            .arg(fmtKPa(p3))
                             .arg(fmtC(t3.temperature))
                             .arg(fmtValve(vDUT.status))
                             .arg(d2 ? "通" : "断")
-                            .arg(fmtKPa(p4.pressure))
+                            .arg(fmtKPa(p4))
                             .arg(fmtC(t4.temperature));
 
         m_flowDiagramLabel->setText(line1 + "\n" + line2);
@@ -392,13 +455,13 @@ namespace WaterTest
 
         set(0, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
         set(1, event);
-        set(2, fmtKPa(p1.pressure));
+        set(2, fmtKPa(p1));
         set(3, fmtC(t1.temperature));
-        set(4, fmtKPa(p2.pressure));
+        set(4, fmtKPa(p2));
         set(5, fmtC(t2.temperature));
-        set(6, fmtKPa(p3.pressure));
+        set(6, fmtKPa(p3));
         set(7, fmtC(t3.temperature));
-        set(8, fmtKPa(p4.pressure));
+        set(8, fmtKPa(p4));
         set(9, fmtC(t4.temperature));
         set(10, fmtValve(v1.status));
         set(11, fmtValve(v2.status));
@@ -465,7 +528,7 @@ namespace WaterTest
 
         auto sensor = m_deviceManager->getPressureSensor(sensorId);
         const double pressureKPa = static_cast<double>(sensor.pressure);
-        valueLabel->setText(QString("%1 kPa").arg(pressureKPa, 0, 'f', 1));
+        valueLabel->setText(QString("%1 kPa").arg(pressureKPa, 0, 'f', pressureDisplayDecimals(sensor, 1)));
 
         // 根据压力值设置颜色
         if (pressureKPa > 800.0)
@@ -579,6 +642,83 @@ namespace WaterTest
         m_statusLabel->style()->polish(m_statusLabel);
 
         appendTestRecord("紧急停止");
+    }
+
+    void TestPanel::onToggleDataLogging()
+    {
+        if (!m_deviceManager)
+        {
+            QMessageBox::warning(this, "错误", "设备管理器未初始化");
+            return;
+        }
+
+        bool enabled = m_enableDataLogBtn->isChecked();
+        m_deviceManager->setDataLoggingEnabled(enabled);
+
+        if (enabled)
+        {
+            m_enableDataLogBtn->setText("禁用数据保存");
+            m_enableDataLogBtn->setProperty("tone", "warn");
+            appendTestRecord("数据保存已启用");
+        }
+        else
+        {
+            m_enableDataLogBtn->setText("启用数据保存");
+            m_enableDataLogBtn->setProperty("tone", "good");
+            appendTestRecord("数据保存已禁用");
+        }
+
+        m_enableDataLogBtn->style()->unpolish(m_enableDataLogBtn);
+        m_enableDataLogBtn->style()->polish(m_enableDataLogBtn);
+    }
+
+    void TestPanel::onExportData()
+    {
+        if (!m_deviceManager)
+        {
+            QMessageBox::warning(this, "错误", "设备管理器未初始化");
+            return;
+        }
+
+        QString logDir = QString::fromStdString(m_deviceManager->getLogDirectory());
+        if (logDir.isEmpty())
+        {
+            QMessageBox::warning(this, "错误", "日志目录为空，请先启用数据保存");
+            return;
+        }
+
+        // 生成CSV文件名：sensor_data_YYYYMMDD_HHMMSS.csv
+        QDateTime now = QDateTime::currentDateTime();
+        QString csvFileName = logDir + "/sensor_data_" + now.toString("yyyyMMdd_hhmmss") + ".csv";
+
+        if (m_deviceManager->exportDataToCSV(csvFileName.toStdString()))
+        {
+            QMessageBox::information(this, "导出成功", 
+                                    "数据已导出到:\n" + csvFileName);
+            appendTestRecord("导出数据到CSV: " + csvFileName);
+        }
+        else
+        {
+            QMessageBox::warning(this, "导出失败", "导出数据为CSV格式失败");
+        }
+    }
+
+    void TestPanel::updateDataLogStatus()
+    {
+        if (!m_deviceManager)
+        {
+            m_recordCountLabel->setText("已保存: -- 条记录");
+            return;
+        }
+
+        int recordCount = m_deviceManager->getDataRecordCount();
+        m_recordCountLabel->setText(QString("已保存: %1 条记录").arg(recordCount));
+
+        // 根据是否启用了数据保存来更新按钮状态
+        if (m_deviceManager->isDataLoggingEnabled())
+        {
+            m_exportDataBtn->setEnabled(recordCount > 0);
+        }
     }
 
 } // namespace WaterTest

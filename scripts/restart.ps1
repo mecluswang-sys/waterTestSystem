@@ -26,7 +26,7 @@ function Invoke-ScriptBlock([string]$label, [scriptblock]$block) {
 try {
     Write-Host "Restarting Water Test System" -ForegroundColor Green
     Invoke-ScriptBlock "Full Build ($BuildType)" { & $buildScript -BuildType $BuildType }
-    Invoke-ScriptBlock "Deploy" { & $deployScript }
+    Invoke-ScriptBlock "Deploy ($BuildType)" { & $deployScript -BuildType $BuildType }
 
     if (-not (Test-Path $startScript)) {
         Write-Host "Warning: $startScript not found, skipping launcher start." -ForegroundColor Yellow

@@ -69,6 +69,7 @@ namespace WaterTest
         // Station mode helpers
         void onAutoConnectTick();
         void updatePlcStatusUi();
+        void updateTerminalStatusUi();
 
         // Terminal mode slots (new)
         void onPLCConnected();
@@ -123,6 +124,7 @@ namespace WaterTest
         // Station mode PLC status UI + auto connect
         QPushButton *m_plcStatusBtn;
         QTimer *m_plcStatusTimer;
+        QTimer *m_terminalStatusTimer;
         QTimer *m_autoConnectTimer;
         bool m_autoConnectEnabled;
         bool m_autoConnecting;

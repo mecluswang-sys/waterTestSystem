@@ -38,12 +38,13 @@ namespace WaterTest
     {
         uint16_t id;         // Sensor ID (1-11)
         float pressure;      // Pressure value (kPa)
+        int displayDecimals; // Suggested display precision from PLC metadata
         float maxPressure;   // Maximum pressure (kPa)
         float minPressure;   // Minimum pressure (kPa)
         DeviceStatus status; // Device status
         std::chrono::system_clock::time_point timestamp;
 
-        PressureSensor() : id(0), pressure(0.0f), maxPressure(1000.0f),
+        PressureSensor() : id(0), pressure(0.0f), displayDecimals(-1), maxPressure(1000.0f),
                            minPressure(0.0f), status(DeviceStatus::OFFLINE) {}
     };
 
@@ -55,11 +56,17 @@ namespace WaterTest
         float flowRate;      // Instantaneous flow rate (m³/h)
         float totalFlow;     // Total flow (m³)
         float temperature;   // Medium temperature (℃)
+        uint16_t unitCode;   // Unit code from register 105
+        std::string unitLabel; // Decoded engineering unit label
+        uint16_t emptyPipeAlarm; // Empty pipe alarm from register 106
+        uint16_t excitationAlarm; // Excitation alarm from register 107
         DeviceStatus status; // Device status
         std::chrono::system_clock::time_point timestamp;
 
         FlowMeter() : id(0), flowRate(0.0f), totalFlow(0.0f),
-                      temperature(0.0f), status(DeviceStatus::OFFLINE) {}
+                      temperature(0.0f), unitCode(0), unitLabel("L/min"),
+                      emptyPipeAlarm(0), excitationAlarm(0),
+                      status(DeviceStatus::OFFLINE) {}
     };
 
     // Electric valve data

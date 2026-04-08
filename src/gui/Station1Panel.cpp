@@ -672,6 +672,15 @@ namespace WaterTest
                 update();
             }
 
+            void setDisplayDecimals(int decimals)
+            {
+                decimals = std::clamp(decimals, 0, 6);
+                if (m_displayDecimals == decimals)
+                    return;
+                m_displayDecimals = decimals;
+                update();
+            }
+
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
@@ -714,7 +723,7 @@ namespace WaterTest
                 valFont.setFamily("Consolas");
                 p->setFont(valFont);
                 p->setPen(valueColor);
-                const QString v = QString::number(m_value, 'f', 2);
+                const QString v = QString::number(m_value, 'f', m_displayDecimals);
                 p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
 
                 // Unit
@@ -743,6 +752,7 @@ namespace WaterTest
         private:
             QString m_name;
             double m_value;
+            int m_displayDecimals = 2;
             QString m_unit;
             QColor m_typeColor;
         };
@@ -754,7 +764,7 @@ namespace WaterTest
             static QPointF outletPortLocal() { return QPointF(60, 0); }
 
             explicit FlowMeterItem(const QString &name)
-                : m_name(name), m_flow(0.0)
+                : m_name(name), m_flow(0.0), m_unit("L/min"), m_hasAlarm(false), m_emptyPipeAlarm(0), m_excitationAlarm(0)
             {
                 setCacheMode(DeviceCoordinateCache);
                 setFlags(QGraphicsItem::ItemIsSelectable);
@@ -767,6 +777,36 @@ namespace WaterTest
                 if (qFuzzyCompare(m_flow, v))
                     return;
                 m_flow = v;
+                update();
+            }
+
+            void setUnit(const QString &unit)
+            {
+                if (m_unit == unit)
+                    return;
+                m_unit = unit;
+                update();
+            }
+
+            void setAlarm(bool hasAlarm)
+            {
+                if (m_hasAlarm == hasAlarm)
+                    return;
+                m_hasAlarm = hasAlarm;
+                if (!m_hasAlarm)
+                {
+                    m_emptyPipeAlarm = 0;
+                    m_excitationAlarm = 0;
+                }
+                update();
+            }
+
+            void setAlarmDetail(int emptyPipeAlarm, int excitationAlarm)
+            {
+                if (m_emptyPipeAlarm == emptyPipeAlarm && m_excitationAlarm == excitationAlarm)
+                    return;
+                m_emptyPipeAlarm = emptyPipeAlarm;
+                m_excitationAlarm = excitationAlarm;
                 update();
             }
 
@@ -788,7 +828,8 @@ namespace WaterTest
 
                 // 表体
                 p->setBrush(kUiPanel);
-                p->setPen(QPen(kUiBorder, 2));
+                const bool activeAlarm = m_hasAlarm && (m_emptyPipeAlarm != 0 || m_excitationAlarm != 0);
+                p->setPen(QPen(activeAlarm ? QColor(255, 90, 90) : kUiBorder, activeAlarm ? 3 : 2));
                 p->drawRoundedRect(QRectF(-60, -38, 120, 76), 14, 14);
 
                 // 管口
@@ -820,7 +861,25 @@ namespace WaterTest
                 unitFont.setBold(false);
                 unitFont.setFamily("Consolas");
                 p->setFont(unitFont);
-                p->drawText(QRectF(4, 6, 54, 16), Qt::AlignLeft | Qt::AlignVCenter, "L/min");
+                p->drawText(QRectF(4, 6, 54, 16), Qt::AlignLeft | Qt::AlignVCenter, m_unit);
+
+                if (activeAlarm)
+                {
+                    p->setPen(Qt::NoPen);
+                    p->setBrush(QColor(255, 90, 90));
+                    p->drawEllipse(QRectF(46, -28, 8, 8));
+                    p->setPen(QColor(255, 90, 90));
+                    p->setFont(unitFont);
+                    QString alarmText;
+                    if (m_emptyPipeAlarm != 0 && m_excitationAlarm != 0)
+                        alarmText = "空管/激磁报警";
+                    else if (m_emptyPipeAlarm != 0)
+                        alarmText = "空管报警";
+                    else
+                        alarmText = "激磁报警";
+
+                    p->drawText(QRectF(4, 20, 88, 14), Qt::AlignLeft | Qt::AlignVCenter, alarmText);
+                }
 
                 // 名称
                 p->setPen(kUiText);
@@ -840,6 +899,10 @@ namespace WaterTest
         private:
             QString m_name;
             double m_flow;
+            QString m_unit;
+            bool m_hasAlarm;
+            int m_emptyPipeAlarm;
+            int m_excitationAlarm;
         };
 
         class LoopItem : public QGraphicsItem
@@ -1222,8 +1285,8 @@ namespace WaterTest
         const qreal step = 320;
         const qreal x0 = 10;
         const qreal leftTwoColsShiftX = 200;
-        const qreal yRow1 = 220;
-        const qreal yRow2 = 480;
+        const qreal yRow1 = 270;
+        const qreal yRow2 = 530;
         const qreal valvePortYOffset = 12;
         const qreal row1AfterAccumulatorYOffset = -valvePortYOffset;
         const qreal row2AfterFlowMeterYOffset = -valvePortYOffset;
@@ -1433,6 +1496,7 @@ namespace WaterTest
                     continue;
 
                 sensorItem->setValue(static_cast<double>(sensor.pressure));
+                sensorItem->setDisplayDecimals(sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
             }
         }
 
@@ -1458,6 +1522,28 @@ namespace WaterTest
                 valveItem->setOpen(open);
                 valveItem->setDegree(static_cast<double>(valve.openingDegree));
             }
+        }
+
+        // 1号操作台流量计显示：当前映射到 DeviceManager 的 flow meter 1
+        const auto flowMeter = m_deviceManager->getFlowMeter(1);
+        const bool hasFlowAlarm = (flowMeter.emptyPipeAlarm != 0 || flowMeter.excitationAlarm != 0);
+
+        for (auto *it : allItems)
+        {
+            if (!it)
+                continue;
+
+            auto *flowItem = dynamic_cast<FlowMeterItem *>(it);
+            if (!flowItem)
+                continue;
+
+            flowItem->setFlow(static_cast<double>(flowMeter.flowRate));
+            flowItem->setUnit((!flowMeter.unitLabel.empty() && flowMeter.unitLabel != "unknown")
+                                  ? QString::fromStdString(flowMeter.unitLabel)
+                                  : QString("L/min"));
+            flowItem->setAlarm(hasFlowAlarm);
+            flowItem->setAlarmDetail(static_cast<int>(flowMeter.emptyPipeAlarm),
+                                     static_cast<int>(flowMeter.excitationAlarm));
         }
     }
 

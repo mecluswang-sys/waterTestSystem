@@ -13,14 +13,80 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
+#include <QDir>
+#include <exception>
+#include <fstream>
+#include <iostream>
+#include <ctime>
+#include <sstream>
 
 using namespace WaterTest;
+
+static std::ofstream g_crashLog;
+
+static void writeCrashLog(const char *msg)
+{
+    if (!g_crashLog.is_open())
+    {
+        QDir().mkpath("deploy/logs");
+        g_crashLog.open("deploy/logs/crash.log", std::ios::app);
+    }
+    if (g_crashLog.is_open())
+    {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+        g_crashLog << "[" << buf << "] " << msg << std::endl;
+        g_crashLog.flush();
+    }
+    std::cerr << msg << std::endl;
+}
+
+static void terminateHandler()
+{
+    const char *msg = "[CRASH] std::terminate called";
+    if (auto eptr = std::current_exception())
+    {
+        try { std::rethrow_exception(eptr); }
+        catch (const std::exception &e)
+        {
+            static char buf[512];
+            snprintf(buf, sizeof(buf), "[CRASH] Unhandled exception: %s", e.what());
+            writeCrashLog(buf);
+        }
+        catch (...) { writeCrashLog("[CRASH] Unhandled unknown exception"); }
+    }
+    else
+    {
+        writeCrashLog(msg);
+    }
+    std::abort();
+}
+
+static void qtMessageHandler(QtMsgType type, const QMessageLogContext &, const QString &msg)
+{
+    const std::string s = msg.toStdString();
+    switch (type)
+    {
+    case QtFatalMsg:
+        writeCrashLog((std::string("[Qt FATAL] ") + s).c_str());
+        std::abort();
+    case QtCriticalMsg:
+        writeCrashLog((std::string("[Qt CRITICAL] ") + s).c_str());
+        break;
+    default:
+        break;
+    }
+}
 
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    // Load config early so UI theme can be applied on startup.
+    // Install crash handlers early
+    std::set_terminate(terminateHandler);
+    qInstallMessageHandler(qtMessageHandler);
+    writeCrashLog("[INFO] Application started");
     const bool configOk = ConfigManager::getInstance().loadConfig("config/system.conf");
     qInfo() << "[Config] load config/system.conf" << (configOk ? "OK" : "FAIL");
 
@@ -124,12 +190,20 @@ int main(int argc, char *argv[])
                 << QString("\nStation Name: %1").arg(stationName)
                 << QString("\nConnecting to Terminal: %1:%2").arg(host).arg(port);
 
+        auto stationClient = std::make_shared<StationClient>(
+            static_cast<uint8_t>(stationId), stationName);
+
         // Create and show main window (as Station Client UI)
         MainWindow mainWindow;
+        mainWindow.setStationClient(stationClient);
         mainWindow.setWindowTitle(QString("Water Test System - %1").arg(stationName));
 
-        // TODO: Integrate StationClient into MainWindow
-        // For now, just show the existing GUI
+        if (!stationClient->connectToTerminal(host, port))
+        {
+            qWarning() << "Station failed to connect to Terminal server" << host << port;
+            qWarning() << "The UI will keep running in standalone mode.";
+        }
+
         mainWindow.showMaximized();
 
         qInfo() << "Station GUI started. Ready for user interaction.";

@@ -45,6 +45,8 @@ namespace WaterTest
         void onStartTest();
         void onStopTest();
         void onEmergencyStop();
+        void onToggleDataLogging();
+        void onExportData();
 
     private:
         void setupUI();
@@ -57,6 +59,7 @@ namespace WaterTest
         void initTestRecordUI();
         void appendTestRecord(const QString &event);
         void updateSolenoidStates();
+        void updateDataLogStatus();
 
         // 设备管理器
         std::shared_ptr<DeviceManager> m_deviceManager;
@@ -128,6 +131,12 @@ namespace WaterTest
         QPushButton *m_solenoid0Btn;
         QPushButton *m_solenoid1Btn;
         QPushButton *m_solenoid2Btn;
+
+        // 数据保存控制
+        QGroupBox *m_dataLogGroup;
+        QPushButton *m_enableDataLogBtn;
+        QPushButton *m_exportDataBtn;
+        QLabel *m_recordCountLabel;
 
         // 状态信息
         QLabel *m_statusLabel;

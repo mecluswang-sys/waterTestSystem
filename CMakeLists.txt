@@ -15,7 +15,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # 查找Qt6
-find_package(Qt6 COMPONENTS Core Widgets Sql Network REQUIRED)
+find_package(Qt6 COMPONENTS Core Widgets Sql Network SerialPort REQUIRED)
 
 # 查找SQLite3
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
@@ -123,6 +123,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Sql
     Qt6::Network
+    Qt6::SerialPort
+    unofficial::sqlite3::sqlite3
 )
 
 # Modbus 调试小工具（串口）

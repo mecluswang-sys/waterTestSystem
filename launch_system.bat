@@ -100,17 +100,17 @@ timeout /t 2 >nul
 REM Start Station 1
 echo Starting Station 1...
 start "Water Test System - Station 1" "%EXE_PATH%" --mode station --id 1 --name "操作台1" --host 127.0.0.1 --port 5555
-timeout /t 500 /nobreak
+timeout /t 1 >nul
 
 REM Start Station 2
 echo Starting Station 2...
 start "Water Test System - Station 2" "%EXE_PATH%" --mode station --id 2 --name "操作台2" --host 127.0.0.1 --port 5555
-timeout /t 500 /nobreak
+timeout /t 1 >nul
 
 REM Start Station 3
 echo Starting Station 3...
 start "Water Test System - Station 3" "%EXE_PATH%" --mode station --id 3 --name "操作台3" --host 127.0.0.1 --port 5555
-timeout /t 500 /nobreak
+timeout /t 1 >nul
 
 REM Start Station 4
 echo Starting Station 4...

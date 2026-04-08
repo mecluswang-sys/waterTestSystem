@@ -9,6 +9,7 @@
 
 #include "DeviceTypes.h"
 #include "S7PLCClient.h"
+#include "DataLogger.h"
 #include "PIDController.h"
 #include <vector>
 #include <memory>
@@ -252,6 +253,50 @@ namespace WaterTest
          */
         bool switchTestLine(TestLine line);
 
+        // ======== 数据保存相关 ========
+        /**
+         * @brief 初始化数据保存系统
+         * @param logDir 日志目录（可选，默认为deploy/logs）
+         * @return 是否成功
+         */
+        bool initializeDataLogging(const std::string &logDir = "");
+
+        /**
+         * @brief 启用/禁用数据保存
+         * @param enabled 是否启用
+         */
+        void setDataLoggingEnabled(bool enabled);
+
+        /**
+         * @brief 是否启用了数据保存
+         * @return true如果已启用
+         */
+        bool isDataLoggingEnabled() const;
+
+        /**
+         * @brief 强制刷新（将缓冲数据写入数据库和CSV）
+         */
+        void flushDataLogging();
+
+        /**
+         * @brief 导出数据为CSV格式
+         * @param filename CSV文件路径
+         * @return 是否成功
+         */
+        bool exportDataToCSV(const std::string &filename);
+
+        /**
+         * @brief 获取已保存的数据记录数
+         * @return 记录数
+         */
+        int getDataRecordCount() const;
+
+        /**
+         * @brief 获取日志目录路径
+         * @return 日志目录路径
+         */
+        std::string getLogDirectory() const;
+
         // ======== 报警管理 ========
         /**
          * @brief 获取活动报警列表
@@ -313,6 +358,10 @@ namespace WaterTest
         // 回调函数
         AlarmCallback m_alarmCallback;
         DataUpdateCallback m_dataUpdateCallback;
+
+        // 数据保存相关
+        std::unique_ptr<DataLogger> m_dataLogger;
+        bool m_dataLoggingEnabled = false;
 
         // 数据采集线程相关
         bool m_running;

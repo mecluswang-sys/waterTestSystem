@@ -7,6 +7,7 @@
 #include <QTcpSocket>
 #include <QHostAddress>
 #include <QDataStream>
+#include <QDateTime>
 #include <cstring>
 
 namespace WaterTest
@@ -84,6 +85,7 @@ namespace WaterTest
     {
         NetworkMessage msg(MessageType::DATA_UPDATE, 0); // From terminal
         msg.header().payload_length = sizeof(SensorData);
+        msg.header().sequence_number = getNextSequenceNumber();
 
         std::vector<uint8_t> &payload = msg.payload();
         payload.resize(sizeof(SensorData));
@@ -108,6 +110,7 @@ namespace WaterTest
 
         NetworkMessage msg(MessageType::COMMAND_RESPONSE, 0); // From terminal
         msg.header().payload_length = sizeof(ControlCommand);
+        msg.header().sequence_number = getNextSequenceNumber();
 
         std::vector<uint8_t> &payload = msg.payload();
         payload.resize(sizeof(ControlCommand));
@@ -210,8 +213,23 @@ namespace WaterTest
         if (m_deviceManager)
         {
             SensorData data{};
-            // TODO: Read from DeviceManager
-            // broadcastSensorData(data);
+            const auto pressures = m_deviceManager->getAllPressureSensors();
+            for (size_t i = 0; i < 4 && i < pressures.size(); ++i)
+            {
+                data.pressure[i] = pressures[i].pressure;
+            }
+
+            const auto temperatures = m_deviceManager->getAllTemperatureSensors();
+            for (size_t i = 0; i < 4 && i < temperatures.size(); ++i)
+            {
+                data.temperature[i] = temperatures[i].temperature;
+            }
+
+            data.flow_rate = m_deviceManager->getFlowMeter(1).flowRate;
+            data.timestamp = static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch() & 0xFFFFFFFF);
+
+            broadcastSensorData(data);
+            emit dataReceived(data);
         }
     }
 
@@ -226,20 +244,17 @@ namespace WaterTest
                 StationRegister reg;
                 std::memcpy(&reg, message.payload().data(), sizeof(StationRegister));
 
-                auto station = std::make_shared<StationConnection>(nullptr, reg.station_id);
+                QTcpSocket *socket = qobject_cast<QTcpSocket *>(sender());
+                if (!socket)
+                {
+                    break;
+                }
+
+                auto station = std::make_shared<StationConnection>(socket, reg.station_id);
                 station->setName(QString::fromLatin1(reg.station_name));
                 station->setIpAddress(QString::fromLatin1(reg.ip_address));
 
-                auto it = m_stations.find(reg.station_id);
-                if (it != m_stations.end() && it->second->socket())
-                {
-                    // Set socket through proper constructor or method
-                    m_stations[reg.station_id] = std::make_shared<StationConnection>(
-                        it->second->socket(), reg.station_id);
-                    m_stations[reg.station_id]->setName(station->getStationName());
-                    m_stations[reg.station_id]->setIpAddress(station->getIpAddress());
-                }
-
+                m_stations[reg.station_id] = station;
                 emit stationConnected(reg.station_id, station->getStationName());
             }
             break;
@@ -260,6 +275,7 @@ namespace WaterTest
         {
             // Send ACK
             NetworkMessage ack(MessageType::ACK, 0);
+            ack.header().sequence_number = getNextSequenceNumber();
             auto it = m_stations.find(station_id);
             if (it != m_stations.end())
             {
@@ -277,6 +293,7 @@ namespace WaterTest
     {
         NetworkMessage msg(MessageType::DATA_UPDATE, 0);
         msg.header().payload_length = sizeof(SensorData);
+        msg.header().sequence_number = getNextSequenceNumber();
         msg.payload().resize(sizeof(SensorData));
         std::memcpy(msg.payload().data(), &data, sizeof(SensorData));
         return msg;

@@ -1,11 +1,18 @@
 # 部署脚本 - 打包程序到deploy目录
 
+param(
+    [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
+    [string]$BuildType = "Release"
+)
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Water Test System - Deploy" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "Deploy Build Type: $BuildType" -ForegroundColor Yellow
+Write-Host ""
 
-$sourceDir = "build/bin/Release"
+$sourceDir = "build/bin/$BuildType"
 $deployDir = "deploy"
 
 function Stop-WaterTestSystemIfRunning {
@@ -71,11 +78,7 @@ if ($foundQtBase) {
 
 $windeploy = Join-Path $qtToolsDir "windeployqt.exe"
 
-if (Test-Path $windeploy) {
-    & $windeploy --release --dir $deployDir "$deployDir/WaterTestSystem.exe"
-} else {
-    Write-Host "windeployqt not found, falling back to manual plugin copy" -ForegroundColor Yellow
-
+function Copy-QtPluginsManually {
     # 平台插件
     New-Item -ItemType Directory -Path "$deployDir/platforms" -Force | Out-Null
     Copy-Item -Path "$pluginsSourceDir/platforms/*" -Destination "$deployDir/platforms/" -Recurse -Force -ErrorAction SilentlyContinue
@@ -87,6 +90,19 @@ if (Test-Path $windeploy) {
             Copy-Item -Path (Join-Path $pluginsSourceDir "$sub\*") -Destination (Join-Path $deployDir $sub) -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+if (Test-Path $windeploy) {
+    $qtDeployFlag = if ($BuildType -eq "Debug") { "--debug" } else { "--release" }
+    & $windeploy $qtDeployFlag --dir $deployDir "$deployDir/WaterTestSystem.exe"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "windeployqt returned $LASTEXITCODE, fallback to manual plugin copy" -ForegroundColor Yellow
+        Copy-QtPluginsManually
+        $global:LASTEXITCODE = 0
+    }
+} else {
+    Write-Host "windeployqt not found, falling back to manual plugin copy" -ForegroundColor Yellow
+    Copy-QtPluginsManually
 }
 
 # 复制配置文件

@@ -341,6 +341,18 @@ namespace WaterTest
             return QString::number(pa / 1e3, 'f', 1) + " kPa";
         }
 
+        static int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 1)
+        {
+            if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
+                return sensor.displayDecimals;
+            return fallbackDecimals;
+        }
+
+        static QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 1)
+        {
+            return QString::number(sensor.pressure, 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kPa";
+        }
+
         constexpr qreal kPumpItemWidth = 110;
         constexpr qreal kValveItemWidth = 104;
         constexpr qreal kSensorItemWidth = 104;
@@ -833,6 +845,15 @@ namespace WaterTest
                 update();
             }
 
+            void setPressureDisplayDecimals(int decimals)
+            {
+                decimals = std::clamp(decimals, 0, 6);
+                if (m_pressureDisplayDecimals == decimals)
+                    return;
+                m_pressureDisplayDecimals = decimals;
+                update();
+            }
+
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 p->setRenderHint(QPainter::Antialiasing, true);
@@ -872,7 +893,7 @@ namespace WaterTest
                 valFont.setFamily("Consolas");
                 p->setFont(valFont);
                 p->setPen(valueColor);
-                const QString v = QString::number(m_pressureMPa, 'f', 2);
+                const QString v = QString::number(m_pressureMPa, 'f', m_pressureDisplayDecimals);
                 p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
 
                 // Unit
@@ -903,6 +924,7 @@ namespace WaterTest
         private:
             QString m_name;
             double m_pressureMPa;
+            int m_pressureDisplayDecimals = 2;
         };
 
         class TankItem : public QGraphicsItem
@@ -912,7 +934,7 @@ namespace WaterTest
             static QPointF outletPortLocal() { return QPointF(55, 50); }
 
             explicit TankItem(const QString &name)
-                : m_name(name), m_fillPercent(0.0), m_filling(false), m_pressureMPa(0.0)
+                : m_name(name), m_fillPercent(0.0), m_filling(false), m_pressureMPa(0.0), m_pressureDisplayDecimals(2)
             {
                 setCacheMode(DeviceCoordinateCache);
                 QGraphicsItem::GraphicsItemFlags flags = QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges;
@@ -978,6 +1000,15 @@ namespace WaterTest
                 if (qFuzzyCompare(m_pressureMPa, v))
                     return;
                 m_pressureMPa = v;
+                update();
+            }
+
+            void setPressureDisplayDecimals(int decimals)
+            {
+                decimals = std::clamp(decimals, 0, 6);
+                if (m_pressureDisplayDecimals == decimals)
+                    return;
+                m_pressureDisplayDecimals = decimals;
                 update();
             }
 
@@ -1071,7 +1102,7 @@ namespace WaterTest
                 p->setFont(f2);
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-70, 62, 140, 16), Qt::AlignCenter,
-                            QString("LV:%1%%  PT:%2kpa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', 2)));
+                            QString("LV:%1%  PT:%2kpa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', m_pressureDisplayDecimals)));
 
                 // 入口/出口触点（用于管道吸附）
                 p->setPen(QPen(kUiBorder, 1));
@@ -1085,6 +1116,7 @@ namespace WaterTest
             double m_fillPercent;
             bool m_filling;
             double m_pressureMPa;
+            int m_pressureDisplayDecimals;
         };
 
         // ========== 室外水池 ==========
@@ -1214,7 +1246,7 @@ namespace WaterTest
                 p->setFont(f2);
                 p->setPen(kUiTextMuted);
                 p->drawText(QRectF(-80, 68, 160, 16), Qt::AlignCenter,
-                            QString("水位:%1%%").arg(QString::number(level, 'f', 0)));
+                            QString("水位:%1%").arg(QString::number(level, 'f', 0)));
 
                 // 入口/出口触点（用于管道吸附）
                 p->setPen(QPen(kUiBorder, 1));
@@ -1938,7 +1970,14 @@ namespace WaterTest
 
     PreparationPanel::~PreparationPanel()
     {
-        stopUpdate();
+        // Disconnect all signals before destroying
+        if (m_updateTimer)
+        {
+            disconnect(m_updateTimer, nullptr, this, nullptr);
+            m_updateTimer->stop();
+        }
+        // Clear device manager reference to prevent accessing destroyed object
+        m_deviceManager.reset();
     }
 
     void PreparationPanel::resizeEvent(QResizeEvent *event)
@@ -2649,7 +2688,7 @@ namespace WaterTest
         addRow("系统运行", sys.isRunning, sys.isRunning ? "运行中" : "未运行");
 
         const auto p1 = m_deviceManager->getPressureSensor(1);
-        addRow("压力传感器1", p1.id != 0, QString("%1, %2 kPa").arg(statusToText(p1.status)).arg(p1.pressure, 0, 'f', 1));
+        addRow("压力传感器1", p1.id != 0, QString("%1, %2").arg(statusToText(p1.status)).arg(fmtKPa(p1)));
 
         const QString html =
             "<h3>系统自检结果</h3>"
@@ -2763,11 +2802,20 @@ namespace WaterTest
         auto s3 = m_deviceManager->getPressureSensor(3);
 
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS1))
+        {
             item->setPressureMPa(s1.pressure);
+            item->setPressureDisplayDecimals(pressureDisplayDecimals(s1, 2));
+        }
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS2))
+        {
             item->setPressureMPa(s2.pressure);
+            item->setPressureDisplayDecimals(pressureDisplayDecimals(s2, 2));
+        }
         if (auto *item = dynamic_cast<SensorItem *>(m_itemPS3))
+        {
             item->setPressureMPa(s3.pressure);
+            item->setPressureDisplayDecimals(pressureDisplayDecimals(s3, 2));
+        }
 
         // 以传感器3作为分水罐压力（对应 docs/测试准备区流程图.mmd）
         m_currentPressure = static_cast<float>(s3.pressure);
@@ -2786,6 +2834,7 @@ namespace WaterTest
             tankItem->setFillPercent(waterLevel);
             tankItem->setFilling(m_isFilling);
             tankItem->setPressureMPa(m_currentPressure);
+            tankItem->setPressureDisplayDecimals(pressureDisplayDecimals(s3, 2));
         }
 
         // 更新水位文字描述
@@ -2819,7 +2868,7 @@ namespace WaterTest
 
         if (m_tankLevelText)
         {
-            m_tankLevelText->setText(QString("%1  (%2)").arg(levelText).arg(fmtKPa(s3.pressure)));
+            m_tankLevelText->setText(QString("%1  (%2)").arg(levelText).arg(fmtKPa(s3)));
             const char *tone = "bad";
             if (waterLevel >= 95)
                 tone = "good";

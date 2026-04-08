@@ -26,7 +26,14 @@ namespace WaterTest
 
     AutoTestPanel::~AutoTestPanel()
     {
-        stopUpdate();
+        // Disconnect all signals before destroying
+        if (m_updateTimer)
+        {
+            disconnect(m_updateTimer, nullptr, this, nullptr);
+            m_updateTimer->stop();
+        }
+        // Clear device manager reference to prevent accessing destroyed object
+        m_deviceManager.reset();
     }
 
     void AutoTestPanel::setupUI()

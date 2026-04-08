@@ -41,6 +41,7 @@ namespace WaterTest
         // Get connected stations
         std::vector<uint8_t> getConnectedStations() const;
         int getConnectedStationCount() const { return m_stations.size(); }
+        std::shared_ptr<DeviceManager> getDeviceManager() const { return m_deviceManager; }
 
         // Broadcast sensor data to all stations
         void broadcastSensorData(const SensorData &data);

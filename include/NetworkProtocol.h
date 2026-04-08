@@ -52,7 +52,7 @@ namespace WaterTest
 #endif
 
     /**
-     * @brief Message header (fixed 8 bytes)
+     * @brief Message header (fixed 7 bytes)
      */
     struct MessageHeader
     {
@@ -62,7 +62,7 @@ namespace WaterTest
         uint16_t sequence_number = 0;        // Sequence number for tracking (2 bytes)
         uint8_t station_id = 0;              // Station ID (1-4), 0 for Terminal
 
-        static constexpr size_t SIZE = 8;
+        static constexpr size_t SIZE = 7;
     } PACKED_STRUCT;
 
     /**

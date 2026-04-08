@@ -1,0 +1,120 @@
+(************************************************************)
+(* WaterTestSystem - Flow Meter PLC SCL Package             *)
+(* Version : v1.0                                            *)
+(* Date    : 2026-03-30                                      *)
+(* Purpose : TIA Portal import template                      *)
+(************************************************************)
+
+TYPE "UDT_WTS_FlowMeter_HMI"
+VERSION : 0.1
+   STRUCT
+      Status      : INT;   // 0=OFFLINE, 1=ONLINE, 2=FAULT
+      FlowRate    : REAL;  // Instantaneous flow
+      TotalFlow   : REAL;  // Forward cumulative flow
+      Temperature : REAL;  // Set 0.0 if not available
+      Reserved    : WORD;  // Keep 16-byte stride
+   END_STRUCT;
+END_TYPE
+
+
+TYPE "UDT_WTS_FlowMeter_ModbusRaw"
+VERSION : 0.1
+   STRUCT
+      Reg90_ForwardTotal_Hi : WORD;
+      Reg91_ForwardTotal_Lo : WORD;
+      Reg92_ReverseTotal_Hi : WORD;
+      Reg93_ReverseTotal_Lo : WORD;
+      Reg94_NetTotal_Hi     : WORD;
+      Reg95_NetTotal_Lo     : WORD;
+      Reg96_ClearCmd_Hi     : WORD;
+      Reg97_ClearCmd_Lo     : WORD;
+      Reg98_Rate_Hi         : WORD;
+      Reg99_Rate_Lo         : WORD;
+      Reg100_Velocity_Hi    : WORD;
+      Reg101_Velocity_Lo    : WORD;
+      Reg102_Percent_Hi     : WORD;
+      Reg103_Percent_Lo     : WORD;
+      Reg104_EmptyPipePct   : WORD;
+      Reg105_UnitCode       : WORD;
+      Reg106_EmptyPipeAlarm : WORD;
+      Reg107_ExciteAlarm    : WORD;
+   END_STRUCT;
+END_TYPE
+
+
+FUNCTION "FC_WordsToReal" : REAL
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      HiWord : WORD;
+      LoWord : WORD;
+   END_VAR
+   VAR_TEMP
+      dwTmp : DWORD;
+   END_VAR
+BEGIN
+   dwTmp := SHL(IN := WORD_TO_DWORD(HiWord), N := 16) OR WORD_TO_DWORD(LoWord);
+   "FC_WordsToReal" := DWORD_TO_REAL(dwTmp);
+END_FUNCTION
+
+
+FUNCTION_BLOCK "FB_MapFlowRawToHmi"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      PollOk : BOOL;
+   END_VAR
+   VAR_IN_OUT
+      Raw : "UDT_WTS_FlowMeter_ModbusRaw";
+      Hmi : "UDT_WTS_FlowMeter_HMI";
+   END_VAR
+BEGIN
+   IF PollOk THEN
+      Hmi.Status := 1;
+      Hmi.TotalFlow := "FC_WordsToReal"(HiWord := Raw.Reg90_ForwardTotal_Hi,
+                                         LoWord := Raw.Reg91_ForwardTotal_Lo);
+      Hmi.FlowRate := "FC_WordsToReal"(HiWord := Raw.Reg98_Rate_Hi,
+                                        LoWord := Raw.Reg99_Rate_Lo);
+      Hmi.Temperature := 0.0;
+      Hmi.Reserved := 0;
+   ELSE
+      Hmi.Status := 0;
+      Hmi.FlowRate := 0.0;
+      Hmi.TotalFlow := 0.0;
+      Hmi.Temperature := 0.0;
+      Hmi.Reserved := 0;
+   END_IF;
+END_FUNCTION_BLOCK
+
+
+DATA_BLOCK "DB2_FlowMeters_HMI"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+   VAR
+      FM : ARRAY[1..4] OF "UDT_WTS_FlowMeter_HMI";
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+DATA_BLOCK "DB_FlowMeters_Raw"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      FMRaw : ARRAY[1..4] OF "UDT_WTS_FlowMeter_ModbusRaw";
+      PollOk : ARRAY[1..4] OF BOOL;
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+(************************************************************)
+(* Call example in cyclic OB / FB                           *)
+(*                                                           *)
+(* "FB_MapFlowRawToHmi_1"(                                   *)
+(*    PollOk := "DB_FlowMeters_Raw".PollOk[1],              *)
+(*    Raw    := "DB_FlowMeters_Raw".FMRaw[1],               *)
+(*    Hmi    := "DB2_FlowMeters_HMI".FM[1]);                *)
+(*                                                           *)
+(* Repeat for [2]..[4].                                      *)
+(************************************************************)

@@ -28,6 +28,7 @@
 #include <QStyle>
 #include <QTime>
 #include <QDateTime>
+#include <QThread>
 
 namespace WaterTest
 {
@@ -49,6 +50,7 @@ namespace WaterTest
           m_isConnected(false),
           m_plcStatusBtn(nullptr),
           m_plcStatusTimer(nullptr),
+          m_terminalStatusTimer(nullptr),
           m_autoConnectTimer(nullptr),
           m_autoConnectEnabled(false),
           m_autoConnecting(false),
@@ -90,6 +92,15 @@ namespace WaterTest
 
     MainWindow::~MainWindow()
     {
+        // 先停UI定时器，避免析构期间继续触发槽函数
+        if (m_plcStatusTimer)
+            m_plcStatusTimer->stop();
+        if (m_autoConnectTimer)
+            m_autoConnectTimer->stop();
+        if (m_terminalStatusTimer)
+            m_terminalStatusTimer->stop();
+
+        // 再停各页面刷新
         if (m_preparationPanel)
             m_preparationPanel->stopUpdate();
         if (m_monitorPanel)
@@ -98,12 +109,23 @@ namespace WaterTest
             m_testPanel->stopUpdate();
         if (m_autoTestPanel)
             m_autoTestPanel->stopUpdate();
+
+        // 最后停采集线程
+        if (m_deviceManager)
+        {
+            m_deviceManager->stopDataCollection();
+        }
     }
 
     void MainWindow::setWindowMode(WindowMode mode)
     {
         if (m_mode == mode)
             return;
+
+        if (m_terminalStatusTimer && m_terminalStatusTimer->isActive())
+        {
+            m_terminalStatusTimer->stop();
+        }
 
         m_mode = mode;
 
@@ -140,9 +162,23 @@ namespace WaterTest
     void MainWindow::setStationClient(std::shared_ptr<StationClient> client)
     {
         m_stationClient = client;
-        if (m_mode == WindowMode::STATION_MODE)
+        if (m_mode == WindowMode::STATION_MODE && m_stationClient)
         {
-            // Station mode setup if needed
+            connect(m_stationClient.get(), &StationClient::connected,
+                    this, [this]()
+                    {
+                        statusBar()->showMessage("已连接到主控台", 3000);
+                    });
+            connect(m_stationClient.get(), &StationClient::disconnected,
+                    this, [this]()
+                    {
+                        statusBar()->showMessage("与主控台连接已断开", 3000);
+                    });
+            connect(m_stationClient.get(), &StationClient::errorOccurred,
+                    this, [this](const QString &error)
+                    {
+                        statusBar()->showMessage(QString("主控台通信错误: %1").arg(error), 5000);
+                    });
         }
     }
 
@@ -338,6 +374,11 @@ namespace WaterTest
         auto *timeLabel = new QLabel(QTime::currentTime().toString("HH:mm:ss"), this);
         timeLabel->setObjectName("topTime");
         topBarLayout->addWidget(timeLabel);
+        auto *timeTimer = new QTimer(timeLabel);
+        timeTimer->setInterval(1000);
+        connect(timeTimer, &QTimer::timeout, timeLabel, [timeLabel]()
+            { timeLabel->setText(QTime::currentTime().toString("HH:mm:ss")); });
+        timeTimer->start();
 
         mainLayout->addWidget(topBar);
 
@@ -402,8 +443,37 @@ namespace WaterTest
         if (!m_terminalServer)
             return;
 
-        // TODO: Connect Terminal Server signals to slots
-        // This will be implemented in Task 8
+        connect(m_terminalServer.get(), &TerminalServer::stationConnected,
+                this, [this](uint8_t stationId, const QString &)
+                {
+                    onStationConnected(stationId);
+                });
+        connect(m_terminalServer.get(), &TerminalServer::stationDisconnected,
+                this, &MainWindow::onStationDisconnected);
+        connect(m_terminalServer.get(), &TerminalServer::dataReceived,
+                this, &MainWindow::onDataReceived);
+        connect(m_terminalServer.get(), &TerminalServer::errorOccurred,
+                this, &MainWindow::onPLCError);
+
+        if (m_terminalStatusLabel)
+        {
+            m_terminalStatusLabel->setText("● 主控服务已连接");
+            m_terminalStatusLabel->setProperty("tone", "good");
+            m_terminalStatusLabel->style()->unpolish(m_terminalStatusLabel);
+            m_terminalStatusLabel->style()->polish(m_terminalStatusLabel);
+        }
+
+        if (!m_terminalStatusTimer)
+        {
+            m_terminalStatusTimer = new QTimer(this);
+            m_terminalStatusTimer->setInterval(1000);
+            connect(m_terminalStatusTimer, &QTimer::timeout, this, &MainWindow::updateTerminalStatusUi);
+        }
+        if (!m_terminalStatusTimer->isActive())
+        {
+            m_terminalStatusTimer->start();
+        }
+        updateTerminalStatusUi();
     }
 
     void MainWindow::createMenuBar()
@@ -580,9 +650,35 @@ namespace WaterTest
         statusBar()->showMessage("正在连接PLC: " + QString::fromStdString(params.ipAddress) + "...");
         setPlcStatusState("connecting", "PLC 正在连接...");
 
-        if (!plcClient->connect(params))
+        bool plcConnected = false;
+        std::string lastConnectError;
+        constexpr int kConnectAttempts = 3;
+        for (int attempt = 1; attempt <= kConnectAttempts; ++attempt)
         {
-            const QString errorMsg = "连接PLC失败: " + QString::fromStdString(plcClient->getLastError());
+            if (attempt > 1)
+            {
+                statusBar()->showMessage(QString("正在重试连接PLC (%1/%2): ").arg(attempt).arg(kConnectAttempts) +
+                                         QString::fromStdString(params.ipAddress));
+            }
+
+            if (plcClient->connect(params))
+            {
+                plcConnected = true;
+                break;
+            }
+
+            lastConnectError = plcClient->getLastError();
+            if (attempt < kConnectAttempts)
+            {
+                QThread::msleep(350);
+            }
+        }
+
+        if (!plcConnected)
+        {
+            const QString errorMsg = QString("连接PLC失败(重试%1次): %2")
+                                         .arg(kConnectAttempts)
+                                         .arg(QString::fromStdString(lastConnectError));
             if (interactive)
                 QMessageBox::critical(this, "连接错误", errorMsg);
             statusBar()->showMessage("PLC连接失败", 3000);
@@ -598,6 +694,20 @@ namespace WaterTest
             plcClient->disconnect();
             setPlcStatusState("disconnected", errorMsg);
             return false;
+        }
+
+        // 初始化数据保存系统
+        if (!m_deviceManager->initializeDataLogging("deploy/logs"))
+        {
+            const QString errorMsg = "数据保存系统初始化失败";
+            if (interactive)
+                QMessageBox::warning(this, "警告", errorMsg);
+            // 不中断连接流程，数据保存失败不影响系统运行
+        }
+        else
+        {
+            // 启用数据保存
+            m_deviceManager->setDataLoggingEnabled(true);
         }
 
         if (!skipDataCollection)
@@ -668,7 +778,16 @@ namespace WaterTest
             if (m_autoTestPanel)
                 m_autoTestPanel->stopUpdate();
             if (m_deviceManager)
+            {
                 m_deviceManager->stopDataCollection();
+                
+                // 关闭并刷新数据保存
+                if (m_deviceManager->isDataLoggingEnabled())
+                {
+                    m_deviceManager->setDataLoggingEnabled(false);
+                    m_deviceManager->flushDataLogging();
+                }
+            }
         }
 
         m_isConnected = false;
@@ -803,6 +922,64 @@ namespace WaterTest
         }
     }
 
+    void MainWindow::updateTerminalStatusUi()
+    {
+        if (m_mode != WindowMode::TERMINAL_MODE)
+            return;
+
+        const bool serverRunning = (m_terminalServer && m_terminalServer->isRunning());
+
+        if (m_terminalStatusLabel)
+        {
+            m_terminalStatusLabel->setText(serverRunning ? "● 主控服务运行中" : "● 主控服务未启动");
+            m_terminalStatusLabel->setProperty("tone", serverRunning ? "good" : "bad");
+            m_terminalStatusLabel->style()->unpolish(m_terminalStatusLabel);
+            m_terminalStatusLabel->style()->polish(m_terminalStatusLabel);
+        }
+
+        bool plcHasClient = false;
+        bool plcConnected = false;
+        if (m_terminalServer)
+        {
+            auto deviceManager = m_terminalServer->getDeviceManager();
+            if (deviceManager)
+            {
+                plcHasClient = deviceManager->hasPlcClient();
+                plcConnected = deviceManager->isPlcConnected();
+            }
+        }
+
+        if (m_plcStatusLabel)
+        {
+            if (plcConnected)
+            {
+                m_plcStatusLabel->setText("● PLC 已连接");
+                m_plcStatusLabel->setProperty("tone", "good");
+            }
+            else if (plcHasClient)
+            {
+                m_plcStatusLabel->setText("● PLC 连接中断");
+                m_plcStatusLabel->setProperty("tone", "bad");
+            }
+            else
+            {
+                m_plcStatusLabel->setText("● PLC 未初始化");
+                m_plcStatusLabel->setProperty("tone", "warn");
+            }
+            m_plcStatusLabel->style()->unpolish(m_plcStatusLabel);
+            m_plcStatusLabel->style()->polish(m_plcStatusLabel);
+        }
+
+        if (m_stationStatusLabel)
+        {
+            const int count = m_terminalServer ? m_terminalServer->getConnectedStationCount() : 0;
+            m_stationStatusLabel->setText(QString("● Station %1/4").arg(count));
+            m_stationStatusLabel->setProperty("tone", count > 0 ? "good" : "bad");
+            m_stationStatusLabel->style()->unpolish(m_stationStatusLabel);
+            m_stationStatusLabel->style()->polish(m_stationStatusLabel);
+        }
+    }
+
     void MainWindow::onConfig()
     {
         ConfigDialog dialog(this);
@@ -826,7 +1003,9 @@ namespace WaterTest
         if (m_plcStatusLabel)
         {
             m_plcStatusLabel->setText("● PLC 已连接");
-            m_plcStatusLabel->setStyleSheet("QLabel { font-size: 11pt; color: #4CAF50; font-weight: bold; }");
+            m_plcStatusLabel->setProperty("tone", "good");
+            m_plcStatusLabel->style()->unpolish(m_plcStatusLabel);
+            m_plcStatusLabel->style()->polish(m_plcStatusLabel);
         }
     }
 
@@ -835,31 +1014,60 @@ namespace WaterTest
         if (m_plcStatusLabel)
         {
             m_plcStatusLabel->setText("● PLC 断开");
-            m_plcStatusLabel->setStyleSheet("QLabel { font-size: 11pt; color: #F44336; font-weight: bold; }");
+            m_plcStatusLabel->setProperty("tone", "bad");
+            m_plcStatusLabel->style()->unpolish(m_plcStatusLabel);
+            m_plcStatusLabel->style()->polish(m_plcStatusLabel);
         }
     }
 
     void MainWindow::onPLCError(const QString &error)
     {
+        if (m_mode == WindowMode::TERMINAL_MODE)
+        {
+            statusBar()->showMessage(QString("PLC错误: %1").arg(error), 5000);
+            onPLCDisconnected();
+            return;
+        }
+
         QMessageBox::warning(this, "PLC错误", error);
     }
 
     void MainWindow::onStationConnected(uint8_t stationId)
     {
-        // Update station count
-        // This will be updated in Task 4
+        Q_UNUSED(stationId);
+        if (m_terminalServer && m_stationStatusLabel)
+        {
+            const int count = m_terminalServer->getConnectedStationCount();
+            m_stationStatusLabel->setText(QString("● Station %1/4").arg(count));
+            m_stationStatusLabel->setProperty("tone", count > 0 ? "good" : "bad");
+            m_stationStatusLabel->style()->unpolish(m_stationStatusLabel);
+            m_stationStatusLabel->style()->polish(m_stationStatusLabel);
+        }
     }
 
     void MainWindow::onStationDisconnected(uint8_t stationId)
     {
-        // Update station count
-        // This will be updated in Task 4
+        Q_UNUSED(stationId);
+        if (m_terminalServer && m_stationStatusLabel)
+        {
+            const int count = m_terminalServer->getConnectedStationCount();
+            m_stationStatusLabel->setText(QString("● Station %1/4").arg(count));
+            m_stationStatusLabel->setProperty("tone", count > 0 ? "good" : "bad");
+            m_stationStatusLabel->style()->unpolish(m_stationStatusLabel);
+            m_stationStatusLabel->style()->polish(m_stationStatusLabel);
+        }
     }
 
     void MainWindow::onDataReceived(const struct SensorData &data)
     {
-        // Update data display
-        // This will be updated in Task 2
+        if (m_dataStatsLabel)
+        {
+            m_dataStatsLabel->setText(
+                QString("采样: P1=%1 kPa, F=%2 | Ts=%3")
+                    .arg(data.pressure[0], 0, 'f', 2)
+                    .arg(data.flow_rate, 0, 'f', 2)
+                    .arg(data.timestamp));
+        }
     }
 
     void MainWindow::onTabChanged(int index)

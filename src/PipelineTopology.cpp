@@ -359,7 +359,7 @@ namespace WaterTest
 
         std::stringstream ss;
         ss << "graph LR\n";
-        ss << "    %% 水压检测系统物理流程图\n\n";
+        ss << "    % 水压检测系统物理流程图\n\n";
 
         // 添加所有连接
         for (const auto &conn : m_connections)

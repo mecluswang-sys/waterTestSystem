@@ -24,6 +24,13 @@ namespace WaterTest
 
     namespace
     {
+        int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 2)
+        {
+            if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
+                return sensor.displayDecimals;
+            return fallbackDecimals;
+        }
+
         void appendPressureUiDebugLog(const std::string &message)
         {
             std::filesystem::create_directories("deploy/logs");
@@ -50,10 +57,14 @@ namespace WaterTest
 
     MonitorPanel::~MonitorPanel()
     {
-        if (m_updateTimer && m_updateTimer->isActive())
+        // Disconnect all signals before destroying
+        if (m_updateTimer)
         {
+            disconnect(m_updateTimer, nullptr, this, nullptr);
             m_updateTimer->stop();
         }
+        // Clear device manager reference to prevent accessing destroyed object
+        m_deviceManager.reset();
     }
 
     void MonitorPanel::setupUI()
@@ -103,7 +114,7 @@ namespace WaterTest
         flowLayout->setSpacing(4);
 
         m_flowTable = new QTableWidget(0, 4, this);
-        m_flowTable->setHorizontalHeaderLabels({"编号", "名称", "流量 (L/min)", "状态"});
+        m_flowTable->setHorizontalHeaderLabels({"编号", "名称", "流量", "状态"});
         m_flowTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_flowTable->horizontalHeader()->setMinimumSectionSize(70);
         m_flowTable->horizontalHeader()->setDefaultSectionSize(100);
@@ -179,7 +190,7 @@ namespace WaterTest
 
     void MonitorPanel::startUpdate()
     {
-        if (m_updateTimer)
+        if (m_updateTimer && !m_updateTimer->isActive())
         {
             m_updateTimer->start(1000); // Update every second
         }
@@ -236,11 +247,12 @@ namespace WaterTest
             if (i < pSensors.size())
             {
                 double kPa = static_cast<double>(pSensors[i].pressure);
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kPa, 'f', 2)));
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kPa, 'f', pressureDisplayDecimals(pSensors[i]))));
 
                 std::ostringstream oss;
                 oss << "[UI][PRESSURE] sensor=" << pSensors[i].id
                     << " pressureKPa=" << pSensors[i].pressure
+                    << " displayDecimals=" << pSensors[i].displayDecimals
                     << " displayKPa=" << kPa
                     << " status=" << static_cast<int>(pSensors[i].status);
                 appendPressureUiDebugLog(oss.str());
@@ -323,15 +335,32 @@ namespace WaterTest
         for (size_t i = 0; i < meters.size(); ++i)
         {
             const auto &meter = meters[i];
+            const QString flowUnit = (!meter.unitLabel.empty() && meter.unitLabel != "unknown")
+                                         ? QString::fromStdString(meter.unitLabel)
+                                         : "L/min";
+            const QString flowText = QString("%1 %2").arg(QString::number(meter.flowRate, 'f', 2)).arg(flowUnit);
+            const bool hasEmptyPipeAlarm = (meter.emptyPipeAlarm != 0);
+            const bool hasExcitationAlarm = (meter.excitationAlarm != 0);
 
             m_flowTable->setItem(i, 0, new QTableWidgetItem(QString::number(meter.id)));
             m_flowTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(meter.name)));
-            m_flowTable->setItem(i, 2, new QTableWidgetItem(QString::number(meter.flowRate, 'f', 2)));
+            m_flowTable->setItem(i, 2, new QTableWidgetItem(flowText));
 
             QString statusText;
             QColor bgColor(200, 200, 200);
 
-            if (meter.status == DeviceStatus::ONLINE)
+            if (hasEmptyPipeAlarm || hasExcitationAlarm)
+            {
+                statusText = "报警";
+                if (hasEmptyPipeAlarm && hasExcitationAlarm)
+                    statusText += "(空管/励磁)";
+                else if (hasEmptyPipeAlarm)
+                    statusText += "(空管)";
+                else
+                    statusText += "(励磁)";
+                bgColor = QColor(255, 120, 120);
+            }
+            else if (meter.status == DeviceStatus::ONLINE)
             {
                 statusText = "在线";
                 bgColor = QColor(100, 255, 100);
