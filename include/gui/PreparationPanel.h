@@ -28,6 +28,7 @@ class QGraphicsItem;
 namespace WaterTest
 {
     class DeviceManager;
+    class StationClient;
 
     class PreparationPanel : public QWidget
     {
@@ -36,6 +37,9 @@ namespace WaterTest
     public:
         explicit PreparationPanel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent = nullptr);
         ~PreparationPanel();
+
+        // 为操作台远程模式注入主控客户端
+        void setStationClient(std::shared_ptr<StationClient> stationClient);
 
         // 启动/停止更新
         void startUpdate(int intervalMs = 1000);
@@ -72,6 +76,7 @@ namespace WaterTest
 
         // 设备管理器
         std::shared_ptr<DeviceManager> m_deviceManager;
+        std::shared_ptr<StationClient> m_stationClient;
 
         // 更新定时器
         QTimer *m_updateTimer;

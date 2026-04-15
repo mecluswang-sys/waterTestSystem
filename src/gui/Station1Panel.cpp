@@ -7,6 +7,7 @@
 
 #include "DeviceManager.h"
 #include "ConfigManager.h"
+#include "StationClient.h"
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -25,10 +26,15 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QScrollArea>
 #include <QMessageBox>
 #include <QStyle>
+#include <QDebug>
+#include <QDateTime>
+#include <QEvent>
+#include <QMouseEvent>
 #include <QtMath>
 #include <QDir>
 #include <vector>
@@ -47,19 +53,19 @@ namespace WaterTest
         // PreparationPanel 的 HMI 图元类都内联在 cpp 中，无法直接复用；这里复用同一套“主题 token + 网格背景”，
         // 并把节点/连线改成拟物面板与“管道”风格（外圈/内圈）。
 
-        // ===== DQ 继电器定义表（映射到 Q区输出地址） =====
+        // ===== DQ 继电器定义表（含 M 区特殊映射） =====
         struct RelayDef
         {
-            uint8_t index;  // 线性索引：0-7=Q0.0-Q0.7, 8-15=Q1.0-Q1.7
+            uint8_t index;  // 线性索引：0 特殊映射 M100.0，其余沿用 Q 区线性索引
             QString label;  // 设备名称
             QString addr;   // 显示地址（如 "Q0.0"）
             QString type;   // 类型提示："valve" 或 "pump"
         };
 
         // 1号操作台 DQ 输出匹配表
-        // Q0.0-Q0.5: 电磁阀；Q0.6-Q0.7: 备用；Q1.0-Q1.1: 供压泵（现场联调）
+        // index0: 电磁阀1 -> M100.0；其余沿用 Q0.1-Q1.1（现场联调项保持不变）
         static const std::array<RelayDef, 10> kStation1Relays{{
-            {0,  "进水电磁阀",  "Q0.0", "valve"},
+            {0,  "电磁阀1",  "M100.0", "valve"},
             {1,  "出水电磁阀",  "Q0.1", "valve"},
             {2,  "排气电磁阀",  "Q0.2", "valve"},
             {3,  "待测阀电磁阀", "Q0.3", "valve"},
@@ -70,6 +76,13 @@ namespace WaterTest
             {8,  "供压泵1启停",  "Q1.0", "pump"},
             {9,  "供压泵2启停",  "Q1.1", "pump"},
         }};
+
+        static QString formatRelayBtnText(const QString &addr, const QString &label, bool on)
+        {
+            const QString stateText = on ? "● 通/得电" : "○ 断/失电";
+            return QString("%1\n%2\n%3")
+                .arg(addr, label, stateText);
+        }
 
         static void ensureHmiConfigLoadedOnce()
         {
@@ -467,11 +480,18 @@ namespace WaterTest
                 const QColor borderColor = kUiBorder;
                 const QColor discColor = m_open ? kUiGreen : kUiRed;
                 const QColor statusColor = discColor;
+                const QColor stateTint = m_open ? QColor(56, 189, 120, 52) : QColor(239, 68, 68, 56);
+                const QColor stateEdge = m_open ? QColor(34, 197, 94) : QColor(239, 68, 68);
 
                 // 轻阴影
                 p->setPen(Qt::NoPen);
                 p->setBrush(kUiShadow);
                 p->drawRoundedRect(QRectF(-40, -38, 80, 98).translated(2, 3), 10, 10);
+
+                // 状态底色层：开/关时使用高对比色进行整体提示。
+                p->setBrush(stateTint);
+                p->setPen(QPen(stateEdge, 2));
+                p->drawRoundedRect(QRectF(-40, -38, 80, 98), 10, 10);
 
                 // 执行器
                 p->setBrush(kUiBody);
@@ -488,9 +508,12 @@ namespace WaterTest
                 p->drawText(QRectF(-15, -34, 30, 18), Qt::AlignCenter, "M");
 
                 // 状态灯
+                p->setPen(Qt::NoPen);
+                p->setBrush(QColor(statusColor.red(), statusColor.green(), statusColor.blue(), 90));
+                p->drawEllipse(QPointF(-11, -30), 6, 6);
                 p->setBrush(statusColor);
                 p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(-11, -30), 3, 3);
+                p->drawEllipse(QPointF(-11, -30), 4, 4);
 
                 // 阀杆
                 p->setBrush(kUiMetalMid);
@@ -521,11 +544,11 @@ namespace WaterTest
                 // 位置指示圆盘
                 p->setBrush(kUiPanel);
                 p->setPen(QPen(kUiBorder, 1));
-                p->drawEllipse(QPointF(24, -26), 6, 6);
+                p->drawEllipse(QPointF(24, -26), 7, 7);
                 // 指针
                 const double ang = (rotation - 90.0) * 3.14159 / 180.0;
-                p->setPen(QPen(statusColor, 2, Qt::SolidLine, Qt::RoundCap));
-                p->drawLine(QPointF(24, -26), QPointF(24 + 5 * std::cos(ang), -26 + 5 * std::sin(ang)));
+                p->setPen(QPen(statusColor, 3, Qt::SolidLine, Qt::RoundCap));
+                p->drawLine(QPointF(24, -26), QPointF(24 + 6 * std::cos(ang), -26 + 6 * std::sin(ang)));
 
                 // 文本
                 p->setPen(kUiText);
@@ -533,16 +556,18 @@ namespace WaterTest
                 f.setPointSize(9);
                 f.setBold(true);
                 p->setFont(f);
-                p->drawText(QRectF(-52, 30, 104, 18), Qt::AlignCenter, m_name);
+                p->drawText(QRectF(-52, 28, 104, 16), Qt::AlignCenter, m_name);
 
                 QFont f2 = p->font();
-                f2.setPointSize(8);
-                f2.setBold(false);
+                f2.setPointSize(7);
+                f2.setBold(true);
                 f2.setFamily("Consolas");
                 p->setFont(f2);
-                p->setPen(kUiTextMuted);
-                const QString s = QString("POS:%1%").arg(QString::number(m_degree, 'f', 0));
-                p->drawText(QRectF(-52, 40, 104, 16), Qt::AlignCenter, s);
+                p->setPen(Qt::NoPen);
+                p->setBrush(stateEdge);
+                p->drawRoundedRect(QRectF(-24, 44, 48, 12), 4, 4);
+                p->setPen(Qt::white);
+                p->drawText(QRectF(-24, 44, 48, 12), Qt::AlignCenter, m_open ? "OPEN" : "CLOSE");
 
                 // 入口/出口触点
                 p->setPen(QPen(kUiBorder, 1));
@@ -558,6 +583,28 @@ namespace WaterTest
             bool m_open;
             double m_degree;
         };
+
+        static void setRelayValveGlyphState(QGraphicsScene *scene, uint8_t relayIndex, bool on)
+        {
+            if (!scene)
+                return;
+            const auto items = scene->items();
+            for (auto *it : items)
+            {
+                if (!it)
+                    continue;
+                const QVariant v = it->data(4);
+                if (!v.isValid() || v.toInt() != relayIndex)
+                    continue;
+
+                auto *valve = dynamic_cast<ValveItem *>(it);
+                if (!valve)
+                    continue;
+
+                valve->setOpen(on);
+                valve->setDegree(on ? 100.0 : 0.0);
+            }
+        }
 
         class ThreeWayValveItem : public QGraphicsItem
         {
@@ -716,24 +763,34 @@ namespace WaterTest
                 p->setFont(tagFont);
                 p->drawText(QRectF(card.left() + 6, card.top() + 4, card.width() - 12, 12), Qt::AlignLeft | Qt::AlignVCenter, m_name);
 
+                // 数值高亮窗：提高对比度，让压力数值在远距离也清晰可读。
+                const QRectF valuePanel(card.left() + 5, card.top() + 16, card.width() - 10, 28);
+                p->setPen(QPen(valueColor, 1.5));
+                p->setBrush(QColor(12, 18, 28, 220));
+                p->drawRoundedRect(valuePanel, 4, 4);
+
                 // Value
                 QFont valFont = p->font();
-                valFont.setPointSize(14);
+                valFont.setPointSize(17);
                 valFont.setBold(true);
                 valFont.setFamily("Consolas");
                 p->setFont(valFont);
-                p->setPen(valueColor);
+                p->setPen(QColor(245, 248, 255));
                 const QString v = QString::number(m_value, 'f', m_displayDecimals);
-                p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
+                p->drawText(valuePanel, Qt::AlignCenter, v);
 
                 // Unit
                 QFont unitFont = p->font();
                 unitFont.setPointSize(8);
-                unitFont.setBold(false);
+                unitFont.setBold(true);
                 unitFont.setFamily("Consolas");
                 p->setFont(unitFont);
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, m_unit);
+                const QRectF unitPanel(card.right() - 36, card.top() + 45, 30, 10);
+                p->setPen(Qt::NoPen);
+                p->setBrush(QColor(valueColor.red(), valueColor.green(), valueColor.blue(), 220));
+                p->drawRoundedRect(unitPanel, 3, 3);
+                p->setPen(Qt::white);
+                p->drawText(unitPanel, Qt::AlignCenter, m_unit);
 
                 // 引线（虚线）+ 类型点
                 p->setPen(QPen(kUiBorder, 1.5, Qt::DashLine, Qt::RoundCap));
@@ -1012,6 +1069,7 @@ namespace WaterTest
     Station1Panel::Station1Panel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent)
         : QWidget(parent),
           m_deviceManager(std::move(deviceManager)),
+                    m_stationClient(nullptr),
           m_view(nullptr),
           m_scene(nullptr),
           m_flowTimer(nullptr),
@@ -1022,6 +1080,11 @@ namespace WaterTest
     }
 
     Station1Panel::~Station1Panel() = default;
+
+    void Station1Panel::setStationClient(std::shared_ptr<StationClient> stationClient)
+    {
+        m_stationClient = stationClient;
+    }
 
     void Station1Panel::resizeEvent(QResizeEvent *event)
     {
@@ -1054,12 +1117,8 @@ namespace WaterTest
 
         m_scene = new QGraphicsScene(this);
         m_view->setScene(m_scene);
+        m_view->viewport()->installEventFilter(this);
         layout->addWidget(m_view, 1);
-
-        // DQ 继电器控制面板（流程图下方）
-        auto *relayContainer = new QWidget(this);
-        buildRelayPanel(relayContainer);
-        layout->addWidget(relayContainer, 0);
 
         m_flowTimer = new QTimer(this);
         connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
@@ -1079,14 +1138,17 @@ namespace WaterTest
         // 点击阀门图元后弹出控制面板，避免误触：选中后立即清除选中态
         connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]()
                 {
-            if (!m_scene || !m_deviceManager)
+            if (!m_scene)
                 return;
+
+            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
 
             const auto selected = m_scene->selectedItems();
             if (selected.isEmpty())
                 return;
 
             auto *item = selected.first();
+
             const QVariant idVar = item->data(3);
             if (!idVar.isValid())
                 return;
@@ -1102,8 +1164,12 @@ namespace WaterTest
             auto *valveItem = dynamic_cast<ValveItem *>(item);
             const QString valveName = valveItem ? valveItem->getName() : QString("阀门 #%1").arg(valveId);
 
-            const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
-            const bool isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+            bool isOpen = false;
+            if (m_deviceManager)
+            {
+                const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
+                isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+            }
 
             QDialog dialog(this);
             dialog.setWindowTitle("阀门控制");
@@ -1126,11 +1192,49 @@ namespace WaterTest
             mainLayout->addLayout(buttons);
 
             connect(openBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
-                m_deviceManager->controlValve(static_cast<uint16_t>(valveId), true);
+                const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                bool ok = false;
+                if (m_stationClient && strictMode)
+                {
+                    ControlCommand cmd;
+                    cmd.command_type = 2;
+                    cmd.index = static_cast<uint8_t>(valveId - 1);
+                    cmd.action = 1;
+                    ok = m_stationClient->sendCommand(cmd);
+                }
+                else if (m_deviceManager)
+                {
+                    ok = m_deviceManager->controlValve(static_cast<uint16_t>(valveId), true);
+                }
+
+                if (!ok)
+                {
+                    QMessageBox::warning(this, "操作失败", "开阀命令发送失败，请检查主控连接状态。");
+                    return;
+                }
                 dialog.accept();
             });
             connect(closeBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
-                m_deviceManager->controlValve(static_cast<uint16_t>(valveId), false);
+                const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                bool ok = false;
+                if (m_stationClient && strictMode)
+                {
+                    ControlCommand cmd;
+                    cmd.command_type = 2;
+                    cmd.index = static_cast<uint8_t>(valveId - 1);
+                    cmd.action = 0;
+                    ok = m_stationClient->sendCommand(cmd);
+                }
+                else if (m_deviceManager)
+                {
+                    ok = m_deviceManager->controlValve(static_cast<uint16_t>(valveId), false);
+                }
+
+                if (!ok)
+                {
+                    QMessageBox::warning(this, "操作失败", "关阀命令发送失败，请检查主控连接状态。");
+                    return;
+                }
                 dialog.accept();
             });
             connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
@@ -1145,29 +1249,32 @@ namespace WaterTest
         outerLayout->setSpacing(2);
 
         auto *group = new QGroupBox("继电器输出控制 (DQ)", container);
-        group->setMaximumHeight(110);
-        auto *hLayout = new QHBoxLayout(group);
-        hLayout->setContentsMargins(6, 6, 6, 6);
-        hLayout->setSpacing(6);
+        group->setMinimumHeight(190);
+        group->setMaximumHeight(210);
+        auto *grid = new QGridLayout(group);
+        grid->setContentsMargins(8, 8, 8, 8);
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(8);
 
         // 辅助 lambda：根据通/断状态更新按钮文字和样式
         auto refreshBtn = [](QPushButton *btn, const QString &addr, const QString &label, bool on)
         {
-            btn->setText(QString("<b>%1</b><br><small>%2</small><br>%3")
-                             .arg(addr, label, on ? "● 通/得电" : "○ 断/失电"));
+            btn->setText(formatRelayBtnText(addr, label, on));
             btn->setProperty("dqOn", on);
             btn->style()->unpolish(btn);
             btn->style()->polish(btn);
         };
 
         m_relayBtns.clear();
-        m_relayBtns.reserve(kStation1Relays.size());
+        m_relayBtns.resize(kStation1Relays.size(), nullptr);
+
+        int visibleBtnCount = 0;
 
         for (const auto &def : kStation1Relays)
         {
             auto *btn = new QPushButton(group);
-            btn->setMinimumWidth(88);
-            btn->setMinimumHeight(72);
+            btn->setMinimumSize(116, 78);
+            btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             // 泵使用不同的语义色（暖色），阀使用默认
             if (def.type == "pump")
             {
@@ -1180,47 +1287,168 @@ namespace WaterTest
             refreshBtn(btn, def.addr, def.label, false);
 
             const uint8_t idx = def.index;
-            connect(btn, &QPushButton::clicked, this, [this, idx]()
-                    { onRelayBtnClicked(idx); });
+                if (idx != 0)
+                {
+                connect(btn, &QPushButton::clicked, this, [this, idx]()
+                    { onRelayBtnClicked(idx, "relay_panel_button"); });
+                }
 
-            hLayout->addWidget(btn);
-            m_relayBtns.push_back(btn);
+            // index=0（电磁阀1）从下方按钮区移除，改由流程图阀门图元点击控制。
+            if (def.index == 0)
+            {
+                btn->setVisible(false);
+            }
+            else
+            {
+                const int row = visibleBtnCount / 5;
+                const int col = visibleBtnCount % 5;
+                grid->addWidget(btn, row, col);
+                ++visibleBtnCount;
+            }
+
+            if (idx < m_relayBtns.size())
+                m_relayBtns[idx] = btn;
         }
 
-        hLayout->addStretch(1);
+        for (int c = 0; c < 5; ++c)
+            grid->setColumnStretch(c, 1);
+
         outerLayout->addWidget(group);
+    }
+
+    bool Station1Panel::eventFilter(QObject *watched, QEvent *event)
+    {
+        if (m_view && watched == m_view->viewport() && event && event->type() == QEvent::MouseButtonRelease)
+        {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton)
+            {
+                QGraphicsItem *hit = m_view->itemAt(mouseEvent->pos());
+                while (hit && !hit->data(4).isValid())
+                    hit = hit->parentItem();
+
+                if (hit)
+                {
+                    const int relayIndex = hit->data(4).toInt();
+                    if (relayIndex >= 0)
+                    {
+                        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                        const bool inGlobalRelayGlyphLock = nowMs < m_relayGlyphLockUntilMs;
+                        const bool duplicateRelayGlyphClick =
+                            (m_lastRelayGlyphIndex == relayIndex) && (nowMs - m_lastRelayGlyphClickMs < 600);
+
+                        if (inGlobalRelayGlyphLock || duplicateRelayGlyphClick)
+                        {
+                            qWarning() << "[M100][Station1Panel] relay glyph click ignored by debounce"
+                                       << "index=" << relayIndex
+                                       << "elapsedMs=" << (nowMs - m_lastRelayGlyphClickMs)
+                                       << "lockRemainingMs=" << std::max<qint64>(0, m_relayGlyphLockUntilMs - nowMs);
+                            return true;
+                        }
+
+                        m_lastRelayGlyphIndex = relayIndex;
+                        m_lastRelayGlyphClickMs = nowMs;
+                        m_relayGlyphLockUntilMs = nowMs + 700;
+                        qInfo() << "[M100][Station1Panel] relay glyph hit"
+                                << "index=" << relayIndex
+                                << "source=" << static_cast<int>(mouseEvent->source())
+                                << "spontaneous=" << mouseEvent->spontaneous()
+                                << "localPos=" << mouseEvent->pos();
+                        onRelayBtnClicked(static_cast<uint8_t>(relayIndex), "glyph");
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return QWidget::eventFilter(watched, event);
     }
 
     void Station1Panel::updateRelayButtons()
     {
-        if (!m_deviceManager || m_relayBtns.empty())
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+            return;
+
+        if (!m_deviceManager)
             return;
 
         const auto &relays = kStation1Relays;
-        for (size_t i = 0; i < relays.size() && i < m_relayBtns.size(); ++i)
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        for (size_t i = 0; i < relays.size(); ++i)
         {
             bool on = false;
             const bool ok = m_deviceManager->getRelayState(relays[i].index, on);
             if (!ok)
                 continue; // PLC 未连接时跳过，不改变显示
 
-            auto *btn = m_relayBtns[i];
+            // 若 M100.0 在置位后短时间内被拉回 false，给出可视化提示。
+            if (relays[i].index == 0 && m_expectM100Hold)
+            {
+                const qint64 elapsed = nowMs - m_expectM100SetMs;
+                if (on)
+                {
+                    m_expectM100Hold = false;
+                }
+                else if (elapsed >= 200 && elapsed <= 3000)
+                {
+                    qWarning() << "[M100][Station1Panel] auto reset detected after set true"
+                               << "elapsedMs=" << elapsed;
+                    QMessageBox::information(this,
+                                             "M100.0 被自动复位",
+                                             "已写入 M100.0=1，但很快回读到 0。\n"
+                                             "这通常表示 PLC 程序中有复位逻辑（如联锁条件不满足或 R 线圈）。");
+                    m_expectM100Hold = false;
+                }
+                else if (elapsed > 3000)
+                {
+                    m_expectM100Hold = false;
+                }
+            }
+
+            // 图元颜色联动：电磁阀图元随 relay 状态变化。
+            if (relays[i].index == 0)
+                setRelayValveGlyphState(m_scene, relays[i].index, on);
+
+            QPushButton *btn = (i < m_relayBtns.size()) ? m_relayBtns[i] : nullptr;
+            if (!btn)
+                continue;
             const bool current = btn->property("dqOn").toBool();
             if (current == on)
                 continue; // 无变化，避免重绘闪烁
 
-            btn->setText(QString("<b>%1</b><br><small>%2</small><br>%3")
-                             .arg(relays[i].addr, relays[i].label, on ? "● 通/得电" : "○ 断/失电"));
+            btn->setText(formatRelayBtnText(relays[i].addr, relays[i].label, on));
             btn->setProperty("dqOn", on);
             btn->style()->unpolish(btn);
             btn->style()->polish(btn);
         }
     }
 
-    void Station1Panel::onRelayBtnClicked(uint8_t index)
+    void Station1Panel::onRelayBtnClicked(uint8_t index, const char *source)
     {
-        if (!m_deviceManager)
-            return;
+        if (index == 0)
+        {
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (m_lastM100ToggleMs > 0 && (nowMs - m_lastM100ToggleMs) < 700)
+            {
+                qWarning() << "[M100][Station1Panel] relay toggle ignored by index0 guard"
+                           << "elapsedMs=" << (nowMs - m_lastM100ToggleMs);
+                return;
+            }
+            m_lastM100ToggleMs = nowMs;
+        }
+
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        const QString addr = (index < kStation1Relays.size()) ? kStation1Relays[index].addr : QString("Q?");
+        const bool useRemote = (m_stationClient && strictRemoteMode);
+
+        qInfo() << "[M100][Station1Panel] relay click"
+            << "src=" << source
+            << "index=" << index
+            << "addr=" << addr
+            << "strictRemoteMode=" << strictRemoteMode
+            << "hasStationClient=" << (m_stationClient != nullptr)
+            << "useRemote=" << useRemote;
 
         // 泵输出位(Q1.0/Q1.1)暂不开放本地切换，仅做状态观察。
         if (index == 8 || index == 9)
@@ -1236,21 +1464,110 @@ namespace WaterTest
         }
 
         bool current = false;
-        m_deviceManager->getRelayState(index, current);
+        if (useRemote)
+        {
+            if (!m_stationClient->isConnected())
+            {
+                qWarning() << "[M100][Station1Panel] remote path selected but StationClient disconnected";
+            }
+            bool gotCurrent = false;
+            if (m_deviceManager)
+            {
+                gotCurrent = m_deviceManager->getRelayState(index, current);
+            }
+            if (!gotCurrent && index < m_relayBtns.size() && m_relayBtns[index])
+            {
+                current = m_relayBtns[index]->property("dqOn").toBool();
+            }
+        }
+        else
+        {
+            if (!m_deviceManager)
+                return;
+            m_deviceManager->getRelayState(index, current);
+        }
         const bool target = !current;
 
-        if (!m_deviceManager->setRelay(index, target))
+        qInfo() << "[M100][Station1Panel] relay toggle prepare"
+                << "index=" << index
+                << "addr=" << addr
+                << "current=" << current
+                << "target=" << target;
+
+        bool ok = false;
+        if (useRemote)
         {
-            // byteOff = index/8, bit = index%8
-            const int byteOff = index / 8;
-            const int bit     = index % 8;
+            ControlCommand cmd;
+            cmd.command_type = 0;
+            cmd.index = index;
+            cmd.action = target ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+            qInfo() << "[M100][Station1Panel] sendCommand result"
+                    << "ok=" << ok
+                    << "index=" << cmd.index
+                    << "action=" << cmd.action;
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setRelay(index, target);
+            qInfo() << "[M100][Station1Panel] local setRelay result"
+                    << "ok=" << ok
+                    << "index=" << index
+                    << "target=" << target;
+        }
+
+        if (!ok)
+        {
+            if (index == 0)
+                m_expectM100Hold = false;
+            qWarning() << "[M100][Station1Panel] relay toggle failed"
+                       << "index=" << index
+                       << "addr=" << addr
+                       << "target=" << target;
             QMessageBox::warning(this, "操作失败",
-                QString("切换 Q%1.%2 失败，请检查 PLC 连接状态。").arg(byteOff).arg(bit));
+                                 QString("切换 %1 失败，请检查 PLC/终端连接状态。").arg(addr));
             return;
         }
 
-        // 写入成功后立即刷新所有按钮（含回读）
-        updateRelayButtons();
+        // 先做本地乐观刷新，避免同步回读阻塞导致的视觉延迟。
+        if (index < m_relayBtns.size() && m_relayBtns[index])
+        {
+            auto *btn = m_relayBtns[index];
+            const auto &def = kStation1Relays[index];
+            btn->setText(formatRelayBtnText(def.addr, def.label, target));
+            btn->setProperty("dqOn", target);
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
+            if (index == 0)
+                setRelayValveGlyphState(m_scene, index, target);
+            qInfo() << "[M100][Station1Panel] ui optimistic update"
+                    << "index=" << index
+                    << "addr=" << def.addr
+                    << "dqOn=" << target;
+        }
+
+        if (useRemote)
+        {
+            if (index == 0)
+                m_expectM100Hold = false;
+        }
+        else
+        {
+            if (index == 0)
+            {
+                if (target)
+                {
+                    m_expectM100Hold = true;
+                    m_expectM100SetMs = QDateTime::currentMSecsSinceEpoch();
+                }
+                else
+                {
+                    m_expectM100Hold = false;
+                }
+            }
+            // 回读校准放到事件循环后执行，避免阻塞当前帧绘制。
+            QTimer::singleShot(250, this, [this]() { updateRelayButtons(); });
+        }
     }
 
     void Station1Panel::buildScene()
@@ -1285,9 +1602,9 @@ namespace WaterTest
         const qreal step = 320;
         const qreal x0 = 10;
         const qreal leftTwoColsShiftX = 200;
-        const qreal yRow1 = 270;
+        const qreal yRow1 = 220;
         const qreal yRow2 = 530;
-        const qreal valvePortYOffset = 12;
+        const qreal valvePortYOffset = 14;
         const qreal row1AfterAccumulatorYOffset = -valvePortYOffset;
         const qreal row2AfterFlowMeterYOffset = -valvePortYOffset;
         const qreal pressureSensorTapYOffset = -28;
@@ -1330,17 +1647,20 @@ namespace WaterTest
         auto *v1 = new ValveItem("电动阀", true, 100.0);
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
         v1->setData(3, 4);
+        v1->setData(4, QVariant());
 
         // 压力传感器上置：使底部红点与主干管道平齐。
-        auto *ps1 = new SensorItem("压力传感器", "kPa", kUiPurple);
+        auto *ps1 = new SensorItem("压力传感器4", "kPa", kUiPurple);
         ps1->setData(1, 4); // 1号操作台映射：4号压力传感器
         place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
-        auto *v2 = new ValveItem("电动阀", true, 100.0);
+        auto *v2 = new ValveItem("电磁阀1", true, 100.0);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
-        v2->setData(3, 5);
+        v2->setData(3, QVariant()); // 该图元改由 relay index 0 (M100.0) 驱动，不走阀门ID回读
+        v2->setData(4, 0);          // 位于压力传感器4和5之间：点击直接切换电磁阀1
+        v2->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
-        auto *ps2 = new SensorItem("压力传感器", "kPa", kUiPurple);
+        auto *ps2 = new SensorItem("压力传感器5", "kPa", kUiPurple);
         ps2->setData(1, 5); // 1号操作台映射：5号压力传感器
         place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
 
@@ -1352,7 +1672,7 @@ namespace WaterTest
         auto *fm = new FlowMeterItem("流量计");
         place(fm, xFm, yRow2);
 
-        auto *pt1 = new SensorItem("压力温度传感器", "kPa", kUiOrange);
+        auto *pt1 = new SensorItem("压力传感器6", "kPa", kUiOrange);
         pt1->setData(1, 6); // 1号操作台映射：6号压力传感器
         pt1->setData(2, "kPa");
         place(pt1, xPt1, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
@@ -1361,7 +1681,7 @@ namespace WaterTest
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
         testValve->setData(3, 7);
 
-        auto *pt2 = new SensorItem("压力温度传感器", "kPa", kUiOrange);
+        auto *pt2 = new SensorItem("压力传感器7", "kPa", kUiOrange);
         pt2->setData(1, 7); // 1号操作台映射：7号压力传感器
         pt2->setData(2, "kPa");
         place(pt2, xPt2, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
@@ -1442,12 +1762,21 @@ namespace WaterTest
 
     void Station1Panel::updatePipeFlowAnimation()
     {
-        if (!m_scene || !m_deviceManager)
+        if (!m_scene)
             return;
 
         // 与准备区联动：至少一台供压泵运行时才显示流动动画
-        const bool anyPumpRunning = m_deviceManager->getPump(1).isRunning ||
-                                    m_deviceManager->getPump(2).isRunning;
+        bool anyPumpRunning = false;
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            anyPumpRunning = (m_stationClient->getLatestSensorData().flow_rate > 0.001f);
+        }
+        else if (m_deviceManager)
+        {
+            anyPumpRunning = m_deviceManager->getPump(1).isRunning ||
+                             m_deviceManager->getPump(2).isRunning;
+        }
         if (!anyPumpRunning)
             return;
 
@@ -1473,7 +1802,55 @@ namespace WaterTest
 
     void Station1Panel::updateSensorValues()
     {
-        if (!m_scene || !m_deviceManager)
+        if (!m_scene)
+            return;
+
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            const SensorData net = m_stationClient->getLatestSensorData();
+            const auto allItems = m_scene->items();
+
+            const std::vector<int> mappedSensorIds = {4, 5, 6, 7};
+            for (size_t idx = 0; idx < mappedSensorIds.size(); ++idx)
+            {
+                const int sensorId = mappedSensorIds[idx];
+                for (auto *it : allItems)
+                {
+                    if (!it)
+                        continue;
+                    const QVariant v = it->data(1);
+                    if (!v.isValid() || v.toInt() != sensorId)
+                        continue;
+
+                    auto *sensorItem = dynamic_cast<SensorItem *>(it);
+                    if (!sensorItem)
+                        continue;
+
+                    sensorItem->setValue(static_cast<double>(net.pressure[idx]));
+                    sensorItem->setDisplayDecimals(2);
+                }
+            }
+
+            for (auto *it : allItems)
+            {
+                if (!it)
+                    continue;
+
+                auto *flowItem = dynamic_cast<FlowMeterItem *>(it);
+                if (!flowItem)
+                    continue;
+
+                flowItem->setFlow(static_cast<double>(net.flow_rate));
+                flowItem->setUnit("L/min");
+                flowItem->setAlarm(false);
+                flowItem->setAlarmDetail(0, 0);
+            }
+
+            return;
+        }
+
+        if (!m_deviceManager)
             return;
 
         const auto allItems = m_scene->items();

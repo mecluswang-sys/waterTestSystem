@@ -33,6 +33,11 @@ Water Test System
 │   ├── docs/PHYSICAL_SETUP_GUIDE.md ...... 网络和硬件配置
 │   ├── docs/INDUSTRIAL_TABLET_SPECS.md .. 平板硬件规格
 │   ├── docs/SIEMENS_HMI_VS_INDUSTRIAL_TABLET.md . 设备对比
+│   ├── docs/TERMINAL_STATION_ACCEPTANCE_CHECKLIST.md . Terminal/Station验收清单
+│   ├── docs/TERMINAL_STATION_COMMISSIONING_LOG_TEMPLATE.md . 联调日志模板
+│   ├── docs/FAULT_DIAGNOSIS_THREE_STAGE.md . 三段式故障定位表
+│   ├── docs/SINGLE_MACHINE_DAILY_COMMISSIONING_PLAN.md . 单机阶段日常联调计划
+│   ├── docs/2026-04-15_修改总结.md ............ 当日修改汇总
 │   ├── include/NetworkProtocol.h ........ 通信协议定义
 │   ├── include/TerminalServer.h ......... Terminal服务器API
 │   └── include/StationClient.h .......... Station客户端API

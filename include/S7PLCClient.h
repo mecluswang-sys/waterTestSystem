@@ -175,6 +175,24 @@ namespace WaterTest
         Result writeOutputBool(int byteOffset, int bit, bool value);
 
         /**
+         * @brief 读取 M 区（Merker）Bool 位，例如 M100.0
+         * @param byteOffset 字节偏移（M100.* 对应 byteOffset=100）
+         * @param bit 位偏移（M100.0=0，M100.1=1，...）
+         * @param value 输出值
+         * @return 操作结果
+         */
+        Result readMerkerBool(int byteOffset, int bit, bool &value);
+
+        /**
+         * @brief 写入 M 区（Merker）Bool 位，例如 M100.0
+         * @param byteOffset 字节偏移（M100.* 对应 byteOffset=100）
+         * @param bit 位偏移（M100.0=0，M100.1=1，...）
+         * @param value 写入值
+         * @return 操作结果
+         */
+        Result writeMerkerBool(int byteOffset, int bit, bool value);
+
+        /**
          * @brief 读取外设输入区 (I/PE) 的 16-bit Word，用于读取 AI 模拟量反馈
          * @param byteOffset 字节偏移（如 IW64 对应 byteOffset=64）
          * @param value      输出的 16-bit 原始值（Siemens 工程量格式）

@@ -6,6 +6,7 @@
 #include "gui/PreparationPanel.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
+#include "StationClient.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1980,6 +1981,11 @@ namespace WaterTest
         m_deviceManager.reset();
     }
 
+    void PreparationPanel::setStationClient(std::shared_ptr<StationClient> stationClient)
+    {
+        m_stationClient = stationClient;
+    }
+
     void PreparationPanel::resizeEvent(QResizeEvent *event)
     {
         QWidget::resizeEvent(event);
@@ -2017,8 +2023,10 @@ namespace WaterTest
         // 点击设备图元弹出控制对话框：泵启停、阀门开关
         connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]()
                 {
-            if (!m_scene || !m_deviceManager)
+            if (!m_scene)
                 return;
+
+            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
 
             const auto selected = m_scene->selectedItems();
             if (selected.isEmpty())
@@ -2036,14 +2044,19 @@ namespace WaterTest
 
             if (devType == "pump")
             {
-                const auto pump = m_deviceManager->getPump(static_cast<uint16_t>(devId));
+                bool isRunning = false;
+                if (m_deviceManager)
+                {
+                    const auto pump = m_deviceManager->getPump(static_cast<uint16_t>(devId));
+                    isRunning = pump.isRunning;
+                }
                 QDialog dialog(this);
                 dialog.setWindowTitle("泵控制");
                 dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
                 auto *mainLayout = new QVBoxLayout(&dialog);
                 mainLayout->addWidget(new QLabel(QString("P%1 当前状态: %2")
                                                      .arg(devId)
-                                                     .arg(pump.isRunning ? "运行" : "停止"),
+                                                     .arg(isRunning ? "运行" : "停止"),
                                                  &dialog));
                 auto *btnRow = new QHBoxLayout();
                 auto *startBtn = new QPushButton("启动", &dialog);
@@ -2055,11 +2068,47 @@ namespace WaterTest
                 mainLayout->addLayout(btnRow);
 
                 connect(startBtn, &QPushButton::clicked, &dialog, [&, devId]() {
-                    m_deviceManager->controlPump(static_cast<uint16_t>(devId), true);
+                    bool ok = false;
+                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                    if (m_stationClient && strictMode)
+                    {
+                        ControlCommand cmd;
+                        cmd.command_type = 1;
+                        cmd.index = static_cast<uint8_t>(devId - 1);
+                        cmd.action = 1;
+                        ok = m_stationClient->sendCommand(cmd);
+                    }
+                    else if (m_deviceManager)
+                    {
+                        ok = m_deviceManager->controlPump(static_cast<uint16_t>(devId), true);
+                    }
+                    if (!ok)
+                    {
+                        QMessageBox::warning(this, "泵控制", "启动命令发送失败");
+                        return;
+                    }
                     dialog.accept();
                 });
                 connect(stopBtn, &QPushButton::clicked, &dialog, [&, devId]() {
-                    m_deviceManager->controlPump(static_cast<uint16_t>(devId), false);
+                    bool ok = false;
+                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                    if (m_stationClient && strictMode)
+                    {
+                        ControlCommand cmd;
+                        cmd.command_type = 1;
+                        cmd.index = static_cast<uint8_t>(devId - 1);
+                        cmd.action = 0;
+                        ok = m_stationClient->sendCommand(cmd);
+                    }
+                    else if (m_deviceManager)
+                    {
+                        ok = m_deviceManager->controlPump(static_cast<uint16_t>(devId), false);
+                    }
+                    if (!ok)
+                    {
+                        QMessageBox::warning(this, "泵控制", "停止命令发送失败");
+                        return;
+                    }
                     dialog.accept();
                 });
                 connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
@@ -2069,8 +2118,12 @@ namespace WaterTest
 
             if (devType == "valve")
             {
-                const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(devId));
-                const bool isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+                bool isOpen = false;
+                if (m_deviceManager)
+                {
+                    const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(devId));
+                    isOpen = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+                }
                 QDialog dialog(this);
                 dialog.setWindowTitle("阀门控制");
                 dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
@@ -2089,11 +2142,47 @@ namespace WaterTest
                 mainLayout->addLayout(btnRow);
 
                 connect(openBtn, &QPushButton::clicked, &dialog, [&, devId]() {
-                    m_deviceManager->controlValve(static_cast<uint16_t>(devId), true);
+                    bool ok = false;
+                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                    if (m_stationClient && strictMode)
+                    {
+                        ControlCommand cmd;
+                        cmd.command_type = 2;
+                        cmd.index = static_cast<uint8_t>(devId - 1);
+                        cmd.action = 1;
+                        ok = m_stationClient->sendCommand(cmd);
+                    }
+                    else if (m_deviceManager)
+                    {
+                        ok = m_deviceManager->controlValve(static_cast<uint16_t>(devId), true);
+                    }
+                    if (!ok)
+                    {
+                        QMessageBox::warning(this, "阀门控制", "开阀命令发送失败");
+                        return;
+                    }
                     dialog.accept();
                 });
                 connect(closeBtn, &QPushButton::clicked, &dialog, [&, devId]() {
-                    m_deviceManager->controlValve(static_cast<uint16_t>(devId), false);
+                    bool ok = false;
+                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                    if (m_stationClient && strictMode)
+                    {
+                        ControlCommand cmd;
+                        cmd.command_type = 2;
+                        cmd.index = static_cast<uint8_t>(devId - 1);
+                        cmd.action = 0;
+                        ok = m_stationClient->sendCommand(cmd);
+                    }
+                    else if (m_deviceManager)
+                    {
+                        ok = m_deviceManager->controlValve(static_cast<uint16_t>(devId), false);
+                    }
+                    if (!ok)
+                    {
+                        QMessageBox::warning(this, "阀门控制", "关阀命令发送失败");
+                        return;
+                    }
                     dialog.accept();
                 });
                 connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
@@ -2546,7 +2635,8 @@ namespace WaterTest
 
     void PreparationPanel::onReliefValveToggled(bool open)
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             if (m_reliefValveBtn)
             {
@@ -2572,7 +2662,21 @@ namespace WaterTest
             }
         }
 
-        if (!m_deviceManager->controlValve(11, open))
+        bool ok = false;
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 2;
+            cmd.index = 10; // valve11
+            cmd.action = open ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->controlValve(11, open);
+        }
+
+        if (!ok)
         {
             QMessageBox::warning(this, "泄压阀", open ? "打开泄压阀失败" : "关闭泄压阀失败");
             m_reliefValveBtn->blockSignals(true);
@@ -2882,6 +2986,10 @@ namespace WaterTest
 
     void PreparationPanel::updateRelayStates()
     {
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+            return;
+
         if (!m_deviceManager)
             return;
         if (!m_relay1Check || !m_relay2Check || !m_relay3Check)
@@ -2910,7 +3018,8 @@ namespace WaterTest
 
     void PreparationPanel::onStartFilling()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             QMessageBox::warning(this, "错误", "设备管理器未初始化");
             return;
@@ -2938,24 +3047,41 @@ namespace WaterTest
         m_isFilling = true;
         m_fillingTimeSeconds = 0;
 
-        // 启动变频泵（使用用户设置的频率）
-        if (!m_deviceManager->controlPump(1, true))
+        bool ok = true;
+        if (m_stationClient && strictRemoteMode)
         {
-            QMessageBox::warning(this, "错误", "启动变频泵失败");
-            m_isFilling = false;
-            return;
+            ControlCommand pumpCmd;
+            pumpCmd.command_type = 1;
+            pumpCmd.index = 0;
+            pumpCmd.action = 1;
+            ok = m_stationClient->sendCommand(pumpCmd);
+
+            ControlCommand valveCmd;
+            valveCmd.command_type = 2;
+            valveCmd.index = 0;
+            valveCmd.action = 1;
+            ok = ok && m_stationClient->sendCommand(valveCmd);
+        }
+        else
+        {
+            ok = m_deviceManager->controlPump(1, true);
+            if (ok)
+            {
+                if (!m_deviceManager->setPumpFrequency(1, m_pumpFrequency))
+                {
+                    QMessageBox::warning(this, "警告", "设置泵频率失败");
+                }
+                ok = m_deviceManager->controlValve(1, true);
+                if (!ok)
+                {
+                    m_deviceManager->controlPump(1, false);
+                }
+            }
         }
 
-        if (!m_deviceManager->setPumpFrequency(1, m_pumpFrequency))
+        if (!ok)
         {
-            QMessageBox::warning(this, "警告", "设置泵频率失败");
-        }
-
-        // 打开进水阀
-        if (!m_deviceManager->controlValve(1, true))
-        {
-            QMessageBox::warning(this, "错误", "打开进水阀失败");
-            m_deviceManager->controlPump(1, false);
+            QMessageBox::warning(this, "错误", "开始加水失败");
             m_isFilling = false;
             return;
         }
@@ -2983,7 +3109,8 @@ namespace WaterTest
 
     void PreparationPanel::onDrainWater()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             QMessageBox::warning(this, "错误", "设备管理器未初始化");
             return;
@@ -2998,11 +3125,35 @@ namespace WaterTest
 
         // 停止加水状态（避免冲突）
         m_isFilling = false;
-        m_deviceManager->controlValve(1, false);
-        m_deviceManager->controlPump(1, false);
+        bool ok = true;
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand closeInValve;
+            closeInValve.command_type = 2;
+            closeInValve.index = 0;
+            closeInValve.action = 0;
+            ok = m_stationClient->sendCommand(closeInValve);
 
-        // 打开出水阀
-        if (!m_deviceManager->controlValve(2, true))
+            ControlCommand stopPump;
+            stopPump.command_type = 1;
+            stopPump.index = 0;
+            stopPump.action = 0;
+            ok = ok && m_stationClient->sendCommand(stopPump);
+
+            ControlCommand openOutValve;
+            openOutValve.command_type = 2;
+            openOutValve.index = 1;
+            openOutValve.action = 1;
+            ok = ok && m_stationClient->sendCommand(openOutValve);
+        }
+        else
+        {
+            m_deviceManager->controlValve(1, false);
+            m_deviceManager->controlPump(1, false);
+            ok = m_deviceManager->controlValve(2, true);
+        }
+
+        if (!ok)
         {
             QMessageBox::warning(this, "错误", "打开出水阀失败");
             return;
@@ -3028,15 +3179,38 @@ namespace WaterTest
 
     void PreparationPanel::onStopAll()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
             return;
 
         m_isFilling = false;
 
-        // 关闭阀门与停止泵（仅停止准备区相关动作）
-        m_deviceManager->controlValve(1, false);
-        m_deviceManager->controlValve(2, false);
-        m_deviceManager->controlPump(1, false);
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand valve1;
+            valve1.command_type = 2;
+            valve1.index = 0;
+            valve1.action = 0;
+            (void)m_stationClient->sendCommand(valve1);
+
+            ControlCommand valve2;
+            valve2.command_type = 2;
+            valve2.index = 1;
+            valve2.action = 0;
+            (void)m_stationClient->sendCommand(valve2);
+
+            ControlCommand pump;
+            pump.command_type = 1;
+            pump.index = 0;
+            pump.action = 0;
+            (void)m_stationClient->sendCommand(pump);
+        }
+        else
+        {
+            m_deviceManager->controlValve(1, false);
+            m_deviceManager->controlValve(2, false);
+            m_deviceManager->controlPump(1, false);
+        }
 
         // 更新UI
         if (m_startFillingBtn)
@@ -3058,15 +3232,44 @@ namespace WaterTest
 
     void PreparationPanel::onEmergencyStop()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             return;
         }
 
         m_isFilling = false;
 
-        // 紧急停止
-        m_deviceManager->emergencyStop();
+        if (m_stationClient && strictRemoteMode)
+        {
+            for (int i = 0; i <= 2; ++i)
+            {
+                ControlCommand relayCmd;
+                relayCmd.command_type = 0;
+                relayCmd.index = static_cast<uint8_t>(i);
+                relayCmd.action = 0;
+                (void)m_stationClient->sendCommand(relayCmd);
+            }
+            ControlCommand pumpCmd;
+            pumpCmd.command_type = 1;
+            pumpCmd.index = 0;
+            pumpCmd.action = 0;
+            (void)m_stationClient->sendCommand(pumpCmd);
+            ControlCommand valve1;
+            valve1.command_type = 2;
+            valve1.index = 0;
+            valve1.action = 0;
+            (void)m_stationClient->sendCommand(valve1);
+            ControlCommand valve2;
+            valve2.command_type = 2;
+            valve2.index = 1;
+            valve2.action = 0;
+            (void)m_stationClient->sendCommand(valve2);
+        }
+        else
+        {
+            m_deviceManager->emergencyStop();
+        }
 
         // 更新UI
         m_startFillingBtn->setEnabled(true);
@@ -3106,13 +3309,26 @@ namespace WaterTest
 
     void PreparationPanel::onRelay1Toggled(bool on)
     {
-        if (!m_deviceManager)
-            return;
         if (!m_relay1Check)
             return;
-        if (!m_deviceManager->setRelay(0, on))
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        bool ok = false;
+        if (m_stationClient && strictRemoteMode)
         {
-            QMessageBox::warning(this, "错误", "操作Q0.0失败");
+            ControlCommand cmd;
+            cmd.command_type = 0;
+            cmd.index = 0;
+            cmd.action = on ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setRelay(0, on);
+        }
+
+        if (!ok)
+        {
+            QMessageBox::warning(this, "错误", "操作M100.0失败");
             m_relay1Check->blockSignals(true);
             m_relay1Check->setChecked(!on);
             m_relay1Check->blockSignals(false);
@@ -3121,11 +3337,24 @@ namespace WaterTest
 
     void PreparationPanel::onRelay2Toggled(bool on)
     {
-        if (!m_deviceManager)
-            return;
         if (!m_relay2Check)
             return;
-        if (!m_deviceManager->setRelay(1, on))
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        bool ok = false;
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 0;
+            cmd.index = 1;
+            cmd.action = on ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setRelay(1, on);
+        }
+
+        if (!ok)
         {
             QMessageBox::warning(this, "错误", "操作Q0.1失败");
             m_relay2Check->blockSignals(true);
@@ -3136,11 +3365,24 @@ namespace WaterTest
 
     void PreparationPanel::onRelay3Toggled(bool on)
     {
-        if (!m_deviceManager)
-            return;
         if (!m_relay3Check)
             return;
-        if (!m_deviceManager->setRelay(2, on))
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        bool ok = false;
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 0;
+            cmd.index = 2;
+            cmd.action = on ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setRelay(2, on);
+        }
+
+        if (!ok)
         {
             QMessageBox::warning(this, "错误", "操作Q0.2失败");
             m_relay3Check->blockSignals(true);

@@ -92,7 +92,7 @@ namespace WaterTest
 
     MainWindow::~MainWindow()
     {
-        // 先停UI定时器，避免析构期间继续触发槽函数
+        // 先停UI定时器，避免析构期间继续触发槽函�?
         if (m_plcStatusTimer)
             m_plcStatusTimer->stop();
         if (m_autoConnectTimer)
@@ -100,7 +100,7 @@ namespace WaterTest
         if (m_terminalStatusTimer)
             m_terminalStatusTimer->stop();
 
-        // 再停各页面刷新
+        // 再停各页面刷�?
         if (m_preparationPanel)
             m_preparationPanel->stopUpdate();
         if (m_monitorPanel)
@@ -153,7 +153,7 @@ namespace WaterTest
     void MainWindow::setTerminalServer(std::shared_ptr<TerminalServer> server)
     {
         m_terminalServer = server;
-        if (m_mode == WindowMode::TERMINAL_MODE)
+        if (m_terminalServer)
         {
             setupTerminalConnections();
         }
@@ -164,21 +164,64 @@ namespace WaterTest
         m_stationClient = client;
         if (m_mode == WindowMode::STATION_MODE && m_stationClient)
         {
+            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+
             connect(m_stationClient.get(), &StationClient::connected,
                     this, [this]()
                     {
+                        m_isConnected = true;
                         statusBar()->showMessage("已连接到主控台", 3000);
+                        setPlcStatusState("connected", "远程模式：数据来自主控台");
                     });
             connect(m_stationClient.get(), &StationClient::disconnected,
                     this, [this]()
                     {
+                        m_isConnected = false;
                         statusBar()->showMessage("与主控台连接已断开", 3000);
+                        setPlcStatusState("disconnected", "远程模式：等待主控台连接");
                     });
             connect(m_stationClient.get(), &StationClient::errorOccurred,
                     this, [this](const QString &error)
                     {
                         statusBar()->showMessage(QString("主控台通信错误: %1").arg(error), 5000);
                     });
+            connect(m_stationClient.get(), &StationClient::dataUpdated,
+                    this, &MainWindow::onDataReceived);
+
+            if (m_testPanel)
+            {
+                m_testPanel->setStationClient(m_stationClient);
+            }
+            if (m_preparationPanel)
+            {
+                m_preparationPanel->setStationClient(m_stationClient);
+            }
+            if (m_station1Panel)
+            {
+                m_station1Panel->setStationClient(m_stationClient);
+            }
+            if (m_autoTestPanel)
+            {
+                m_autoTestPanel->setStationClient(m_stationClient);
+            }
+
+            if (strictRemoteMode)
+            {
+                m_autoConnectEnabled = false;
+                if (m_autoConnectTimer)
+                    m_autoConnectTimer->stop();
+                if (m_connectBtn)
+                    m_connectBtn->setEnabled(false);
+                if (m_disconnectBtn)
+                    m_disconnectBtn->setEnabled(false);
+                if (m_connectAction)
+                    m_connectAction->setEnabled(false);
+                if (m_disconnectAction)
+                    m_disconnectAction->setEnabled(false);
+
+                setPlcStatusState(m_stationClient->isConnected() ? "connected" : "disconnected",
+                                  m_stationClient->isConnected() ? "远程模式：已连接主控台" : "远程模式：等待主控台连接");
+            }
         }
     }
 
@@ -214,13 +257,12 @@ namespace WaterTest
 
     void MainWindow::createTabWidgetStation()
     {
-        // 创建主容器
         auto *centralWidget = new QWidget(this);
         auto *mainLayout = new QVBoxLayout(centralWidget);
         mainLayout->setContentsMargins(0, 0, 0, 0);
         mainLayout->setSpacing(0);
 
-        // 创建顶部连接控制栏
+        // 创建顶部连接控制�?
         auto *topBar = new QWidget(this);
         topBar->setObjectName("topBar");
         auto *topBarLayout = new QHBoxLayout(topBar);
@@ -327,13 +369,13 @@ namespace WaterTest
             m_autoConnectEnabled = config.getBool("plc.auto_connect_on_start", false);
         }
 
-        // 启动 PLC 状态刷新与自动连接（仅 Station 模式）
+        // 启动 PLC 状态刷新与自动连接（仅 Station 模式�?
         startAutoConnect();
     }
 
     void MainWindow::createTabWidgetTerminal()
     {
-        // 创建主容器
+        // 创建主容�?
         auto *centralWidget = new QWidget(this);
         auto *mainLayout = new QVBoxLayout(centralWidget);
         mainLayout->setContentsMargins(0, 0, 0, 0);
@@ -498,7 +540,7 @@ namespace WaterTest
 
         fileMenu->addSeparator();
 
-        m_exitAction = fileMenu->addAction("退出(&X)");
+        m_exitAction = fileMenu->addAction("退�?&X)");
         m_exitAction->setShortcut(QKeySequence("Ctrl+Q"));
         connect(m_exitAction, &QAction::triggered, this, &QWidget::close);
 
@@ -534,20 +576,20 @@ namespace WaterTest
         auto *statusLayout = new QHBoxLayout();
         statusLayout->setContentsMargins(5, 2, 5, 2);
 
-        // 左侧：当前状态
-        auto *stateLabel = new QLabel("状态: 就绪");
+        // 左侧：当前状�?
+        auto *stateLabel = new QLabel("状�? 就绪");
         statusLayout->addWidget(stateLabel);
 
         statusLayout->addSpacing(20);
 
-        // 中间：采样统计
-        m_dataStatsLabel = new QLabel("采样: 0帧 | 丢包: 0%");
+        // 中间：采样统�?
+        m_dataStatsLabel = new QLabel("采样: 0�?| 丢包: 0%");
         m_dataStatsLabel->setStyleSheet("QLabel { color: #4CAF50; }");
         statusLayout->addWidget(m_dataStatsLabel);
 
         statusLayout->addStretch();
 
-        // 右侧：时间
+        // 右侧：时�?
         auto *timeLabel = new QLabel(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
         statusLayout->addWidget(timeLabel);
 
@@ -566,19 +608,51 @@ namespace WaterTest
 
     void MainWindow::onConnect()
     {
+        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
+        {
+            statusBar()->showMessage("远程模式已启用：操作台不允许本地连接PLC", 4000);
+            setPlcStatusState(m_stationClient->isConnected() ? "connected" : "disconnected",
+                              m_stationClient->isConnected() ? "远程模式：已连接主控台" : "远程模式：等待主控台连接");
+            return;
+        }
+
         m_autoConnectEnabled = true; // 用户主动点击“连接”后允许自动重试
         connectPlc(true);
     }
 
     void MainWindow::onDisconnect()
     {
-        // 用户手动断开：停止自动重连，避免“刚断开又自动连上”
+        // 用户手动断开：停止自动重连，避免“刚断开又自动连上�?
         m_autoConnectEnabled = false;
         disconnectPlc();
     }
 
     bool MainWindow::connectPlc(bool interactive)
     {
+        auto &config = ConfigManager::getInstance();
+        const bool strictRemoteMode = config.getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            const bool terminalConnected = m_stationClient->isConnected();
+            m_isConnected = terminalConnected;
+            m_diagVirtualConnected = false;
+
+            if (terminalConnected)
+            {
+                statusBar()->showMessage("远程模式：已连接主控台，数据由主控统一下发", 3000);
+                setPlcStatusState("connected", "远程模式：数据来自主控台");
+            }
+            else
+            {
+                if (interactive)
+                {
+                    statusBar()->showMessage("远程模式：请先连接主控台", 3000);
+                }
+                setPlcStatusState("disconnected", "远程模式：等待主控台连接");
+            }
+            return terminalConnected;
+        }
+
         if (m_isConnected)
         {
             if (m_diagVirtualConnected)
@@ -601,7 +675,6 @@ namespace WaterTest
             setupDeviceManager();
 
         // Load configuration
-        auto &config = ConfigManager::getInstance();
         if (!config.loadConfig("config/system.conf"))
         {
             config.setString("plc.ip", "192.168.33.1");
@@ -613,7 +686,6 @@ namespace WaterTest
         const bool skipPanelUpdates = config.getBool("diag.skip_panel_updates_on_connect", false);
         const bool skipPlcConnect = config.getBool("diag.skip_plc_connect_on_connect", (skipDataCollection && skipPanelUpdates));
         const bool enablePreparationPanelUpdate = config.getBool("ui.enable_preparation_live_update", false);
-        const bool enableTestPanelUpdate = config.getBool("ui.enable_test_live_update", false);
         const bool enableAutoTestPanelUpdate = config.getBool("ui.enable_auto_test_live_update", false);
 
         if (skipPlcConnect)
@@ -645,7 +717,7 @@ namespace WaterTest
         params.ipAddress = config.getString("plc.ip", "192.168.33.1");
         params.rack = config.getInt("plc.rack", 0);
         params.slot = config.getInt("plc.slot", 1);
-        params.timeout = interactive ? 5000 : 2000; // 自动连接时缩短阻塞时间
+        params.timeout = interactive ? 5000 : 2000; // 自动连接时缩短阻塞时�?
 
         statusBar()->showMessage("正在连接PLC: " + QString::fromStdString(params.ipAddress) + "...");
         setPlcStatusState("connecting", "PLC 正在连接...");
@@ -696,13 +768,13 @@ namespace WaterTest
             return false;
         }
 
-        // 初始化数据保存系统
+        // 初始化数据保存系�?
         if (!m_deviceManager->initializeDataLogging("deploy/logs"))
         {
             const QString errorMsg = "数据保存系统初始化失败";
             if (interactive)
                 QMessageBox::warning(this, "警告", errorMsg);
-            // 不中断连接流程，数据保存失败不影响系统运行
+            // 不中断连接流程，数据保存失败不影响系统运�?
         }
         else
         {
@@ -733,11 +805,10 @@ namespace WaterTest
             if (m_monitorPanel)
                 m_monitorPanel->startUpdate();
 
-            // 为提升连接稳定性，复杂页面默认不启动高频定时刷新；按需通过配置逐步打开。
+            // 为提升连接稳定性，复杂页面默认不启动高频定时刷新；按需通过配置逐步打开�?
             if (enablePreparationPanelUpdate && m_preparationPanel)
                 m_preparationPanel->startUpdate();
-            if (enableTestPanelUpdate && m_testPanel)
-                m_testPanel->startUpdate();
+            // 测试区实时刷新在代码层强制关闭，避免与站1控制链路冲突。
             if (enableAutoTestPanelUpdate && m_autoTestPanel)
                 m_autoTestPanel->startUpdate();
         }
@@ -765,6 +836,15 @@ namespace WaterTest
             return;
         }
 
+        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
+        {
+            m_stationClient->disconnectFromTerminal();
+            m_isConnected = false;
+            statusBar()->showMessage("已与主控台断开", 3000);
+            setPlcStatusState("disconnected", "远程模式：等待主控台连接");
+            return;
+        }
+
         m_diagVirtualConnected = false;
 
         if (m_mode == WindowMode::STATION_MODE)
@@ -781,7 +861,7 @@ namespace WaterTest
             {
                 m_deviceManager->stopDataCollection();
                 
-                // 关闭并刷新数据保存
+                // 关闭并刷新数据保�?
                 if (m_deviceManager->isDataLoggingEnabled())
                 {
                     m_deviceManager->setDataLoggingEnabled(false);
@@ -817,7 +897,7 @@ namespace WaterTest
 
     void MainWindow::startAutoConnect()
     {
-        // 状态刷新定时器：用于 UI 指示更贴近真实连接状态
+        // 状态刷新定时器：用�?UI 指示更贴近真实连接状�?
         if (!m_plcStatusTimer)
         {
             m_plcStatusTimer = new QTimer(this);
@@ -835,7 +915,7 @@ namespace WaterTest
             return;
         }
 
-        // 自动连接：启动后持续尝试，成功后自动停
+        // 自动连接：启动后持续尝试，成功后自动�?
         if (!m_autoConnectTimer)
         {
             m_autoConnectTimer = new QTimer(this);
@@ -843,7 +923,7 @@ namespace WaterTest
             connect(m_autoConnectTimer, &QTimer::timeout, this, &MainWindow::onAutoConnectTick);
         }
 
-        // 初始立即尝试一次（避免等 5 秒）
+        // 初始立即尝试一次（避免�?5 秒）
         QTimer::singleShot(300, this, &MainWindow::onAutoConnectTick);
         if (m_autoConnectEnabled && !m_isConnected && !m_autoConnectTimer->isActive())
             m_autoConnectTimer->start();
@@ -853,6 +933,21 @@ namespace WaterTest
     {
         if (m_mode != WindowMode::STATION_MODE)
             return;
+
+        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
+        {
+            if (m_stationClient->isConnected())
+            {
+                m_isConnected = true;
+                setPlcStatusState("connected", "远程模式：已连接主控台");
+            }
+            else
+            {
+                m_isConnected = false;
+                setPlcStatusState("disconnected", "远程模式：等待主控台连接");
+            }
+            return;
+        }
 
         if (!m_autoConnectEnabled)
         {
@@ -892,6 +987,15 @@ namespace WaterTest
     {
         if (m_mode != WindowMode::STATION_MODE)
             return;
+
+        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
+        {
+            const bool terminalConnected = m_stationClient->isConnected();
+            m_isConnected = terminalConnected;
+            setPlcStatusState(terminalConnected ? "connected" : "disconnected",
+                              terminalConnected ? "远程模式：数据来自主控台" : "远程模式：等待主控台连接");
+            return;
+        }
 
         if (m_diagVirtualConnected && m_isConnected)
         {
@@ -1013,7 +1117,7 @@ namespace WaterTest
     {
         if (m_plcStatusLabel)
         {
-            m_plcStatusLabel->setText("● PLC 断开");
+            m_plcStatusLabel->setText("�?PLC 断开");
             m_plcStatusLabel->setProperty("tone", "bad");
             m_plcStatusLabel->style()->unpolish(m_plcStatusLabel);
             m_plcStatusLabel->style()->polish(m_plcStatusLabel);
@@ -1038,7 +1142,7 @@ namespace WaterTest
         if (m_terminalServer && m_stationStatusLabel)
         {
             const int count = m_terminalServer->getConnectedStationCount();
-            m_stationStatusLabel->setText(QString("● Station %1/4").arg(count));
+            m_stationStatusLabel->setText(QString("�?Station %1/4").arg(count));
             m_stationStatusLabel->setProperty("tone", count > 0 ? "good" : "bad");
             m_stationStatusLabel->style()->unpolish(m_stationStatusLabel);
             m_stationStatusLabel->style()->polish(m_stationStatusLabel);
@@ -1051,7 +1155,7 @@ namespace WaterTest
         if (m_terminalServer && m_stationStatusLabel)
         {
             const int count = m_terminalServer->getConnectedStationCount();
-            m_stationStatusLabel->setText(QString("● Station %1/4").arg(count));
+            m_stationStatusLabel->setText(QString("�?Station %1/4").arg(count));
             m_stationStatusLabel->setProperty("tone", count > 0 ? "good" : "bad");
             m_stationStatusLabel->style()->unpolish(m_stationStatusLabel);
             m_stationStatusLabel->style()->polish(m_stationStatusLabel);

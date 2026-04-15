@@ -5,6 +5,7 @@
 
 #include "StationClient.h"
 #include <QHostAddress>
+#include <QDebug>
 #include <cstring>
 
 namespace WaterTest
@@ -23,6 +24,11 @@ namespace WaterTest
 
         m_heartbeatTimer = new QTimer(this);
         connect(m_heartbeatTimer, &QTimer::timeout, this, &StationClient::onHeartbeat);
+
+        m_reconnectTimer = new QTimer(this);
+        m_reconnectTimer->setSingleShot(false);
+        m_reconnectTimer->setInterval(5000); // retry every 5s
+        connect(m_reconnectTimer, &QTimer::timeout, this, &StationClient::onReconnectTimer);
     }
 
     StationClient::~StationClient()
@@ -39,6 +45,7 @@ namespace WaterTest
 
         m_terminalHost = host;
         m_terminalPort = port;
+        m_autoReconnect = true;
 
         m_socket->connectToHost(host, port);
         return m_socket->waitForConnected(3000);
@@ -46,6 +53,8 @@ namespace WaterTest
 
     void StationClient::disconnectFromTerminal()
     {
+        m_autoReconnect = false;
+        m_reconnectTimer->stop();
         m_heartbeatTimer->stop();
         if (m_socket && m_socket->state() == QTcpSocket::ConnectedState)
         {
@@ -62,20 +71,32 @@ namespace WaterTest
     {
         if (!isConnected())
         {
+            qWarning() << "[M100][StationClient] sendCommand failed: not connected"
+                       << "type=" << cmd.command_type
+                       << "index=" << cmd.index
+                       << "action=" << cmd.action;
             emit errorOccurred("Not connected to terminal");
             return false;
         }
+
+        qInfo() << "[M100][StationClient] sendCommand"
+                << "type=" << cmd.command_type
+                << "index=" << cmd.index
+                << "action=" << cmd.action;
 
         NetworkMessage msg(MessageType::COMMAND_REQUEST, m_stationId);
         msg.header().payload_length = sizeof(ControlCommand);
         msg.payload().resize(sizeof(ControlCommand));
         std::memcpy(msg.payload().data(), &cmd, sizeof(ControlCommand));
 
-        return sendMessage(msg);
+        const bool ok = sendMessage(msg);
+        qInfo() << "[M100][StationClient] sendCommand write result" << ok;
+        return ok;
     }
 
     void StationClient::onConnected()
     {
+        m_reconnectTimer->stop();
         // Send registration
         NetworkMessage msg(MessageType::STATION_REGISTER, m_stationId);
         StationRegister reg;
@@ -100,6 +121,10 @@ namespace WaterTest
     {
         m_heartbeatTimer->stop();
         emit disconnected();
+        if (m_autoReconnect && !m_terminalHost.isEmpty())
+        {
+            m_reconnectTimer->start();
+        }
     }
 
     void StationClient::onReadyRead()
@@ -188,6 +213,21 @@ namespace WaterTest
     uint16_t StationClient::getNextSequenceNumber()
     {
         return ++m_sequenceNumber;
+    }
+
+    void StationClient::onReconnectTimer()
+    {
+        if (isConnected())
+        {
+            m_reconnectTimer->stop();
+            return;
+        }
+        // Abort any pending connection before retrying
+        if (m_socket->state() != QTcpSocket::UnconnectedState)
+        {
+            m_socket->abort();
+        }
+        m_socket->connectToHost(m_terminalHost, m_terminalPort);
     }
 
 } // namespace WaterTest

@@ -138,14 +138,16 @@ namespace WaterTest
         valveLayout->setContentsMargins(4, 4, 4, 4);
         valveLayout->setSpacing(4);
 
-        m_valveTable = new QTableWidget(0, 4, this);
-        m_valveTable->setHorizontalHeaderLabels({"编号", "名称", "开度 (%)", "状态"});
+        m_valveTable = new QTableWidget(0, 6, this);
+        m_valveTable->setHorizontalHeaderLabels({"编号", "名称", "开度 (%)", "AO(raw)", "控制电流 (mA)", "状态"});
         m_valveTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_valveTable->horizontalHeader()->setMinimumSectionSize(70);
         m_valveTable->horizontalHeader()->setDefaultSectionSize(100);
         m_valveTable->setColumnWidth(1, 150);
+        m_valveTable->setColumnWidth(3, 90);
+        m_valveTable->setColumnWidth(4, 110);
         // 让“状态”列填充剩余空间
-        m_valveTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+        m_valveTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
         m_valveTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         m_valveTable->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
         m_valveTable->verticalHeader()->setVisible(false);
@@ -397,7 +399,27 @@ namespace WaterTest
             return;
 
         auto valves = m_deviceManager->getAllValves();
-        m_valveTable->setRowCount(valves.size());
+        auto regValves = m_deviceManager->getAllRegulatingValves();
+        m_valveTable->setRowCount(static_cast<int>(valves.size() + regValves.size()));
+
+        auto percentToAoRaw = [](float percent) -> int
+        {
+            if (percent < 0.0f)
+                percent = 0.0f;
+            else if (percent > 100.0f)
+                percent = 100.0f;
+            const double raw = 5530.0 + (27648.0 - 5530.0) * (static_cast<double>(percent) / 100.0);
+            return static_cast<int>(raw + 0.5);
+        };
+
+        auto percentToMilliAmp = [](float percent) -> double
+        {
+            if (percent < 0.0f)
+                percent = 0.0f;
+            else if (percent > 100.0f)
+                percent = 100.0f;
+            return 4.0 + 16.0 * (static_cast<double>(percent) / 100.0);
+        };
 
         for (size_t i = 0; i < valves.size(); ++i)
         {
@@ -406,6 +428,8 @@ namespace WaterTest
             m_valveTable->setItem(i, 0, new QTableWidgetItem(QString::number(valve.id)));
             m_valveTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(valve.name)));
             m_valveTable->setItem(i, 2, new QTableWidgetItem(QString::number(valve.openingDegree)));
+            m_valveTable->setItem(i, 3, new QTableWidgetItem("-"));
+            m_valveTable->setItem(i, 4, new QTableWidgetItem("-"));
 
             QString statusText;
             QColor bgColor(200, 200, 200);
@@ -442,7 +466,56 @@ namespace WaterTest
 
             auto *statusItem = new QTableWidgetItem(statusText);
             statusItem->setBackground(bgColor);
-            m_valveTable->setItem(i, 3, statusItem);
+            m_valveTable->setItem(i, 5, statusItem);
+        }
+
+        for (size_t i = 0; i < regValves.size(); ++i)
+        {
+            const auto &valve = regValves[i];
+            const int row = static_cast<int>(valves.size() + i);
+
+            const int aoRaw = percentToAoRaw(valve.openingSetpoint);
+            const double ma = percentToMilliAmp(valve.openingSetpoint);
+
+            m_valveTable->setItem(row, 0, new QTableWidgetItem(QString("R%1").arg(valve.id)));
+            m_valveTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(valve.name) + " (调压阀)"));
+            m_valveTable->setItem(row, 2, new QTableWidgetItem(QString("%1 / %2")
+                                                                .arg(QString::number(valve.openingSetpoint, 'f', 1))
+                                                                .arg(QString::number(valve.openingPercent, 'f', 1))));
+            m_valveTable->setItem(row, 3, new QTableWidgetItem(QString::number(aoRaw)));
+            m_valveTable->setItem(row, 4, new QTableWidgetItem(QString::number(ma, 'f', 2)));
+
+            QString statusText;
+            QColor bgColor(200, 200, 200);
+
+            if (valve.alarmActive || valve.deviceStatus == DeviceStatus::FAULT)
+            {
+                statusText = "故障";
+                bgColor = QColor(255, 100, 100);
+            }
+            else if (valve.status == ValveStatus::OPEN)
+            {
+                statusText = "开";
+                bgColor = QColor(100, 255, 100);
+            }
+            else if (valve.status == ValveStatus::CLOSED)
+            {
+                statusText = "关";
+                bgColor = QColor(200, 200, 200);
+            }
+            else if (valve.status == ValveStatus::OPENING || valve.status == ValveStatus::CLOSING)
+            {
+                statusText = "动作中";
+                bgColor = QColor(255, 255, 100);
+            }
+            else
+            {
+                statusText = "未知";
+            }
+
+            auto *statusItem = new QTableWidgetItem(statusText);
+            statusItem->setBackground(bgColor);
+            m_valveTable->setItem(row, 5, statusItem);
         }
     }
 

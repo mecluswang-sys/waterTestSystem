@@ -1,0 +1,37 @@
+graph LR
+    %% 样式
+    classDef plc fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef dq fill:#cfe8ff,stroke:#333,stroke-width:2px;
+    classDef sol fill:#dff5df,stroke:#333,stroke-width:2px;
+
+    %% 结构1：PLC 24V输出（红黑两根线）
+    subgraph PLC24V[PLC24V输出（红黑两根线）]
+        PLC24_R["+24V（红线）"]
+        PLC24_B["0V/M（黑线）"]
+    end
+    class PLC24V plc;
+
+    %% 结构2：PLC DQ（L 和 Q0.0 两根线）
+    subgraph PLCDQ[PLCDQ（L 和 Q0.0 两根线）]
+        L_TERM["L 端子"]
+        Q00_TERM["Q0.0 端子"]
+        L_TERM -.->|内部继电器触点| Q00_TERM
+    end
+    class PLCDQ dq;
+
+    %% 结构3：电磁阀 DC24V（红白两根线）
+    subgraph SOL[电磁阀DC24V（红白两根线）]
+        SOL_R["线圈+（红线）"]
+        SOL_W["线圈-（白线）"]
+    end
+    class SOL sol;
+
+    %% 外部接线关系
+    PLC24_R -->|红线| L_TERM
+    Q00_TERM -->|红线| SOL_R
+    SOL_W -->|白线| PLC24_B
+
+    %% 颜色标注
+    linkStyle 1 stroke:#d32f2f,stroke-width:3px,fill:none;
+    linkStyle 2 stroke:#d32f2f,stroke-width:3px,fill:none;
+    linkStyle 3 stroke:#9e9e9e,stroke-width:3px,fill:none;

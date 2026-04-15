@@ -19,13 +19,18 @@
 #include <iostream>
 #include <ctime>
 #include <sstream>
+#include <algorithm>
+#include <mutex>
 
 using namespace WaterTest;
 
 static std::ofstream g_crashLog;
+static std::ofstream g_runtimeLog;
+static std::mutex g_logMutex;
 
 static void writeCrashLog(const char *msg)
 {
+    std::lock_guard<std::mutex> lock(g_logMutex);
     if (!g_crashLog.is_open())
     {
         QDir().mkpath("deploy/logs");
@@ -40,6 +45,25 @@ static void writeCrashLog(const char *msg)
         g_crashLog.flush();
     }
     std::cerr << msg << std::endl;
+}
+
+static void writeRuntimeLog(const char *msg)
+{
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    if (!g_runtimeLog.is_open())
+    {
+        QDir().mkpath("deploy/logs");
+        g_runtimeLog.open("deploy/logs/runtime.log", std::ios::app);
+    }
+    if (g_runtimeLog.is_open())
+    {
+        std::time_t t = std::time(nullptr);
+        char buf[32]{};
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+        g_runtimeLog << "[" << buf << "] " << msg << std::endl;
+        g_runtimeLog.flush();
+    }
+    std::cout << msg << std::endl;
 }
 
 static void terminateHandler()
@@ -68,10 +92,21 @@ static void qtMessageHandler(QtMsgType type, const QMessageLogContext &, const Q
     const std::string s = msg.toStdString();
     switch (type)
     {
+    case QtDebugMsg:
+        writeRuntimeLog((std::string("[Qt DEBUG] ") + s).c_str());
+        break;
+    case QtInfoMsg:
+        writeRuntimeLog((std::string("[Qt INFO] ") + s).c_str());
+        break;
+    case QtWarningMsg:
+        writeRuntimeLog((std::string("[Qt WARN] ") + s).c_str());
+        break;
     case QtFatalMsg:
+        writeRuntimeLog((std::string("[Qt FATAL] ") + s).c_str());
         writeCrashLog((std::string("[Qt FATAL] ") + s).c_str());
         std::abort();
     case QtCriticalMsg:
+        writeRuntimeLog((std::string("[Qt CRITICAL] ") + s).c_str());
         writeCrashLog((std::string("[Qt CRITICAL] ") + s).c_str());
         break;
     default:
@@ -102,8 +137,8 @@ int main(int argc, char *argv[])
 
     // Mode option
     QCommandLineOption modeOption(QStringList() << "m" << "mode",
-                                  "Running mode: 'terminal' or 'station' (default: station)",
-                                  "mode", "station");
+                                      "Running mode: 'terminal' or 'station' (default: terminal)",
+                                  "mode", "terminal");
     parser.addOption(modeOption);
 
     // Station ID (for station mode)
@@ -137,30 +172,86 @@ int main(int argc, char *argv[])
 
     if (mode == "terminal")
     {
-        // ========== TERMINAL MODE ==========
-        qInfo() << "Starting Water Test System in TERMINAL mode...";
+        // ========== TERMINAL MODE (PC: GUI + PLC + TerminalServer) ==========
+        qInfo() << "Starting Water Test System in TERMINAL mode (GUI + TerminalServer)...";
 
         try
         {
-            auto deviceManager = std::make_shared<DeviceManager>();
-            auto server = std::make_unique<TerminalServer>(deviceManager);
+            MainWindow mainWindow;
+            mainWindow.setWindowTitle("水介质电磁阀测试系统 - 主控台");
+
+            auto deviceManager = mainWindow.getDeviceManager();
+            auto server = std::make_shared<TerminalServer>(deviceManager);
 
             int port = parser.value(portOption).toInt();
             if (!server->startServer(port))
             {
-                qWarning() << "Failed to start Terminal Server on port" << port;
-                return 1;
+                qWarning() << "[Terminal] Warning: TerminalServer failed to start on port" << port
+                           << "- running without Station tablet support";
+            }
+            else
+            {
+                qInfo() << "[Terminal] TerminalServer listening on port" << port;
             }
 
-            qInfo() << "Terminal Server started successfully on port" << port;
-            qInfo() << "Waiting for Station connections...";
+            auto *serverPtr = server.get();
+            QObject::connect(serverPtr, &TerminalServer::commandReceived, &app,
+                             [deviceManager, serverPtr](uint8_t stationId, const ControlCommand &cmd)
+                             {
+                                 qInfo() << "[M100][Terminal] commandReceived"
+                                         << "station=" << stationId
+                                         << "type=" << cmd.command_type
+                                         << "index=" << cmd.index
+                                         << "action=" << cmd.action;
 
-            // Keep the application running
+                                 bool ok = false;
+                                 switch (cmd.command_type)
+                                 {
+                                 case 0:
+                                     ok = deviceManager->setRelay(cmd.index, cmd.action != 0);
+                                     break;
+                                 case 1:
+                                     ok = deviceManager->controlPump(static_cast<uint16_t>(cmd.index) + 1, cmd.action != 0);
+                                     break;
+                                 case 2:
+                                     ok = deviceManager->controlValve(static_cast<uint16_t>(cmd.index) + 1, cmd.action != 0);
+                                     break;
+                                 default:
+                                     break;
+                                 }
+
+                                 qInfo() << "[M100][Terminal] command dispatch result"
+                                         << "station=" << stationId
+                                         << "type=" << cmd.command_type
+                                         << "index=" << cmd.index
+                                         << "ok=" << ok;
+
+                                 if (!ok)
+                                 {
+                                     qWarning() << "[Terminal] Command failed. station=" << stationId
+                                                << "type=" << cmd.command_type << "idx=" << cmd.index;
+                                 }
+                                 if (stationId != 0)
+                                 {
+                                     serverPtr->sendCommandToStation(stationId, cmd);
+                                 }
+                             });
+
+            mainWindow.setTerminalServer(server);
+
+            QObject::connect(&app, &QCoreApplication::aboutToQuit, &app,
+                             [deviceManager]()
+                             {
+                                 deviceManager->stopDataCollection();
+                             });
+
+            mainWindow.showMaximized();
+            qInfo() << "[Terminal] GUI ready. PC should connect PLC via UI connect/auto-connect.";
             return app.exec();
         }
         catch (const std::exception &e)
         {
-            qCritical() << "Terminal Server error:" << QString::fromStdString(e.what());
+            qCritical() << "Terminal mode error:" << QString::fromStdString(e.what());
             return 1;
         }
     }
@@ -201,7 +292,7 @@ int main(int argc, char *argv[])
         if (!stationClient->connectToTerminal(host, port))
         {
             qWarning() << "Station failed to connect to Terminal server" << host << port;
-            qWarning() << "The UI will keep running in standalone mode.";
+            qWarning() << "The UI will keep running in local offline mode.";
         }
 
         mainWindow.showMaximized();

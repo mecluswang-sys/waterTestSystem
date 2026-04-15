@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <QtSerialPort/QSerialPort>
 #include <QByteArray>
+#include <QDebug>
 
 namespace WaterTest
 {
@@ -416,7 +417,7 @@ namespace WaterTest
 
         // 温度传感器：由 initialize() 根据配置重建
 
-        // 电动调压阀：2个，并初始化 PID / AO / AI 默认地址
+        // 电动调压阀：默认2个，并初始化 PID / AO / AI 默认地址
         // 接线图 AOX SRCU1TA:
         //   AO 命令  → 端子 10-11 (4-20mA)  : 默认 QW80(阀1) / QW82(阀2)
         //   AI 反馈  ← 端子 16-17 (4-20mA)  : 默认 IW96(阀1) / IW98(阀2)
@@ -497,9 +498,39 @@ namespace WaterTest
             }
 
             // 从配置文件加载调节阀 AO/AI/DI 地址（支持现场灵活配置）
-            for (int i = 1; i <= 2; ++i)
+            // 数量由 valve.count 控制，默认2，范围[1, 8]
+            int valveCount = cfg.getInt("valve.count", 2);
+            if (valveCount < 1)
+                valveCount = 1;
+            else if (valveCount > 8)
+                valveCount = 8;
+
+            m_regulatingValves.clear();
+            m_valvePIDs.clear();
+            m_valveAoByteOffset.clear();
+            m_valveAiByteOffset.clear();
+            m_valveOpenLimitByte.clear();
+            m_valveOpenLimitBit.clear();
+            m_valveCloseLimitByte.clear();
+            m_valveCloseLimitBit.clear();
+            m_valveAlarmByte.clear();
+            m_valveAlarmBit.clear();
+            m_valvePressureAiByteOffset.clear();
+            m_valvePressureRangeMin.clear();
+            m_valvePressureRangeMax.clear();
+
+            for (int i = 1; i <= valveCount; ++i)
             {
                 const std::string pfx = "valve." + std::to_string(i) + ".";
+
+                RegulatingValve regValve;
+                regValve.id = static_cast<uint16_t>(i);
+                regValve.name = "调节阀" + std::to_string(i);
+                m_regulatingValves[i] = regValve;
+
+                m_valvePIDs.emplace(static_cast<uint16_t>(i),
+                                    PIDController(0.5, 0.01, 0.1, 0.0, 100.0, 1000.0));
+
                 const int aoDefault = 80 + (i - 1) * 2;
                 const int aiDefault = 96 + (i - 1) * 2;
                 m_valveAoByteOffset[i] = cfg.getInt(pfx + "ao.byte_offset", aoDefault);
@@ -898,10 +929,31 @@ namespace WaterTest
     {
         if (!m_plcClient || !m_plcClient->isConnected())
         {
+            qWarning() << "[M100][DeviceManager] setRelay failed: plc not connected" << "index=" << index << "on=" << on;
             return false;
         }
 
-        // 支持 Q0.0-Q1.7（index 0-15）：byteOffset = index/8，bit = index%8
+        // 特殊映射：index=0（电磁阀1）改为控制 M100.0
+        if (index == 0)
+        {
+            auto res = m_plcClient->writeMerkerBool(100, 0, on);
+            if (res == S7PLCClient::Result::SUCCESS)
+            {
+                qInfo() << "[M100][DeviceManager] setRelay index0 -> M100.0"
+                        << "on=" << on
+                        << "result=" << static_cast<int>(res);
+            }
+            else
+            {
+                qWarning() << "[M100][DeviceManager] setRelay index0 -> M100.0 failed"
+                           << "on=" << on
+                           << "result=" << static_cast<int>(res)
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
+            return res == S7PLCClient::Result::SUCCESS;
+        }
+
+        // 其余 index 支持 Q0.1-Q1.7（index 1-15）：byteOffset = index/8，bit = index%8
         if (index > 15)
         {
             return false;
@@ -910,6 +962,23 @@ namespace WaterTest
         const int byteOff = static_cast<int>(index) / 8;
         const int bit     = static_cast<int>(index) % 8;
         auto res = m_plcClient->writeOutputBool(byteOff, bit, on);
+        if (res == S7PLCClient::Result::SUCCESS)
+        {
+            qInfo() << "[M100][DeviceManager] setRelay Q path"
+                << "index=" << index
+                << "addr=" << QString("Q%1.%2").arg(byteOff).arg(bit)
+                << "on=" << on
+                << "result=" << static_cast<int>(res);
+        }
+        else
+        {
+            qWarning() << "[M100][DeviceManager] setRelay Q path failed"
+                   << "index=" << index
+                   << "addr=" << QString("Q%1.%2").arg(byteOff).arg(bit)
+                   << "on=" << on
+                   << "result=" << static_cast<int>(res)
+                   << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+        }
         return res == S7PLCClient::Result::SUCCESS;
     }
 
@@ -917,10 +986,30 @@ namespace WaterTest
     {
         if (!m_plcClient || !m_plcClient->isConnected())
         {
+            qWarning() << "[M100][DeviceManager] getRelayState failed: plc not connected" << "index=" << index;
             return false;
         }
 
-        // 支持 Q0.0-Q1.7（index 0-15）
+        // 特殊映射：index=0（电磁阀1）状态读取 M100.0
+        if (index == 0)
+        {
+            bool value = false;
+            auto res = m_plcClient->readMerkerBool(100, 0, value);
+            if (res == S7PLCClient::Result::SUCCESS)
+            {
+                on = value;
+                qInfo() << "[M100][DeviceManager] getRelayState index0 <- M100.0"
+                        << "on=" << on
+                        << "result=" << static_cast<int>(res);
+                return true;
+            }
+            qWarning() << "[M100][DeviceManager] getRelayState M100.0 failed"
+                       << "result=" << static_cast<int>(res)
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            return false;
+        }
+
+        // 其余 index 支持 Q0.1-Q1.7（index 1-15）
         if (index > 15)
         {
             return false;
@@ -933,8 +1022,17 @@ namespace WaterTest
         if (res == S7PLCClient::Result::SUCCESS)
         {
             on = value;
+            qInfo() << "[M100][DeviceManager] getRelayState Q path"
+                    << "index=" << index
+                    << "addr=" << QString("Q%1.%2").arg(byteOff).arg(bit)
+                    << "on=" << on;
             return true;
         }
+        qWarning() << "[M100][DeviceManager] getRelayState Q path failed"
+                   << "index=" << index
+                   << "addr=" << QString("Q%1.%2").arg(byteOff).arg(bit)
+                   << "result=" << static_cast<int>(res)
+                   << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
         return false;
     }
 

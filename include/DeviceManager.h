@@ -165,7 +165,7 @@ namespace WaterTest
         // ======== 电动调压阀相关 ========
         /**
          * @brief 设置调压阀控制模式
-         * @param id           调压阀ID (1-2)
+         * @param id           调压阀ID (1..N，N由 valve.count 配置)
          * @param mode         开环 / 闭环压力模式
          * @return 是否成功
          */
@@ -173,7 +173,7 @@ namespace WaterTest
 
         /**
          * @brief 开环模式：直接设定阀门开度，写入 AO (端子10-11, 4-20mA)
-         * @param id      调压阀ID (1-2)
+         * @param id      调压阀ID (1..N，N由 valve.count 配置)
          * @param percent 开度百分比 (0-100%)
          * @return 是否成功
          */
@@ -181,7 +181,7 @@ namespace WaterTest
 
         /**
          * @brief 闭环模式：设置目标压力，由 PID 自动调节开度
-         * @param id       调压阀ID (1-2)
+         * @param id       调压阀ID (1..N，N由 valve.count 配置)
          * @param pressure 目标压力 (kPa)
          * @return 是否成功
          */
@@ -209,18 +209,22 @@ namespace WaterTest
          */
         std::vector<RegulatingValve> getAllRegulatingValves() const;
 
-        // ======== 继电器/输出控制(Q区) ========
+        // ======== 继电器/输出控制（含特殊映射） ========
         /**
-         * @brief 控制继电器（DQ输出）通断，支持 Q0.0-Q1.7
-         * @param index 线性索引：0-7 → Q0.0-Q0.7，8-15 → Q1.0-Q1.7
+         * @brief 控制继电器（DQ输出）通断
+         * @param index 线性索引：
+         *   - 0 特殊映射到 M100.0（电磁阀1）
+         *   - 1-15 对应 Q0.1-Q1.7
          * @param on true=闭合(通/得电), false=断开(失电)
          * @return 是否成功
          */
         bool setRelay(uint8_t index, bool on);
 
         /**
-         * @brief 读取继电器（DQ输出）当前状态，支持 Q0.0-Q1.7
-         * @param index 线性索引：0-7 → Q0.0-Q0.7，8-15 → Q1.0-Q1.7
+         * @brief 读取继电器（DQ输出）当前状态
+         * @param index 线性索引：
+         *   - 0 特殊映射到 M100.0（电磁阀1）
+         *   - 1-15 对应 Q0.1-Q1.7
          * @param on 输出参数，读取到的状态（true=通/得电）
          * @return 是否读取成功
          */

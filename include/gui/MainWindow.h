@@ -55,6 +55,7 @@ namespace WaterTest
         void setWindowMode(WindowMode mode);
         void setTerminalServer(std::shared_ptr<TerminalServer> server);
         void setStationClient(std::shared_ptr<StationClient> client);
+            std::shared_ptr<DeviceManager> getDeviceManager() const { return m_deviceManager; }
 
     protected:
         void closeEvent(QCloseEvent *event) override;

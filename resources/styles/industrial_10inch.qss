@@ -115,6 +115,42 @@ QPushButton:disabled {
     border-color: #1d2a3b;
 }
 
+/* DQ relay buttons — off state */
+QPushButton[dqOn="false"] {
+    background-color: #0f1a2a;
+    border-color: #2a3a4f;
+    color: #8b949e;
+}
+QPushButton[dqOn="false"]:hover {
+    background-color: #152238;
+    border-color: #355173;
+    color: #c9d1d9;
+}
+
+/* DQ relay buttons — on state (valve: green) */
+QPushButton[dqOn="true"] {
+    background-color: #0d2b1a;
+    border: 2px solid #2ea043;
+    color: #3fb950;
+}
+QPushButton[dqOn="true"]:hover {
+    background-color: #10361e;
+    border-color: #3fb950;
+    color: #56d364;
+}
+
+/* DQ relay buttons — on state (pump: amber) */
+QPushButton[dqOn="true"][tone="warn"] {
+    background-color: #2b2000;
+    border: 2px solid #d29922;
+    color: #e3b341;
+}
+QPushButton[dqOn="true"][tone="warn"]:hover {
+    background-color: #352800;
+    border-color: #e3b341;
+    color: #f0c84a;
+}
+
 /* Accent buttons via objectName */
 QPushButton#connectButton {
     background-color: #2ea043;

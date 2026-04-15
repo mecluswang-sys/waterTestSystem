@@ -25,6 +25,7 @@
 namespace WaterTest
 {
     class DeviceManager;
+    class StationClient;
 
     // 供电类型
     enum class PowerType
@@ -66,6 +67,9 @@ namespace WaterTest
         explicit AutoTestPanel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent = nullptr);
         ~AutoTestPanel();
 
+        // 为操作台远程模式注入主控客户端
+        void setStationClient(std::shared_ptr<StationClient> stationClient);
+
         // 启动/停止更新
         void startUpdate(int intervalMs = 1000);
         void stopUpdate();
@@ -90,6 +94,7 @@ namespace WaterTest
 
         // 设备管理器
         std::shared_ptr<DeviceManager> m_deviceManager;
+        std::shared_ptr<StationClient> m_stationClient;
 
         // 更新定时器
         QTimer *m_updateTimer;

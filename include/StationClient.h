@@ -57,6 +57,7 @@ namespace WaterTest
         void onReadyRead();
         void onError();
         void onHeartbeat();
+        void onReconnectTimer();
 
     private:
         uint8_t m_stationId;
@@ -65,6 +66,8 @@ namespace WaterTest
         QString m_terminalHost;
         int m_terminalPort = 5555;
         QTimer *m_heartbeatTimer = nullptr;
+        QTimer *m_reconnectTimer = nullptr;
+        bool m_autoReconnect = false;
         SensorData m_latestData{};
         uint16_t m_sequenceNumber = 0;
 

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <sstream>
 #include <iomanip>
+#include <QDebug>
 
 namespace WaterTest
 {
@@ -305,6 +306,91 @@ namespace WaterTest
         else
         {
             updateLastError(resWrite);
+            return Result::WRITE_ERROR;
+        }
+    }
+
+    S7PLCClient::Result S7PLCClient::readMerkerBool(int byteOffset, int bit, bool &value)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
+        if (!m_connected)
+        {
+            return Result::CONNECTION_ERROR;
+        }
+
+        uint8_t buffer = 0;
+        // 读取 M 区（Merker）：S7AreaMK，DBNumber忽略，用字节长度
+        int result = Cli_ReadArea(m_client, S7AreaMK, 0, byteOffset, 1, S7WLByte, &buffer);
+        if (result == 0)
+        {
+            value = (buffer & (1 << bit)) != 0;
+            qInfo() << "[M100][S7] readMerkerBool"
+                    << "M" << byteOffset << "." << bit
+                    << "value=" << value;
+            return Result::SUCCESS;
+        }
+        else
+        {
+            updateLastError(result);
+            qWarning() << "[M100][S7] readMerkerBool failed"
+                       << "M" << byteOffset << "." << bit
+                       << "snap7=" << result
+                       << "lastError=" << QString::fromStdString(m_lastError);
+            return Result::READ_ERROR;
+        }
+    }
+
+    S7PLCClient::Result S7PLCClient::writeMerkerBool(int byteOffset, int bit, bool value)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (!m_client)
+        {
+            m_lastError = "Snap7 client handle is null";
+            return Result::CONNECTION_ERROR;
+        }
+
+        if (!m_connected)
+        {
+            return Result::CONNECTION_ERROR;
+        }
+
+        uint8_t buffer = 0;
+        int resRead = Cli_ReadArea(m_client, S7AreaMK, 0, byteOffset, 1, S7WLByte, &buffer);
+        if (resRead != 0)
+        {
+            updateLastError(resRead);
+            return Result::READ_ERROR;
+        }
+
+        if (value)
+            buffer |= (1 << bit);
+        else
+            buffer &= ~(1 << bit);
+
+        int resWrite = Cli_WriteArea(m_client, S7AreaMK, 0, byteOffset, 1, S7WLByte, &buffer);
+        if (resWrite == 0)
+        {
+            qInfo() << "[M100][S7] writeMerkerBool"
+                    << "M" << byteOffset << "." << bit
+                    << "value=" << value;
+            return Result::SUCCESS;
+        }
+        else
+        {
+            updateLastError(resWrite);
+            qWarning() << "[M100][S7] writeMerkerBool failed"
+                       << "M" << byteOffset << "." << bit
+                       << "value=" << value
+                       << "snap7=" << resWrite
+                       << "lastError=" << QString::fromStdString(m_lastError);
             return Result::WRITE_ERROR;
         }
     }

@@ -139,6 +139,40 @@ QPushButton:disabled {
     border-color: #123540;
 }
 
+/* DQ relay button — off state (dim, overrides tone) */
+QPushButton[dqOn="false"] {
+    background-color: #081a20;
+    border-color: #123540;
+    color: #6b8a90;
+}
+QPushButton[dqOn="false"]:hover {
+    background-color: #0f2b38;
+    border-color: #2a6071;
+    color: #9ab8bf;
+}
+/* DQ relay button — on state: valve (teal-green) */
+QPushButton[dqOn="true"] {
+    background-color: #082f22;
+    border: 2px solid #1d8f6f;
+    color: #25a680;
+}
+QPushButton[dqOn="true"]:hover {
+    background-color: #0d3f2f;
+    border-color: #25a680;
+    color: #30c99a;
+}
+/* DQ relay button — on state: pump (amber) */
+QPushButton[dqOn="true"][tone="warn"] {
+    background-color: #271800;
+    border: 2px solid #c4901a;
+    color: #e0aa2a;
+}
+QPushButton[dqOn="true"][tone="warn"]:hover {
+    background-color: #311f00;
+    border-color: #e0aa2a;
+    color: #f0c840;
+}
+
 /* Semantic tone buttons */
 QPushButton[tone="good"] { background-color: #1d8f6f; border-color: #1d8f6f; color: #ffffff; }
 QPushButton[tone="good"]:hover { background-color: #25a680; border-color: #25a680; }

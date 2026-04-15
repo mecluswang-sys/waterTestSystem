@@ -5,6 +5,8 @@
 
 #include "gui/AutoTestPanel.h"
 #include "DeviceManager.h"
+#include "StationClient.h"
+#include "ConfigManager.h"
 #include <QMessageBox>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -16,12 +18,17 @@ namespace WaterTest
 {
 
     AutoTestPanel::AutoTestPanel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent)
-        : QWidget(parent), m_deviceManager(deviceManager), m_updateTimer(nullptr), m_testValveOpen(false), m_currentPowerType(PowerType::DC), m_testValveVoltage(0.0f), m_testType(TestType::BY_COUNT), m_isAutoTesting(false), m_currentConditionIndex(0), m_currentCycleCount(0), m_autoTestElapsedSeconds(0)
+        : QWidget(parent), m_deviceManager(deviceManager), m_stationClient(nullptr), m_updateTimer(nullptr), m_testValveOpen(false), m_currentPowerType(PowerType::DC), m_testValveVoltage(0.0f), m_testType(TestType::BY_COUNT), m_isAutoTesting(false), m_currentConditionIndex(0), m_currentCycleCount(0), m_autoTestElapsedSeconds(0)
     {
         setupUI();
 
         m_updateTimer = new QTimer(this);
         connect(m_updateTimer, &QTimer::timeout, this, &AutoTestPanel::onUpdateData);
+    }
+
+    void AutoTestPanel::setStationClient(std::shared_ptr<StationClient> stationClient)
+    {
+        m_stationClient = stationClient;
     }
 
     AutoTestPanel::~AutoTestPanel()
@@ -271,7 +278,8 @@ namespace WaterTest
 
     void AutoTestPanel::onTestValveOpen()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             QMessageBox::warning(this, "错误", "设备管理器未初始化");
             return;
@@ -290,6 +298,21 @@ namespace WaterTest
         m_testValveOpen = true;
         m_testValveVoltage = static_cast<float>(m_testValveVoltageSpinBox->value());
 
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 2; // valve
+            cmd.index = 2;        // 待测试阀（阀3）
+            cmd.action = 1;
+            if (!m_stationClient->sendCommand(cmd))
+            {
+                QMessageBox::warning(this, "错误", "发送开阀命令失败（主控通信异常）");
+                m_testValveOpen = false;
+                m_testValveVoltage = 0.0f;
+                return;
+            }
+        }
+
         // 更新UI
         m_testValveStatusLabel->setText(QString("已开启 (%1 V)").arg(m_testValveVoltage, 0, 'f', 1));
         m_testValveStatusLabel->setProperty("tone", "good");
@@ -305,9 +328,23 @@ namespace WaterTest
 
     void AutoTestPanel::onTestValveClose()
     {
-        if (!m_deviceManager)
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager && !(m_stationClient && strictRemoteMode))
         {
             return;
+        }
+
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 2; // valve
+            cmd.index = 2;        // 待测试阀（阀3）
+            cmd.action = 0;
+            if (!m_stationClient->sendCommand(cmd))
+            {
+                QMessageBox::warning(this, "错误", "发送关阀命令失败（主控通信异常）");
+                return;
+            }
         }
 
         m_testValveOpen = false;
@@ -653,6 +690,23 @@ namespace WaterTest
         // 打开待测试阀
         if (!m_testValveOpen)
         {
+            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+            if (m_stationClient && strictRemoteMode)
+            {
+                ControlCommand cmd;
+                cmd.command_type = 2; // valve
+                cmd.index = 2;        // 待测试阀（阀3）
+                cmd.action = 1;
+                if (!m_stationClient->sendCommand(cmd))
+                {
+                    m_autoTestProgressLabel->setText("主控通信异常：待测阀开启失败");
+                    m_autoTestProgressLabel->setProperty("tone", "bad");
+                    m_autoTestProgressLabel->style()->unpolish(m_autoTestProgressLabel);
+                    m_autoTestProgressLabel->style()->polish(m_autoTestProgressLabel);
+                    return;
+                }
+            }
+
             m_testValveOpen = true;
             m_testValveVoltage = condition.valveVoltage;
             m_testValveStatusLabel->setText(QString("已开启 (%1 V)").arg(m_testValveVoltage, 0, 'f', 1));
