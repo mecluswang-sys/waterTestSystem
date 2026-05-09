@@ -933,19 +933,23 @@ namespace WaterTest
             return false;
         }
 
-        // 特殊映射：index=0（电磁阀1）改为控制 M100.0
-        if (index == 0)
+        // 特殊映射：index=0~3 改为控制 M100.0~M100.3
+        if (index <= 3)
         {
-            auto res = m_plcClient->writeMerkerBool(100, 0, on);
+            auto res = m_plcClient->writeMerkerBool(100, static_cast<int>(index), on);
             if (res == S7PLCClient::Result::SUCCESS)
             {
-                qInfo() << "[M100][DeviceManager] setRelay index0 -> M100.0"
+                qInfo() << "[M100][DeviceManager] setRelay M100 path"
+                        << "index=" << index
+                        << "addr=" << QString("M100.%1").arg(index)
                         << "on=" << on
                         << "result=" << static_cast<int>(res);
             }
             else
             {
-                qWarning() << "[M100][DeviceManager] setRelay index0 -> M100.0 failed"
+                qWarning() << "[M100][DeviceManager] setRelay M100 path failed"
+                           << "index=" << index
+                           << "addr=" << QString("M100.%1").arg(index)
                            << "on=" << on
                            << "result=" << static_cast<int>(res)
                            << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
@@ -990,20 +994,24 @@ namespace WaterTest
             return false;
         }
 
-        // 特殊映射：index=0（电磁阀1）状态读取 M100.0
-        if (index == 0)
+        // 特殊映射：index=0~3 状态读取 M100.0~M100.3
+        if (index <= 3)
         {
             bool value = false;
-            auto res = m_plcClient->readMerkerBool(100, 0, value);
+            auto res = m_plcClient->readMerkerBool(100, static_cast<int>(index), value);
             if (res == S7PLCClient::Result::SUCCESS)
             {
                 on = value;
-                qInfo() << "[M100][DeviceManager] getRelayState index0 <- M100.0"
+                qInfo() << "[M100][DeviceManager] getRelayState M100 path"
+                        << "index=" << index
+                        << "addr=" << QString("M100.%1").arg(index)
                         << "on=" << on
                         << "result=" << static_cast<int>(res);
                 return true;
             }
-            qWarning() << "[M100][DeviceManager] getRelayState M100.0 failed"
+            qWarning() << "[M100][DeviceManager] getRelayState M100 path failed"
+                       << "index=" << index
+                       << "addr=" << QString("M100.%1").arg(index)
                        << "result=" << static_cast<int>(res)
                        << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
             return false;

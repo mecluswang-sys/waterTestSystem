@@ -1,0 +1,135 @@
+graph LR
+    %% 样式
+    classDef plc_style fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px;
+    classDef term_style fill:#ffffff,stroke:#455a64,stroke-width:1.5px;
+    classDef sensor_style fill:#e1f5fe,stroke:#01579b,stroke-width:1.5px;
+    classDef relay_style fill:#fce4ec,stroke:#ad1457,stroke-width:1.5px;
+    classDef valve_style fill:#e8f5e9,stroke:#1b5e20,stroke-width:1.5px;
+
+    %% PLC
+    subgraph PLC [S7-1200 PLC]
+        CPU_L[CPU L+]
+        CPU_M[CPU M]
+        L1[1L]
+        Q00[Q0.0]
+        Q01[Q0.1]
+        Q02[Q0.2]
+        Q03[Q0.3]
+        RS_A[RS485 A]
+        RS_B[RS485 B]
+    end
+    class PLC plc_style;
+
+    %% 端子排定义
+    subgraph XT [接线端子排 XT]
+        XT_RULE1[定义: XT01 ~ XT50]
+        XT_RULE2[每位由上端子U和下端子D组成]
+
+        XT01U[XT01-U]
+        XT01D[XT01-D]
+        XT02U[XT02-U]
+        XT02D[XT02-D]
+        XT03U[XT03-U]
+        XT03D[XT03-D]
+        XT04U[XT04-U]
+        XT04D[XT04-D]
+        XT05U[XT05-U]
+        XT05D[XT05-D]
+        XT06U[XT06-U]
+        XT06D[XT06-D]
+        XT07U[XT07-U]
+        XT07D[XT07-D]
+        XT08U[XT08-U]
+        XT08D[XT08-D]
+        XT09U[XT09-U]
+        XT09D[XT09-D]
+        XT10U[XT10-U]
+        XT10D[XT10-D]
+
+        XT11U[XT11-U L+入]
+        XT11D[XT11-D L+分配]
+        XT12U[XT12-U M入]
+        XT12D[XT12-D M分配]
+
+        XT20U[XT20-U 传感器24正]
+        XT20D[XT20-D]
+        XT21U[XT21-U 传感器24负]
+        XT21D[XT21-D]
+        XT22U[XT22-U 传感器A]
+        XT22D[XT22-D]
+        XT23U[XT23-U 传感器B]
+        XT23D[XT23-D]
+    end
+    class XT_RULE1,XT_RULE2,XT01U,XT01D,XT02U,XT02D,XT03U,XT03D,XT04U,XT04D,XT05U,XT05D,XT06U,XT06D,XT07U,XT07D,XT08U,XT08D,XT09U,XT09D,XT10U,XT10D,XT11U,XT11D,XT12U,XT12D,XT20U,XT20D,XT21U,XT21D,XT22U,XT22D,XT23U,XT23D term_style;
+
+    %% 继电器与阀
+    subgraph ACT [执行回路]
+        R1[R1 线圈]
+        R2[R2 线圈]
+        R3[R3 线圈]
+        R4[R4 线圈]
+
+        C1[R1 触点]
+        C2[R2 触点]
+        C3[R3 触点]
+        C4[R4 触点]
+
+        V1[电磁阀1]
+        V2[电磁阀2]
+        V3[电磁阀3]
+        V4[电磁阀4]
+    end
+    class R1,R2,R3,R4,C1,C2,C3,C4 relay_style;
+    class V1,V2,V3,V4 valve_style;
+
+    %% 压力传感器（每个4端子: 24+ / 24- / A / B）
+    subgraph SENSORS [压力传感器网络（每个传感器4接线柱）]
+        S1P[S1 24+]
+        S1N[S1 24-]
+        S1A[S1 A]
+        S1B[S1 B]
+
+        S2P[S2 24+]
+        S2N[S2 24-]
+        S2A[S2 A]
+        S2B[S2 B]
+
+        SDP[... 24+]
+        SDN[... 24-]
+        SDA[... A]
+        SDB[... B]
+
+        S8P[S8 24+]
+        S8N[S8 24-]
+        S8A[S8 A]
+        S8B[S8 B]
+
+        RA[120R-A]
+        RB[120R-B]
+    end
+    class S1P,S1N,S1A,S1B,S2P,S2N,S2A,S2B,S8P,S8N,S8A,S8B sensor_style;
+
+    %% 无独立24V电源：PLC L+/M 先进入端子排，再由端子排分配
+    CPU_L --> XT11U --> XT11D
+    CPU_M --> XT12U --> XT12D
+    XT11D --> XT01U --> XT01D --> L1
+
+    %% PLC 输出 -> 继电器线圈（通过端子位）
+    Q00 --> XT02U --> XT02D --> R1 --> XT12D
+    Q01 --> XT03U --> XT03D --> R2 --> XT12D
+    Q02 --> XT04U --> XT04D --> R3 --> XT12D
+    Q03 --> XT05U --> XT05D --> R4 --> XT12D
+
+    %% 继电器触点 -> 阀
+    XT11D --> XT06U --> XT06D --> C1 --> V1 --> XT07U --> XT07D --> XT12D
+    XT11D --> XT08U --> XT08D --> C2 --> V2 --> XT09U --> XT09D --> XT12D
+    XT11D --> XT10U --> XT10D --> C3 --> V3 --> XT12D
+    XT11D --> C4 --> V4 --> XT12D
+
+    %% 传感器电源（24+/24-）
+    XT11D --> XT20U --> XT20D --> S1P --- S2P --- SDP --- S8P
+    XT12D --> XT21U --> XT21D --> S1N --- S2N --- SDN --- S8N
+
+    %% RS485 A/B
+    RS_A --> XT22U --> XT22D --> S1A --- S2A --- SDA --- S8A --- RA
+    RS_B --> XT23U --> XT23D --> S1B --- S2B --- SDB --- S8B --- RB

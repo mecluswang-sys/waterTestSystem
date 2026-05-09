@@ -9,6 +9,7 @@
 #include <QWidget>
 #include <memory>
 #include <vector>
+#include <array>
 
 class QShowEvent;
 class QTimer;
@@ -44,6 +45,7 @@ namespace WaterTest
         void applyAutoFit();
         void updatePipeFlowAnimation();
         void updateSensorValues();
+        void onSelfCheck();
 
         // DQ 继电器控制
         void buildRelayPanel(QWidget *parent);
@@ -57,19 +59,20 @@ namespace WaterTest
         QTimer *m_flowTimer;
         QTimer *m_dataTimer;
         qreal m_flowDashOffset;
+        QPushButton *m_selfCheckBtn;
 
         // DQ 继电器按钮列表（与 kStation1Relays 同序）
         std::vector<QPushButton *> m_relayBtns;
 
-        // M100.0 置位后若被 PLC 快速复位，用于触发可视化提示
-        bool m_expectM100Hold = false;
-        qint64 m_expectM100SetMs = 0;
+        // M100.0 ~ M100.3 置位后若被 PLC 快速复位，用于触发可视化提示
+        std::array<bool, 4> m_expectM100Hold{{false, false, false, false}};
+        std::array<qint64, 4> m_expectM100SetMs{{0, 0, 0, 0}};
 
         // 图元点击防抖，避免单次物理点击触发多次 selectionChanged
         int m_lastRelayGlyphIndex = -1;
         qint64 m_lastRelayGlyphClickMs = 0;
         qint64 m_relayGlyphLockUntilMs = 0;
-        qint64 m_lastM100ToggleMs = 0;
+        std::array<qint64, 4> m_lastM100ToggleMs{{0, 0, 0, 0}};
     };
 
 } // namespace WaterTest
