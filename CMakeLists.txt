@@ -72,6 +72,8 @@ set(SOURCES
     src/gui/TestPanel.cpp
     src/gui/AutoTestPanel.cpp
     src/gui/Station1Panel.cpp
+    src/gui/Station2Panel.cpp
+    src/gui/Station3Panel.cpp
 )
 
 # Snap7可用时使用真实PLC实现，否则回退到stub实现
@@ -102,6 +104,8 @@ set(HEADERS
     include/gui/TestPanel.h
     include/gui/AutoTestPanel.h
     include/gui/Station1Panel.h
+    include/gui/Station2Panel.h
+    include/gui/Station3Panel.h
 )
 
 # 创建可执行文件

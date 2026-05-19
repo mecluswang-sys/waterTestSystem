@@ -230,6 +230,15 @@ namespace WaterTest
          */
         bool getRelayState(uint8_t index, bool &on) const;
 
+        /**
+         * @brief 读取 M 区（Merker）位状态（用于物理按钮等离散输入映射）
+         * @param byteOffset M 字节偏移（例如 M101.x 对应 101）
+         * @param bit 位偏移（0-7）
+         * @param on 输出参数，读取到的状态
+         * @return 是否读取成功
+         */
+        bool readMerkerState(uint16_t byteOffset, uint8_t bit, bool &on) const;
+
         // ======== 系统控制 ========
         /**
          * @brief 设置系统运行模式

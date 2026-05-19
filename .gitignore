@@ -57,5 +57,8 @@ Thumbs.db
 page_*.png
 gui_preview*.html
 
+# Local tooling environment
+.conda_ppt/
+
 # Configuration (keep template)
 # config/system.conf

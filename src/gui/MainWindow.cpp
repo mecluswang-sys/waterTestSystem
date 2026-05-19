@@ -9,6 +9,8 @@
 #include "gui/TestPanel.h"
 #include "gui/AutoTestPanel.h"
 #include "gui/Station1Panel.h"
+#include "gui/Station2Panel.h"
+#include "gui/Station3Panel.h"
 #include "gui/ConfigDialog.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
@@ -44,6 +46,8 @@ namespace WaterTest
           m_testPanel(nullptr),
           m_autoTestPanel(nullptr),
           m_station1Panel(nullptr),
+          m_station2Panel(nullptr),
+          m_station3Panel(nullptr),
           m_connectBtn(nullptr),
           m_disconnectBtn(nullptr),
           m_connectionStatusLabel(nullptr),
@@ -199,6 +203,14 @@ namespace WaterTest
             if (m_station1Panel)
             {
                 m_station1Panel->setStationClient(m_stationClient);
+            }
+            if (m_station2Panel)
+            {
+                m_station2Panel->setStationClient(m_stationClient);
+            }
+            if (m_station3Panel)
+            {
+                m_station3Panel->setStationClient(m_stationClient);
             }
             if (m_autoTestPanel)
             {
@@ -356,6 +368,52 @@ namespace WaterTest
                 disabledLayout->addWidget(msg);
                 disabledLayout->addStretch();
                 m_tabWidget->addTab(disabled, "⑤ 1号操作台");
+            }
+        }
+
+        // Tab 6: 2号操作台（沿用1号操作台界面逻辑）
+        {
+            auto &config = ConfigManager::getInstance();
+            const bool enableStation2Panel = config.getBool("ui.enable_station2_panel", true);
+            if (enableStation2Panel)
+            {
+                m_station2Panel = new Station2Panel(m_deviceManager, this);
+                m_tabWidget->addTab(m_station2Panel, "⑥ 2号操作台");
+            }
+            else
+            {
+                auto *disabled = new QWidget(this);
+                auto *disabledLayout = new QVBoxLayout(disabled);
+                auto *msg = new QLabel("2号操作台页面已关闭（可在 config/system.conf 设置 ui.enable_station2_panel = true 启用）", disabled);
+                msg->setWordWrap(true);
+                msg->setAlignment(Qt::AlignCenter);
+                disabledLayout->addStretch();
+                disabledLayout->addWidget(msg);
+                disabledLayout->addStretch();
+                m_tabWidget->addTab(disabled, "⑥ 2号操作台");
+            }
+        }
+
+        // Tab 7: 3号操作台（沿用1号操作台界面逻辑）
+        {
+            auto &config = ConfigManager::getInstance();
+            const bool enableStation3Panel = config.getBool("ui.enable_station3_panel", true);
+            if (enableStation3Panel)
+            {
+                m_station3Panel = new Station3Panel(m_deviceManager, this);
+                m_tabWidget->addTab(m_station3Panel, "⑦ 3号操作台");
+            }
+            else
+            {
+                auto *disabled = new QWidget(this);
+                auto *disabledLayout = new QVBoxLayout(disabled);
+                auto *msg = new QLabel("3号操作台页面已关闭（可在 config/system.conf 设置 ui.enable_station3_panel = true 启用）", disabled);
+                msg->setWordWrap(true);
+                msg->setAlignment(Qt::AlignCenter);
+                disabledLayout->addStretch();
+                disabledLayout->addWidget(msg);
+                disabledLayout->addStretch();
+                m_tabWidget->addTab(disabled, "⑦ 3号操作台");
             }
         }
 

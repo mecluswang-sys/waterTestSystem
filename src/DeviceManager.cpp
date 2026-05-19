@@ -1044,6 +1044,27 @@ namespace WaterTest
         return false;
     }
 
+    bool DeviceManager::readMerkerState(uint16_t byteOffset, uint8_t bit, bool &on) const
+    {
+        if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            return false;
+        }
+        if (bit > 7)
+        {
+            return false;
+        }
+
+        bool value = false;
+        const auto res = m_plcClient->readMerkerBool(static_cast<int>(byteOffset), static_cast<int>(bit), value);
+        if (res == S7PLCClient::Result::SUCCESS)
+        {
+            on = value;
+            return true;
+        }
+        return false;
+    }
+
     bool DeviceManager::setSystemMode(SystemMode mode)
     {
         if (!m_plcClient || !m_plcClient->isConnected())
