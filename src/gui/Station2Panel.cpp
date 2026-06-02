@@ -22,6 +22,18 @@ namespace WaterTest
 {
     namespace
     {
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+
+        static QString fmtPressure(double kpa, int decimals = 1)
+        {
+            return QString::number(kPaToKgfCm2(kpa), 'f', decimals);
+        }
+
         static int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
             if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
@@ -31,7 +43,7 @@ namespace WaterTest
 
         static QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
-            return QString::number(sensor.pressure, 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kPa";
+            return QString::number(kPaToKgfCm2(sensor.pressure), 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kgf/cm^2";
         }
 
         static QString deviceStatusToText(DeviceStatus status)
@@ -219,9 +231,9 @@ namespace WaterTest
             const auto vreg = m_deviceManager->getRegulatingValve(VREG_ID);
             const bool ok = (vreg.id != 0 && vreg.deviceStatus == DeviceStatus::ONLINE);
             setStep(IDX_VREG, ok ? STEP_OK : STEP_FAIL,
-                    ok ? QString::fromUtf8("在线, 目标: %1 kPa, 实际: %2 kPa, 开度: %3%")
-                             .arg(vreg.setPressure, 0, 'f', 1)
-                             .arg(vreg.actualPressure, 0, 'f', 1)
+                      ok ? QString::fromUtf8("在线, 目标: %1 kgf/cm^2, 实际: %2 kgf/cm^2, 开度: %3%")
+                             .arg(fmtPressure(vreg.setPressure, 1))
+                             .arg(fmtPressure(vreg.actualPressure, 1))
                              .arg(vreg.openingPercent, 0, 'f', 0)
                        : QString::fromUtf8("离线或未配置"));
         }
@@ -270,10 +282,10 @@ namespace WaterTest
                 const bool linkageOk = (delta >= linkagePressureThr);
                 setStep(IDX_STEP1, STEP_OK,
                         linkageOk
-                            ? QString::fromUtf8("通路正常（PS8 变化 %1 kPa \u2265 阈值 %2 kPa）")
-                                  .arg(delta, 0, 'f', 1).arg(linkagePressureThr, 0, 'f', 1)
-                            : QString::fromUtf8("通路可能异常（PS8 变化 %1 kPa，阈值 %2 kPa）")
-                                  .arg(delta, 0, 'f', 1).arg(linkagePressureThr, 0, 'f', 1));
+                                ? QString::fromUtf8("通路正常（PS8 变化 %1 kgf/cm^2 \u2265 阈值 %2 kgf/cm^2）")
+                                    .arg(fmtPressure(delta, 2)).arg(fmtPressure(linkagePressureThr, 2))
+                                : QString::fromUtf8("通路可能异常（PS8 变化 %1 kgf/cm^2，阈值 %2 kgf/cm^2）")
+                                    .arg(fmtPressure(delta, 2)).arg(fmtPressure(linkagePressureThr, 2)));
             } else {
                 setStep(IDX_STEP1, STEP_FAIL, QString::fromUtf8("电磁阀3控制失败"));
             }
@@ -337,13 +349,13 @@ namespace WaterTest
                         (void)controlPump(1, false);
                     if (!buildOk) {
                         setStep(IDX_STEP3, STEP_FAIL,
-                                QString::fromUtf8("建压不足（PS8=%1 kPa < 最小建压 %2 kPa）")
-                                    .arg(p8Build.pressure, 0, 'f', 1).arg(leakBuildMinKpa, 0, 'f', 1));
+                                QString::fromUtf8("建压不足（PS8=%1 kgf/cm^2 < 最小建压 %2 kgf/cm^2）")
+                                    .arg(fmtPressure(p8Build.pressure, 1)).arg(fmtPressure(leakBuildMinKpa, 1)));
                         setStep(IDX_STEP4, STEP_FAIL, QString::fromUtf8("建压不足，无法有效判定泄漏"));
                     } else {
                         setStep(IDX_STEP3, RUNNING,
-                                QString::fromUtf8("PS8=%1 kPa，保压 %2 ms 中…")
-                                    .arg(p8Build.pressure, 0, 'f', 1).arg(leakHoldWaitMs));
+                                QString::fromUtf8("PS8=%1 kgf/cm^2，保压 %2 ms 中…")
+                                    .arg(fmtPressure(p8Build.pressure, 1)).arg(leakHoldWaitMs));
                         waitMs(leakHoldWaitMs);
                         m_deviceManager->updateAllDevices();
                         const auto p8Hold = m_deviceManager->getPressureSensor(8);
@@ -351,23 +363,23 @@ namespace WaterTest
                         const float p8Drop = p8Build.pressure - p8Hold.pressure;
                         const float p9Rise = p9Hold.pressure - p9Build.pressure;
                         setStep(IDX_STEP3, STEP_OK,
-                                QString::fromUtf8("已采集：PS8 %1\u2192%2 kPa（降 %3），PS9 %4\u2192%5 kPa（升 %6）")
-                                    .arg(p8Build.pressure, 0, 'f', 1)
-                                    .arg(p8Hold.pressure, 0, 'f', 1)
-                                    .arg(p8Drop, 0, 'f', 1)
-                                    .arg(p9Build.pressure, 0, 'f', 1)
-                                    .arg(p9Hold.pressure, 0, 'f', 1)
-                                    .arg(p9Rise, 0, 'f', 1));
+                                QString::fromUtf8("已采集：PS8 %1\u2192%2 kgf/cm^2（降 %3），PS9 %4\u2192%5 kgf/cm^2（升 %6）")
+                                    .arg(fmtPressure(p8Build.pressure, 2))
+                                    .arg(fmtPressure(p8Hold.pressure, 2))
+                                    .arg(fmtPressure(p8Drop, 2))
+                                    .arg(fmtPressure(p9Build.pressure, 2))
+                                    .arg(fmtPressure(p9Hold.pressure, 2))
+                                    .arg(fmtPressure(p9Rise, 2)));
                         setStep(IDX_STEP4, RUNNING, QString::fromUtf8("正在判定…"));
                         const bool leakOk = (p8Drop <= leakP8DropMaxKpa) && (p9Rise <= leakP9RiseMaxKpa);
                         setStep(IDX_STEP4, leakOk ? STEP_OK : STEP_FAIL,
                                 leakOk
-                                    ? QString::fromUtf8("密封正常（PS8压降 %1 kPa \u2264 %2，PS9上升 %3 kPa \u2264 %4）")
-                                          .arg(p8Drop, 0, 'f', 1).arg(leakP8DropMaxKpa, 0, 'f', 1)
-                                          .arg(p9Rise, 0, 'f', 1).arg(leakP9RiseMaxKpa, 0, 'f', 1)
-                                    : QString::fromUtf8("疑似泄漏（PS8压降 %1 kPa 阈值 %2，PS9上升 %3 kPa 阈值 %4）")
-                                          .arg(p8Drop, 0, 'f', 1).arg(leakP8DropMaxKpa, 0, 'f', 1)
-                                          .arg(p9Rise, 0, 'f', 1).arg(leakP9RiseMaxKpa, 0, 'f', 1));
+                                    ? QString::fromUtf8("密封正常（PS8压降 %1 kgf/cm^2 \u2264 %2，PS9上升 %3 kgf/cm^2 \u2264 %4）")
+                                        .arg(fmtPressure(p8Drop, 2)).arg(fmtPressure(leakP8DropMaxKpa, 2))
+                                        .arg(fmtPressure(p9Rise, 2)).arg(fmtPressure(leakP9RiseMaxKpa, 2))
+                                    : QString::fromUtf8("疑似泄漏（PS8压降 %1 kgf/cm^2 阈值 %2，PS9上升 %3 kgf/cm^2 阈值 %4）")
+                                        .arg(fmtPressure(p8Drop, 2)).arg(fmtPressure(leakP8DropMaxKpa, 2))
+                                        .arg(fmtPressure(p9Rise, 2)).arg(fmtPressure(leakP9RiseMaxKpa, 2)));
                     }
                 }
             }

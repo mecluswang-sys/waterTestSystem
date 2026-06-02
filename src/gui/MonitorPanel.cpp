@@ -24,6 +24,13 @@ namespace WaterTest
 
     namespace
     {
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+
         int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 2)
         {
             if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
@@ -85,7 +92,7 @@ namespace WaterTest
         sensorLayout->setSpacing(4);
 
         m_sensorTable = new QTableWidget(0, 5, this);
-        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kPa)", "温度 (℃)", "状态"});
+        m_sensorTable->setHorizontalHeaderLabels({"编号", "名称", "压力 (kgf/cm^2)", "温度 (℃)", "状态"});
         m_sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         m_sensorTable->horizontalHeader()->setMinimumSectionSize(70);
         m_sensorTable->horizontalHeader()->setDefaultSectionSize(100);
@@ -245,17 +252,17 @@ namespace WaterTest
             m_sensorTable->setItem(i, 0, new QTableWidgetItem(QString::number(id)));
             m_sensorTable->setItem(i, 1, new QTableWidgetItem(QString("传感器 %1").arg(id)));
 
-            // 压力显示（当前内部单位即 kPa），若不存在则留空
+            // 压力显示（内部单位 kPa，界面统一换算为 kgf/cm^2），若不存在则留空
             if (i < pSensors.size())
             {
-                double kPa = static_cast<double>(pSensors[i].pressure);
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kPa, 'f', pressureDisplayDecimals(pSensors[i]))));
+                double kgfCm2 = kPaToKgfCm2(static_cast<double>(pSensors[i].pressure));
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kgfCm2, 'f', pressureDisplayDecimals(pSensors[i]))));
 
                 std::ostringstream oss;
                 oss << "[UI][PRESSURE] sensor=" << pSensors[i].id
                     << " pressureKPa=" << pSensors[i].pressure
                     << " displayDecimals=" << pSensors[i].displayDecimals
-                    << " displayKPa=" << kPa
+                    << " displayKgfCm2=" << kgfCm2
                     << " status=" << static_cast<int>(pSensors[i].status);
                 appendPressureUiDebugLog(oss.str());
             }

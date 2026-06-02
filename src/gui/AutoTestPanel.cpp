@@ -16,6 +16,20 @@
 
 namespace WaterTest
 {
+    namespace
+    {
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+
+        static double kgfCm2ToKPa(double kgfCm2)
+        {
+            return kgfCm2 * kKPaPerKgfCm2;
+        }
+    }
 
     AutoTestPanel::AutoTestPanel(std::shared_ptr<DeviceManager> deviceManager, QWidget *parent)
         : QWidget(parent), m_deviceManager(deviceManager), m_stationClient(nullptr), m_updateTimer(nullptr), m_testValveOpen(false), m_currentPowerType(PowerType::DC), m_testValveVoltage(0.0f), m_testType(TestType::BY_COUNT), m_isAutoTesting(false), m_currentConditionIndex(0), m_currentCycleCount(0), m_autoTestElapsedSeconds(0)
@@ -126,7 +140,7 @@ namespace WaterTest
         // 测试条件表格
         m_testConditionTable = new QTableWidget(this);
         m_testConditionTable->setColumnCount(8);
-        m_testConditionTable->setHorizontalHeaderLabels({"条件名称", "供电类型", "目标压力(kPa)", "流量(L/min)",
+        m_testConditionTable->setHorizontalHeaderLabels({"条件名称", "供电类型", "目标压力(kgf/cm^2)", "流量(L/min)",
                                                          "温度(°C)", "阀门电压(V)", "循环次数", "测试时长(秒)"});
         m_testConditionTable->horizontalHeader()->setStretchLastSection(true);
         m_testConditionTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -397,9 +411,9 @@ namespace WaterTest
         powerTypeLayout->addStretch();
 
         auto *pressureSpinBox = new QDoubleSpinBox(&dialog);
-        pressureSpinBox->setRange(0.0, 2000.0);
-        pressureSpinBox->setValue(500.0);
-        pressureSpinBox->setSuffix(" kPa");
+        pressureSpinBox->setRange(0.0, 20.0);
+        pressureSpinBox->setValue(kPaToKgfCm2(500.0));
+        pressureSpinBox->setSuffix(" kgf/cm^2");
         pressureSpinBox->setDecimals(1);
 
         auto *flowRateSpinBox = new QDoubleSpinBox(&dialog);
@@ -446,7 +460,7 @@ namespace WaterTest
             TestCondition condition;
             condition.name = nameEdit->text();
             condition.powerType = powerTypeDC->isChecked() ? PowerType::DC : PowerType::AC;
-            condition.targetPressure = static_cast<float>(pressureSpinBox->value());
+            condition.targetPressure = static_cast<float>(kgfCm2ToKPa(pressureSpinBox->value()));
             condition.flowRate = static_cast<float>(flowRateSpinBox->value());
             condition.temperature = static_cast<float>(tempSpinBox->value());
             condition.valveVoltage = static_cast<float>(voltageSpinBox->value());
@@ -499,9 +513,9 @@ namespace WaterTest
         powerTypeLayout->addStretch();
 
         auto *pressureSpinBox = new QDoubleSpinBox(&dialog);
-        pressureSpinBox->setRange(0.0, 2000.0);
-        pressureSpinBox->setValue(condition.targetPressure);
-        pressureSpinBox->setSuffix(" kPa");
+        pressureSpinBox->setRange(0.0, 20.0);
+        pressureSpinBox->setValue(kPaToKgfCm2(condition.targetPressure));
+        pressureSpinBox->setSuffix(" kgf/cm^2");
         pressureSpinBox->setDecimals(1);
 
         auto *flowRateSpinBox = new QDoubleSpinBox(&dialog);
@@ -547,7 +561,7 @@ namespace WaterTest
         {
             condition.name = nameEdit->text();
             condition.powerType = powerTypeDC->isChecked() ? PowerType::DC : PowerType::AC;
-            condition.targetPressure = static_cast<float>(pressureSpinBox->value());
+            condition.targetPressure = static_cast<float>(kgfCm2ToKPa(pressureSpinBox->value()));
             condition.flowRate = static_cast<float>(flowRateSpinBox->value());
             condition.temperature = static_cast<float>(tempSpinBox->value());
             condition.valveVoltage = static_cast<float>(voltageSpinBox->value());
@@ -666,7 +680,7 @@ namespace WaterTest
 
             m_testConditionTable->setItem(i, 0, new QTableWidgetItem(condition.name));
             m_testConditionTable->setItem(i, 1, new QTableWidgetItem(condition.powerType == PowerType::DC ? "DC直流" : "AC交流"));
-            m_testConditionTable->setItem(i, 2, new QTableWidgetItem(QString::number(condition.targetPressure, 'f', 2)));
+            m_testConditionTable->setItem(i, 2, new QTableWidgetItem(QString::number(kPaToKgfCm2(condition.targetPressure), 'f', 2)));
             m_testConditionTable->setItem(i, 3, new QTableWidgetItem(QString::number(condition.flowRate, 'f', 1)));
             m_testConditionTable->setItem(i, 4, new QTableWidgetItem(QString::number(condition.temperature, 'f', 1)));
             m_testConditionTable->setItem(i, 5, new QTableWidgetItem(QString::number(condition.valveVoltage, 'f', 1)));

@@ -353,6 +353,11 @@ namespace WaterTest
         // S7-1200 SM1232 AO: QW80/QW82..., SM1231 AI: IW96/IW98...
         std::map<uint16_t, int> m_valveAoByteOffset; // id -> AO 字节偏移
         std::map<uint16_t, int> m_valveAiByteOffset; // id -> AI 字节偏移（位置反馈）
+        // 可选：开度命令/反馈走 M 区 REAL（MD），用于 PLC 中间变量映射。
+        std::map<uint16_t, bool> m_valveAoUseMerkerReal;      // id -> 开度命令是否写 MD
+        std::map<uint16_t, bool> m_valveAiUseMerkerReal;      // id -> 开度反馈是否读 MD
+        std::map<uint16_t, int>  m_valveAoMerkerByteOffset;   // id -> MD 偏移（命令）
+        std::map<uint16_t, int>  m_valveAiMerkerByteOffset;   // id -> MD 偏移（反馈）
         // 压力反馈 AI（4-20mA 直接输入，供 PID 闭环使用）
         std::map<uint16_t, int>   m_valvePressureAiByteOffset; // id -> 压力 AI 字节偏移
         std::map<uint16_t, float> m_valvePressureRangeMin;     // id -> 量程下限 kPa

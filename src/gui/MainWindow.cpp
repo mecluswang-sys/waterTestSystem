@@ -27,6 +27,14 @@
 #include <QProgressBar>
 #include <QApplication>
 #include <QFile>
+#include <QDialog>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QSpinBox>
+#include <QComboBox>
+#include <QGroupBox>
+#include <QLabel>
 #include <QStyle>
 #include <QTime>
 #include <QDateTime>
@@ -34,6 +42,21 @@
 
 namespace WaterTest
 {
+    namespace
+    {
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+
+        static double kgfCm2ToKPa(double kgfCm2)
+        {
+            return kgfCm2 * kKPaPerKgfCm2;
+        }
+    }
+
     MainWindow::MainWindow(QWidget *parent)
         : QMainWindow(parent),
           m_mode(WindowMode::STATION_MODE),
@@ -289,12 +312,12 @@ namespace WaterTest
 
         topBarLayout->addStretch();
 
-        // 右侧：PLC 状态按钮 + 连接/断开（仍保留手动控制）
-        m_plcStatusBtn = new QPushButton("PLC", this);
+        // 右侧：设置按钮 + 连接/断开
+        m_plcStatusBtn = new QPushButton("设置", this);
         m_plcStatusBtn->setObjectName("plcStatusButton");
-        m_plcStatusBtn->setEnabled(false); // 指示用
-        m_plcStatusBtn->setProperty("plcState", "disconnected");
-        m_plcStatusBtn->setToolTip("PLC 未连接");
+        m_plcStatusBtn->setProperty("role", "settings");
+        m_plcStatusBtn->setToolTip("设置测试参数");
+        connect(m_plcStatusBtn, &QPushButton::clicked, this, &MainWindow::onConfig);
         topBarLayout->addWidget(m_plcStatusBtn);
 
         m_connectBtn = new QPushButton("连接", this);
@@ -687,6 +710,15 @@ namespace WaterTest
 
     bool MainWindow::connectPlc(bool interactive)
     {
+        auto syncStationPanelsOnce = [this]() {
+            if (m_station1Panel)
+                m_station1Panel->syncVisualStateOnce();
+            if (m_station2Panel)
+                m_station2Panel->syncVisualStateOnce();
+            if (m_station3Panel)
+                m_station3Panel->syncVisualStateOnce();
+        };
+
         auto &config = ConfigManager::getInstance();
         const bool strictRemoteMode = config.getBool("station.strict_remote_mode", true);
         if (m_stationClient && strictRemoteMode)
@@ -708,6 +740,8 @@ namespace WaterTest
                 }
                 setPlcStatusState("disconnected", "远程模式：等待主控台连接");
             }
+            if (terminalConnected)
+                syncStationPanelsOnce();
             return terminalConnected;
         }
 
@@ -723,6 +757,7 @@ namespace WaterTest
                 statusBar()->showMessage("已连接到系统", 2000);
                 setPlcStatusState("connected", "PLC 已连接");
             }
+            syncStationPanelsOnce();
             return true;
         }
 
@@ -764,6 +799,7 @@ namespace WaterTest
 
             statusBar()->showMessage("诊断模式连接成功（已跳过PLC实连/采集/页面刷新）", 3000);
             setPlcStatusState("connected", "诊断模式：已跳过PLC实连");
+            syncStationPanelsOnce();
             return true;
         }
 
@@ -883,6 +919,7 @@ namespace WaterTest
 
         statusBar()->showMessage("PLC已连接", 2000);
         setPlcStatusState("connected", "PLC 已连接");
+        syncStationPanelsOnce();
         return true;
     }
 
@@ -945,6 +982,8 @@ namespace WaterTest
     void MainWindow::setPlcStatusState(const char *state, const QString &toolTip)
     {
         if (!m_plcStatusBtn)
+            return;
+        if (m_plcStatusBtn->property("role").toString() == "settings")
             return;
         m_plcStatusBtn->setProperty("plcState", state);
         m_plcStatusBtn->setToolTip(toolTip);
@@ -1144,10 +1183,195 @@ namespace WaterTest
 
     void MainWindow::onConfig()
     {
-        ConfigDialog dialog(this);
+        auto &config = ConfigManager::getInstance();
+        config.loadConfig("config/system.conf");
+
+        QDialog dialog(this);
+        dialog.setWindowTitle("测试参数设置");
+        dialog.setMinimumSize(560, 480);
+
+        dialog.setStyleSheet(
+            "QDialog { background: #0b1220; color: #e2e8f0; }"
+            "QLabel { color: #e2e8f0; background: transparent; }"
+            "QGroupBox {"
+            "  background: #111a2c;"
+            "  border: 1px solid #243349;"
+            "  border-radius: 8px;"
+            "  margin-top: 10px;"
+            "  font-weight: 600;"
+            "  color: #e2e8f0;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 10px;"
+            "  padding: 0 4px;"
+            "  color: #dbeafe;"
+            "  background: #111a2c;"
+            "}"
+            "QLabel[role='unit'] { color: #93c5fd; min-width: 72px; }"
+            "QLabel[role='hint'] { color: #93a4bd; font-size: 12px; }"
+            "QAbstractSpinBox, QComboBox {"
+            "  background: #0f172a;"
+            "  border: 1px solid #334155;"
+            "  border-radius: 6px;"
+            "  padding: 4px 8px;"
+            "  min-height: 28px;"
+            "  color: #e2e8f0;"
+            "}"
+            "QAbstractSpinBox:focus, QComboBox:focus {"
+            "  border-color: #60a5fa;"
+            "  background: #111c33;"
+            "}"
+            "QLabel[role='preview'] {"
+            "  background: #0f172a;"
+            "  color: #dbeafe;"
+            "  border: 1px solid #334155;"
+            "  border-radius: 6px;"
+            "  padding: 8px;"
+            "  font-family: Consolas;"
+            "}"
+            "QPushButton {"
+            "  min-height: 30px;"
+            "  padding: 4px 14px;"
+            "  background: #111a2c;"
+            "  border: 1px solid #334155;"
+            "  border-radius: 6px;"
+            "  color: #e2e8f0;"
+            "}"
+            "QPushButton:hover { background: #17243d; border-color: #60a5fa; }"
+        );
+
+        auto *mainLayout = new QVBoxLayout(&dialog);
+
+        auto *titleLabel = new QLabel("测试参数配置", &dialog);
+        titleLabel->setStyleSheet("font-size: 18px; font-weight: 700; color: #dbeafe; background: transparent;");
+        auto *hintLabel = new QLabel("用于设置当前批次的目标压力、电压、阀门策略与分控台。", &dialog);
+        hintLabel->setProperty("role", "hint");
+        mainLayout->addWidget(titleLabel);
+        mainLayout->addWidget(hintLabel);
+
+        auto *targetGroup = new QGroupBox("目标参数", &dialog);
+        auto *targetForm = new QFormLayout(targetGroup);
+
+        auto makeInputWithUnit = [&](QWidget *input, const QString &unitText) {
+            auto *rowWidget = new QWidget(&dialog);
+            auto *rowLayout = new QHBoxLayout(rowWidget);
+            rowLayout->setContentsMargins(0, 0, 0, 0);
+            rowLayout->setSpacing(8);
+            rowLayout->addWidget(input);
+            auto *unitLabel = new QLabel(unitText, rowWidget);
+            unitLabel->setProperty("role", "unit");
+            rowLayout->addWidget(unitLabel);
+            rowLayout->addStretch();
+            return rowWidget;
+        };
+
+        auto *targetPressure = new QDoubleSpinBox(&dialog);
+        targetPressure->setRange(0.0, 20.0);
+        targetPressure->setDecimals(2);
+        targetPressure->setSingleStep(0.05);
+        targetPressure->setValue(kPaToKgfCm2(config.getFloat("station.test.target_pressure_kpa", 100.0f)));
+        targetForm->addRow("测试压力:", makeInputWithUnit(targetPressure, "kgf/cm^2"));
+
+        auto *targetVoltage = new QDoubleSpinBox(&dialog);
+        targetVoltage->setRange(0.0, 500.0);
+        targetVoltage->setDecimals(1);
+        targetVoltage->setSingleStep(0.5);
+        targetVoltage->setValue(config.getFloat("station.test.target_voltage_v", 24.0f));
+        targetForm->addRow("测试电压:", makeInputWithUnit(targetVoltage, "V"));
+
+        mainLayout->addWidget(targetGroup);
+
+        auto *strategyGroup = new QGroupBox("执行策略", &dialog);
+        auto *strategyForm = new QFormLayout(strategyGroup);
+
+        auto *valveMode = new QComboBox(&dialog);
+        valveMode->addItem("常开 (NO)", "NO");
+        valveMode->addItem("常闭 (NC)", "NC");
+        const QString mode = QString::fromStdString(config.getString("station.test.valve_mode", "NO")).toUpper();
+        valveMode->setCurrentIndex(mode == "NC" ? 1 : 0);
+        strategyForm->addRow("阀门类型:", valveMode);
+
+        auto *openCount = new QSpinBox(&dialog);
+        openCount->setRange(1, 1000000);
+        openCount->setValue(config.getInt("station.test.open_count", 10));
+        strategyForm->addRow("开阀次数:", makeInputWithUnit(openCount, "次"));
+
+        mainLayout->addWidget(strategyGroup);
+
+        auto *stationGroup = new QGroupBox("分控台", &dialog);
+        auto *stationForm = new QFormLayout(stationGroup);
+
+        auto *subStation = new QComboBox(&dialog);
+        subStation->addItem("1号分控台", 1);
+        subStation->addItem("2号分控台", 2);
+        subStation->addItem("3号分控台", 3);
+        const int stationId = config.getInt("station.test.sub_station_id", 1);
+        int stationIndex = stationId - 1;
+        if (stationIndex < 0)
+            stationIndex = 0;
+        if (stationIndex > 2)
+            stationIndex = 2;
+        subStation->setCurrentIndex(stationIndex);
+        stationForm->addRow("目标工位:", subStation);
+
+        auto *previewLabel = new QLabel(&dialog);
+        previewLabel->setProperty("role", "preview");
+        previewLabel->setWordWrap(true);
+        stationForm->addRow("参数预览:", previewLabel);
+
+        auto updatePreview = [&]() {
+            previewLabel->setText(
+                QString("Pressure: %1 kgf/cm^2\nVoltage : %2 V\nValve   : %3\nCycles  : %4\nStation : %5")
+                    .arg(targetPressure->value(), 0, 'f', 2)
+                    .arg(targetVoltage->value(), 0, 'f', 1)
+                    .arg(valveMode->currentText())
+                    .arg(openCount->value())
+                    .arg(subStation->currentText()));
+        };
+
+        connect(targetPressure, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog, [updatePreview](double) { updatePreview(); });
+        connect(targetVoltage, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog, [updatePreview](double) { updatePreview(); });
+        connect(openCount, QOverload<int>::of(&QSpinBox::valueChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(valveMode, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(subStation, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+
+        updatePreview();
+        mainLayout->addWidget(stationGroup);
+
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        auto *resetBtn = buttons->addButton("恢复默认", QDialogButtonBox::ResetRole);
+        buttons->button(QDialogButtonBox::Ok)->setText("保存设置");
+        buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+
+        connect(resetBtn, &QPushButton::clicked, &dialog, [=]() {
+            targetPressure->setValue(kPaToKgfCm2(100.0));
+            targetVoltage->setValue(24.0);
+            valveMode->setCurrentIndex(0);
+            openCount->setValue(10);
+            subStation->setCurrentIndex(0);
+        });
+
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        mainLayout->addWidget(buttons);
+
         if (dialog.exec() == QDialog::Accepted)
         {
-            statusBar()->showMessage("配置已保存", 3000);
+            config.setFloat("station.test.target_pressure_kpa", static_cast<float>(kgfCm2ToKPa(targetPressure->value())));
+            config.setFloat("station.test.target_voltage_v", static_cast<float>(targetVoltage->value()));
+            config.setString("station.test.valve_mode", valveMode->currentData().toString().toStdString());
+            config.setInt("station.test.open_count", openCount->value());
+            config.setInt("station.test.sub_station_id", subStation->currentData().toInt());
+
+            if (config.saveConfig("config/system.conf"))
+            {
+                statusBar()->showMessage("测试参数已保存", 3000);
+            }
+            else
+            {
+                QMessageBox::warning(this, "保存失败", "无法写入 config/system.conf，请检查文件权限。");
+            }
         }
     }
 
@@ -1225,8 +1449,8 @@ namespace WaterTest
         if (m_dataStatsLabel)
         {
             m_dataStatsLabel->setText(
-                QString("采样: P1=%1 kPa, F=%2 | Ts=%3")
-                    .arg(data.pressure[0], 0, 'f', 2)
+                QString("采样: P1=%1 kgf/cm^2, F=%2 | Ts=%3")
+                    .arg(kPaToKgfCm2(data.pressure[0]), 0, 'f', 2)
                     .arg(data.flow_rate, 0, 'f', 2)
                     .arg(data.timestamp));
         }

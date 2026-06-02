@@ -28,9 +28,9 @@
 
 | 点号 | 信号名 | 类型 | PLC地址（建议） | 端子号（建议） | 量程/单位 | 周期 | 备注 |
 |---|---|---|---|---|---|---|---|
-| AI-PS-01 | 压力传感器1主值 | AI/DB | DB6.DBD46 | TB-AI-01+/- | 0~1.0 MPa（或项目标定） | 100 ms | 来自UDT MainValue_Real |
-| AI-PS-02 | 压力传感器2主值 | AI/DB | DB6.DBD154 | TB-AI-02+/- | 0~1.0 MPa | 100 ms | 步长108 |
-| AI-PS-03 | 压力传感器3主值 | AI/DB | DB6.DBD262 | TB-AI-03+/- | 0~1.0 MPa | 100 ms | 步长108 |
+| AI-PS-01 | 压力传感器1主值 | AI/DB | DB6.DBD46 | TB-AI-01+/- | 0~10.2 kgf/cm^2（或项目标定） | 100 ms | 来自UDT MainValue_Real |
+| AI-PS-02 | 压力传感器2主值 | AI/DB | DB6.DBD154 | TB-AI-02+/- | 0~10.2 kgf/cm^2 | 100 ms | 步长108 |
+| AI-PS-03 | 压力传感器3主值 | AI/DB | DB6.DBD262 | TB-AI-03+/- | 0~10.2 kgf/cm^2 | 100 ms | 步长108 |
 | AI-TS-01 | 温度传感器1主值 | AI/DB | DB6.DBD(待定) | TB-AI-04+/- | 0~120 degC | 100 ms | 二期联调确认偏移 |
 | AI-TS-02 | 温度传感器2主值 | AI/DB | DB6.DBD(待定) | TB-AI-05+/- | 0~120 degC | 100 ms | 二期联调确认偏移 |
 | AI-TS-03 | 温度传感器3主值 | AI/DB | DB6.DBD(待定) | TB-AI-06+/- | 0~120 degC | 100 ms | 二期联调确认偏移 |

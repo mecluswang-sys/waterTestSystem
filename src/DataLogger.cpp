@@ -14,6 +14,16 @@ namespace fs = std::filesystem;
 
 namespace WaterTest
 {
+    namespace
+    {
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+    }
+
     DataLogger::DataLogger()
     {
     }
@@ -272,7 +282,7 @@ namespace WaterTest
 
     bool DataLogger::writeCSVHeader(std::ofstream &file)
     {
-        file << "Timestamp,Pressure1(kPa),Pressure2(kPa),Pressure3(kPa),"
+        file << "Timestamp,Pressure1(kgf/cm^2),Pressure2(kgf/cm^2),Pressure3(kgf/cm^2),"
              << "P1_Status,P2_Status,P3_Status,"
              << "FlowRate,TotalFlow,Temperature(°C),"
              << "FlowUnitCode,FlowUnit,EmptyPipeAlarm,ExcitationAlarm\n";
@@ -287,9 +297,9 @@ namespace WaterTest
         ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
 
         file << ss.str() << ","
-             << snapshot.pressure1_kpa << ","
-             << snapshot.pressure2_kpa << ","
-             << snapshot.pressure3_kpa << ","
+               << kPaToKgfCm2(snapshot.pressure1_kpa) << ","
+               << kPaToKgfCm2(snapshot.pressure2_kpa) << ","
+               << kPaToKgfCm2(snapshot.pressure3_kpa) << ","
              << snapshot.pressure1_status << ","
              << snapshot.pressure2_status << ","
              << snapshot.pressure3_status << ","
@@ -544,7 +554,7 @@ namespace WaterTest
         {
             m_logFile << getCurrentTimestamp()
                       << " [PRESSURE] ID:" << sensor.id
-                      << " Value:" << sensor.pressure << " kPa"
+                      << " Value:" << kPaToKgfCm2(sensor.pressure) << " kgf/cm^2"
                       << " Status:" << static_cast<int>(sensor.status) << "\n";
         }
     }

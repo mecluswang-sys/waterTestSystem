@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <filesystem>
@@ -438,6 +439,10 @@ namespace WaterTest
             // AO/AI 默认地址（字节偏移）
             m_valveAoByteOffset[i] = 80 + (i - 1) * 2; // QW80, QW82
             m_valveAiByteOffset[i] = 96 + (i - 1) * 2; // IW96, IW98
+            m_valveAoUseMerkerReal[i] = false;
+            m_valveAiUseMerkerReal[i] = false;
+            m_valveAoMerkerByteOffset[i] = -1;
+            m_valveAiMerkerByteOffset[i] = -1;
 
             // DI 默认地址（字节 1，偏移按顺序分配）：I1.0/I1.1... → byte=1, bit=0/1/...
             m_valveOpenLimitByte[i]  = 1;
@@ -509,6 +514,10 @@ namespace WaterTest
             m_valvePIDs.clear();
             m_valveAoByteOffset.clear();
             m_valveAiByteOffset.clear();
+            m_valveAoUseMerkerReal.clear();
+            m_valveAiUseMerkerReal.clear();
+            m_valveAoMerkerByteOffset.clear();
+            m_valveAiMerkerByteOffset.clear();
             m_valveOpenLimitByte.clear();
             m_valveOpenLimitBit.clear();
             m_valveCloseLimitByte.clear();
@@ -535,6 +544,12 @@ namespace WaterTest
                 const int aiDefault = 96 + (i - 1) * 2;
                 m_valveAoByteOffset[i] = cfg.getInt(pfx + "ao.byte_offset", aoDefault);
                 m_valveAiByteOffset[i] = cfg.getInt(pfx + "ai.byte_offset", aiDefault);
+                const std::string aoSource = cfg.getString(pfx + "ao.source", "peripheral");
+                const std::string aiSource = cfg.getString(pfx + "ai.source", "peripheral");
+                m_valveAoUseMerkerReal[i] = (aoSource == "merker_real");
+                m_valveAiUseMerkerReal[i] = (aiSource == "merker_real");
+                m_valveAoMerkerByteOffset[i] = cfg.getInt(pfx + "ao.merker_real.byte_offset", -1);
+                m_valveAiMerkerByteOffset[i] = cfg.getInt(pfx + "ai.merker_real.byte_offset", -1);
                 m_valveOpenLimitByte[i]  = cfg.getInt(pfx + "di.open_limit.byte",  1);
                 m_valveOpenLimitBit[i]   = cfg.getInt(pfx + "di.open_limit.bit",   (i - 1) * 3);
                 m_valveCloseLimitByte[i] = cfg.getInt(pfx + "di.close_limit.byte", 1);
@@ -856,19 +871,34 @@ namespace WaterTest
         if (!m_plcClient || !m_plcClient->isConnected())
             return false;
 
-        auto aoIt = m_valveAoByteOffset.find(id);
-        if (aoIt == m_valveAoByteOffset.end())
-            return false;
+        const float clamped = std::max(0.0f, std::min(100.0f, percent));
+        auto aoUseMerkerIt = m_valveAoUseMerkerReal.find(id);
+        const bool aoUseMerker = (aoUseMerkerIt != m_valveAoUseMerkerReal.end()) && aoUseMerkerIt->second;
 
-        // 转换为 Siemens 4-20mA AO 原始值并写入外设输出区
-        const int16_t rawVal = static_cast<int16_t>(percentToAO(percent));
-        auto res = m_plcClient->writePeripheralWord(aoIt->second, rawVal);
+        S7PLCClient::Result res = S7PLCClient::Result::INVALID_PARAMS;
+        if (aoUseMerker)
+        {
+            auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
+            if (aoMkIt == m_valveAoMerkerByteOffset.end() || aoMkIt->second < 0)
+                return false;
+            res = m_plcClient->writeMerkerReal(aoMkIt->second, clamped);
+        }
+        else
+        {
+            auto aoIt = m_valveAoByteOffset.find(id);
+            if (aoIt == m_valveAoByteOffset.end())
+                return false;
+            // 兼容旧逻辑：转换为 Siemens 4-20mA AO 原始值并写入外设输出区。
+            const int16_t rawVal = static_cast<int16_t>(percentToAO(clamped));
+            res = m_plcClient->writePeripheralWord(aoIt->second, rawVal);
+        }
+
         if (res == S7PLCClient::Result::SUCCESS)
         {
             std::lock_guard<std::mutex> lock(m_dataMutex);
             auto it = m_regulatingValves.find(id);
             if (it != m_regulatingValves.end())
-                it->second.openingSetpoint = percent;
+                it->second.openingSetpoint = clamped;
             return true;
         }
         return false;
@@ -1098,13 +1128,26 @@ namespace WaterTest
             return false;
         }
 
+        // Best-effort safe state: stop pumps first, then de-energize key relays.
+        const uint8_t safeRelays[] = {0, 1, 2, 3, 8, 9};
+        bool safeStateOk = true;
+        safeStateOk &= controlPump(1, false);
+        safeStateOk &= controlPump(2, false);
+        for (uint8_t idx : safeRelays)
+        {
+            safeStateOk &= setRelay(idx, false);
+        }
+
         // Emergency stop signal
         auto result = m_plcClient->writeBool(DB_SYSTEM, 10, 0, true);
 
         if (result == S7PLCClient::Result::SUCCESS)
         {
             setSystemMode(SystemMode::EMERGENCY);
-            addAlarm(AlarmLevel::CRITICAL, "Emergency Stop Triggered", "System");
+            addAlarm(AlarmLevel::CRITICAL,
+                     safeStateOk ? "Emergency Stop Triggered"
+                                 : "Emergency Stop Triggered (safe state partial failure)",
+                     "System");
             return true;
         }
 
@@ -2061,14 +2104,32 @@ namespace WaterTest
             RegulatingValve &valve = pair.second;
 
             // --- 读取 AI 反馈（端子 16-17，4-20mA 位置反馈）---
-            auto aiIt = m_valveAiByteOffset.find(id);
-            if (aiIt != m_valveAiByteOffset.end())
+            auto aiUseMerkerIt = m_valveAiUseMerkerReal.find(id);
+            const bool aiUseMerker = (aiUseMerkerIt != m_valveAiUseMerkerReal.end()) && aiUseMerkerIt->second;
+            if (aiUseMerker)
             {
-                int16_t rawAI = 0;
-                if (m_plcClient->readPeripheralWord(aiIt->second, rawAI) == S7PLCClient::Result::SUCCESS)
+                auto aiMkIt = m_valveAiMerkerByteOffset.find(id);
+                if (aiMkIt != m_valveAiMerkerByteOffset.end() && aiMkIt->second >= 0)
                 {
-                    valve.openingPercent = aiToPercent(static_cast<int>(rawAI));
-                    valve.deviceStatus   = DeviceStatus::ONLINE;
+                    float openingPercent = 0.0f;
+                    if (m_plcClient->readMerkerReal(aiMkIt->second, openingPercent) == S7PLCClient::Result::SUCCESS)
+                    {
+                        valve.openingPercent = std::max(0.0f, std::min(100.0f, openingPercent));
+                        valve.deviceStatus   = DeviceStatus::ONLINE;
+                    }
+                }
+            }
+            else
+            {
+                auto aiIt = m_valveAiByteOffset.find(id);
+                if (aiIt != m_valveAiByteOffset.end())
+                {
+                    int16_t rawAI = 0;
+                    if (m_plcClient->readPeripheralWord(aiIt->second, rawAI) == S7PLCClient::Result::SUCCESS)
+                    {
+                        valve.openingPercent = aiToPercent(static_cast<int>(rawAI));
+                        valve.deviceStatus   = DeviceStatus::ONLINE;
+                    }
                 }
             }
 
@@ -2140,15 +2201,31 @@ namespace WaterTest
             {
                 auto pidIt = m_valvePIDs.find(id);
                 auto aoIt  = m_valveAoByteOffset.find(id);
-                if (pidIt != m_valvePIDs.end() && aoIt != m_valveAoByteOffset.end()
-                    && m_plcClient->isConnected())
+                auto aoUseMerkerIt = m_valveAoUseMerkerReal.find(id);
+                const bool aoUseMerker = (aoUseMerkerIt != m_valveAoUseMerkerReal.end()) && aoUseMerkerIt->second;
+                auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
+                const bool aoPathReady = aoUseMerker
+                    ? (aoMkIt != m_valveAoMerkerByteOffset.end() && aoMkIt->second >= 0)
+                    : (aoIt != m_valveAoByteOffset.end());
+                if (pidIt != m_valvePIDs.end() && aoPathReady && m_plcClient->isConnected())
                 {
                     const double pidOut = pidIt->second.compute(
                         static_cast<double>(valve.setPressure),
                         static_cast<double>(valve.actualPressure));
-                    const int16_t rawAO = static_cast<int16_t>(
-                        percentToAO(static_cast<float>(pidOut)));
-                    if (m_plcClient->writePeripheralWord(aoIt->second, rawAO) == S7PLCClient::Result::SUCCESS)
+
+                    const float outputPercent = std::max(0.0f, std::min(100.0f, static_cast<float>(pidOut)));
+                    S7PLCClient::Result writeRes = S7PLCClient::Result::INVALID_PARAMS;
+                    if (aoUseMerker)
+                    {
+                        writeRes = m_plcClient->writeMerkerReal(aoMkIt->second, outputPercent);
+                    }
+                    else
+                    {
+                        const int16_t rawAO = static_cast<int16_t>(percentToAO(outputPercent));
+                        writeRes = m_plcClient->writePeripheralWord(aoIt->second, rawAO);
+                    }
+
+                    if (writeRes == S7PLCClient::Result::SUCCESS)
                         valve.openingSetpoint = static_cast<float>(pidOut);
                 }
             }

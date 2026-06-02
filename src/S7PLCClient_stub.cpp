@@ -82,6 +82,36 @@ namespace WaterTest
         return Result::SNAP7_NOT_AVAILABLE;
     }
 
+    S7PLCClient::Result S7PLCClient::readMerkerBool(int byteOffset, int bit, bool &value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
+    S7PLCClient::Result S7PLCClient::writeMerkerBool(int byteOffset, int bit, bool value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
+    S7PLCClient::Result S7PLCClient::readMerkerReal(int byteOffset, float &value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
+    S7PLCClient::Result S7PLCClient::writeMerkerReal(int byteOffset, float value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
+    S7PLCClient::Result S7PLCClient::readPeripheralWord(int byteOffset, int16_t &value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
+    S7PLCClient::Result S7PLCClient::writePeripheralWord(int byteOffset, int16_t value)
+    {
+        return Result::SNAP7_NOT_AVAILABLE;
+    }
+
     // Error handling
     std::string S7PLCClient::getLastError() const
     {

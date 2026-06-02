@@ -18,16 +18,16 @@ graph LR
     %% 主回路1
     P1[变频泵1<br/>50Hz<br/>45A]:::pumpStyle
     V1[电动阀1<br/>开度:100%]:::valveStyle
-   PS1[压力传感器1<br/>850kPa]:::sensorStyle
+   PS1[压力传感器1<br/>8.67kgf/cm^2]:::sensorStyle
     FM1[流量计1<br/>85L/min<br/>25°C]:::meterStyle
-   RV1[电动调压阀1<br/>设定:800kPa]:::regValveStyle
+   RV1[电动调压阀1<br/>设定:8.16kgf/cm^2]:::regValveStyle
     TP1[测试点1]
 
-   P1 -->|DN100<br/>5m<br/>900kPa| V1
-   V1 -->|DN100<br/>3m<br/>870kPa| PS1
-   PS1 -->|DN100<br/>8m<br/>850kPa| FM1
-   FM1 -->|DN100<br/>6m<br/>820kPa| RV1
-   RV1 -->|DN50<br/>4m<br/>800kPa| TP1
+   P1 -->|DN100<br/>5m<br/>9.18kgf/cm^2| V1
+   V1 -->|DN100<br/>3m<br/>8.87kgf/cm^2| PS1
+   PS1 -->|DN100<br/>8m<br/>8.67kgf/cm^2| FM1
+   FM1 -->|DN100<br/>6m<br/>8.36kgf/cm^2| RV1
+   RV1 -->|DN50<br/>4m<br/>8.16kgf/cm^2| TP1
 
     %% 标注水流方向
     P1 -.水流方向.-> TP1
@@ -172,7 +172,7 @@ graph TB
    流量计1监测 → 达到目标流量(85L/min)
    ↓
 5. 压力调节
-   电动调压阀1工作 → 设定压力800kPa → 实际压力稳定在800±20kPa
+   电动调压阀1工作 → 设定压力8.16kgf/cm^2 → 实际压力稳定在8.16±0.20kgf/cm^2
    ↓
 6. 数据采集
    持续记录: 流量、压力、温度 → 1秒1次 → 持续60秒
@@ -190,31 +190,31 @@ graph TB
 │              主回路实时状态                          │
 ├─────────────────────────────────────────────────────┤
 │ 变频泵1:    运行中    50.0 Hz    45.2 A    15.8 kW │
-│ ├─ 出口压力: 900 kPa                                │
+│ ├─ 出口压力: 9.18 kgf/cm^2                         │
 │ └─ 流量: 85.3 L/min                                 │
 │                                                      │
 │ 电动阀1:    已开启    开度 100%                     │
-│ └─ 压力降: 30 kPa                                   │
+│ └─ 压力降: 0.31 kgf/cm^2                            │
 │                                                      │
-│ 压力传感器1: 870 kPa  ✓正常                        │
+│ 压力传感器1: 8.87 kgf/cm^2  ✓正常                  │
 │                                                      │
 │ 流量计1:    85.3 L/min                              │
 │ ├─ 累计流量: 142.5 L                                │
 │ └─ 水温: 25.3 °C                                    │
 │                                                      │
 │ 电动调压阀1: 工作中                                 │
-│ ├─ 设定: 800 kPa                                    │
-│ ├─ 实际: 800 kPa                                    │
-│ └─ 偏差: 0 kPa  ✓                                   │
+│ ├─ 设定: 8.16 kgf/cm^2                              │
+│ ├─ 实际: 8.16 kgf/cm^2                              │
+│ └─ 偏差: 0.00 kgf/cm^2  ✓                           │
 │                                                      │
-│ 测试点1:    800 kPa    85.3 L/min                  │
+│ 测试点1:    8.16 kgf/cm^2    85.3 L/min            │
 └─────────────────────────────────────────────────────┘
 ```
 
 ## 压力分布曲线
 
 ```
-压力(kPa)
+压力(kgf/cm^2)
 1000 │  ●变频泵出口
      │  │
 900  │  ├──●阀1后
@@ -250,7 +250,7 @@ def start_dn100_test():
     start_pump(1, initial_frequency=30)
     
     # 4. 等待管路充满
-   wait_until(pressure_sensor_6 > 100)  # 等待100kPa
+   wait_until(pressure_sensor_6 > 1.02)  # 等待1.02kgf/cm^2
     
     # 5. 逐步增加频率
     ramp_up_pump(1, target_frequency=50, step=2, interval=1)
@@ -259,7 +259,7 @@ def start_dn100_test():
     wait_until(flow_meter_1.stable_for(5))  # 稳定5秒
     
     # 7. 调节压力
-   regulating_valve_1.set_pressure(800)  # kPa
+   regulating_valve_1.set_pressure(8.16)  # kgf/cm^2
     
     # 8. 开始记录数据
     start_data_logging()

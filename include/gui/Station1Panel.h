@@ -44,6 +44,9 @@ namespace WaterTest
         // 为操作台远程模式注入主控客户端
         void setStationClient(std::shared_ptr<StationClient> stationClient);
 
+        // 连接成功后立即同步一次图元状态（不依赖页面是否可见）
+        void syncVisualStateOnce();
+
     protected:
         void resizeEvent(QResizeEvent *event) override;
         void showEvent(QShowEvent *event) override;
@@ -64,11 +67,11 @@ namespace WaterTest
         void applyAutoFit();
         void setRealtimeUpdatesEnabled(bool enabled);
         void updatePipeFlowAnimation();
-        void updateSensorValues();
+        void updateSensorValues(bool force = false);
 
         // DQ 继电器控制
         void buildRelayPanel(QWidget *parent);
-        void updateRelayButtons();
+        void updateRelayButtons(bool force = false);
         void onRelayBtnClicked(uint8_t index, const char *source = "unknown");
         void onStartButtonClicked(const char *source = "ui");
         void onStopButtonClicked(const char *source = "ui");

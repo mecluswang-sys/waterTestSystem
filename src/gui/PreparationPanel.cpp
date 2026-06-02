@@ -4,6 +4,15 @@
  */
 
 #include "gui/PreparationPanel.h"
+#include "gui/ContainerGlyphRenderer.h"
+#include "gui/HmiGraphicsHelpers.h"
+#include "gui/HmiGlyphTheme.h"
+#include "gui/HmiGlyphThemeUtils.h"
+#include "gui/NodeGlyphRenderer.h"
+#include "gui/PoolGlyphRenderer.h"
+#include "gui/PumpGlyphRenderer.h"
+#include "gui/SensorGlyphRenderer.h"
+#include "gui/ValveGlyphRenderer.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
 #include "StationClient.h"
@@ -183,6 +192,28 @@ namespace WaterTest
             QColor water;
         };
 
+        static GuiGlyph::HmiGlyphTheme makeGlyphTheme()
+        {
+            return GuiGlyph::makeHmiGlyphTheme(
+                kUiShadow,
+                kUiPanel,
+                kUiBody,
+                kUiBorder,
+                kUiBorderWeak,
+                kUiCyan,
+                kUiText,
+                kUiTextDim,
+                kUiTextMuted,
+                kUiInk,
+                kUiGreen,
+                kUiRed,
+                kUiOrange,
+                kUiPurple,
+                kUiMetalDark,
+                kUiMetalMid,
+                kUiWater);
+        }
+
         static UiThemeTokens makeGraphiteTheme()
         {
             UiThemeTokens t;
@@ -337,9 +368,16 @@ namespace WaterTest
             return true;
         }
 
+        constexpr double kKPaPerKgfCm2 = 98.0665;
+
+        static double kPaToKgfCm2(double kpa)
+        {
+            return kpa / kKPaPerKgfCm2;
+        }
+
         static QString fmtKPa(double pa)
         {
-            return QString::number(pa / 1e3, 'f', 1) + " kPa";
+            return QString::number(kPaToKgfCm2(pa / 1e3), 'f', 2) + " kgf/cm^2";
         }
 
         static int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 1)
@@ -351,7 +389,7 @@ namespace WaterTest
 
         static QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
-            return QString::number(sensor.pressure, 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kPa";
+            return QString::number(kPaToKgfCm2(sensor.pressure), 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kgf/cm^2";
         }
 
         constexpr qreal kPumpItemWidth = 110;
@@ -458,8 +496,8 @@ namespace WaterTest
         class PumpItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return QPointF(-55, 0); }
-            static QPointF outletPortLocal() { return QPointF(55, 0); }
+            static QPointF inletPortLocal() { return GuiGlyph::pumpInletPortLocal(); }
+            static QPointF outletPortLocal() { return GuiGlyph::pumpOutletPortLocal(); }
 
             explicit PumpItem(const QString &name)
                 : m_name(name), m_running(false), m_frequencyHz(0.0)
@@ -471,7 +509,7 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-55, -45, 110, 140); }
+            QRectF boundingRect() const override { return GuiGlyph::pumpBoundingRect(); }
 
             static constexpr qreal width() { return 110; }
             static constexpr qreal height() { return 140; }
@@ -480,16 +518,7 @@ namespace WaterTest
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    // 网格吸附（10像素网格）
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -497,10 +526,7 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
             qreal x() const { return pos().x(); }
@@ -524,90 +550,7 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                // 选中状态高亮边框
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 10, 10);
-                }
-
-                // 对齐 docs/UI-design PumpComponent：扁平深色结构 + #666 描边 + 状态灯
-                const QColor statusColor = m_running ? kUiGreen : kUiBorder;
-                const QColor borderColor = kUiBorder;
-
-                // 轻阴影（选中态暂无，这里做轻量立体感）
-                p->setPen(Qt::NoPen);
-                p->setBrush(kUiShadow);
-                p->drawRoundedRect(QRectF(-54, -42, 108, 140).translated(2, 3), 10, 10);
-
-                // 电机主体
-                const QRectF motor(-50, -15, 40, 30);
-                p->setBrush(kUiBody);
-                p->setPen(QPen(borderColor, 2));
-                p->drawRect(motor);
-
-                // 电机端盖（椭圆）
-                p->setBrush(kUiPanel);
-                p->setPen(QPen(borderColor, 1));
-                p->drawEllipse(QPointF(motor.left() + 20, motor.center().y()), 6, 15);
-
-                // 轴
-                p->setBrush(kUiMetalMid);
-                p->setPen(QPen(kUiBorder, 1));
-                p->drawRect(QRectF(motor.right(), motor.center().y() - 3, 12, 6));
-
-                // 泵壳（圆形）
-                p->setBrush(kUiBody);
-                p->setPen(QPen(borderColor, 2));
-                p->drawEllipse(QPointF(22, 0), 18, 18);
-
-                // 出口
-                p->setBrush(kUiMetalDark);
-                p->setPen(QPen(borderColor, 2));
-                p->drawRect(QRectF(40, -4, 12, 8));
-
-                // 状态灯
-                p->setBrush(statusColor);
-                p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(motor.left() + 10, motor.top() + 5), 4, 4);
-
-                // 运行提示环（不做动画，静态 #0af 内圈）
-                if (m_running)
-                {
-                    p->setBrush(Qt::NoBrush);
-                    p->setPen(QPen(kUiCyan, 2));
-                    p->drawEllipse(QPointF(22, 0), 10, 10);
-                }
-
-                // 文本（名称 + 状态/频率）
-                p->setPen(kUiText);
-                QFont nameFont = p->font();
-                nameFont.setPointSize(9);
-                nameFont.setBold(true);
-                p->setFont(nameFont);
-                p->drawText(QRectF(-55, 18, 110, 22), Qt::AlignCenter, m_name);
-
-                QFont statusFont = p->font();
-                statusFont.setPointSize(8);
-                statusFont.setBold(false);
-                statusFont.setFamily("Consolas");
-                p->setFont(statusFont);
-                p->setPen(kUiTextMuted);
-                const QString statusText = m_running ? "RUN" : "STOP";
-                p->drawText(QRectF(-55, -34, 110, 18), Qt::AlignCenter, statusText);
-
-                const QString freqText = QString("%1Hz").arg(QString::number(m_frequencyHz, 'f', 1));
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(-55, 40, 110, 18), Qt::AlignCenter, freqText);
-
-                // 入口/出口触点（用于管道吸附）
-                p->setPen(QPen(kUiBorder, 1));
-                p->setBrush(kUiCyan);
-                p->drawEllipse(inletPortLocal(), 4, 4);
-                p->drawEllipse(outletPortLocal(), 4, 4);
+                GuiGlyph::drawPumpGlyph(p, boundingRect(), m_name, m_running, m_frequencyHz, isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -619,8 +562,8 @@ namespace WaterTest
         class ValveItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return QPointF(-40, 12); }
-            static QPointF outletPortLocal() { return QPointF(45, 12); }
+            static QPointF inletPortLocal() { return GuiGlyph::valveInletPortLocal(); }
+            static QPointF outletPortLocal() { return GuiGlyph::valveOutletPortLocal(); }
 
             explicit ValveItem(const QString &name)
                 : m_name(name), m_open(false), m_degree(0)
@@ -632,7 +575,7 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-50, -40, 104, 100); }
+            QRectF boundingRect() const override { return QRectF(-50, -48, 104, 108); }
 
             static constexpr qreal width() { return 104; }
             static constexpr qreal height() { return 100; }
@@ -643,16 +586,7 @@ namespace WaterTest
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    // 网格吸附（10像素网格）
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -660,10 +594,7 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -685,102 +616,7 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                // 选中状态高亮边框
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 10, 10);
-                }
-
-                // 对齐 docs/UI-design ValveComponent：菱形阀体 + 执行器 + 位置指示
-                const QColor borderColor = kUiBorder;
-                const QColor discColor = m_open ? kUiGreen : kUiRed;
-                const QColor statusColor = discColor;
-
-                // 轻阴影
-                p->setPen(Qt::NoPen);
-                p->setBrush(kUiShadow);
-                p->drawRoundedRect(QRectF(-40, -38, 80, 98).translated(2, 3), 10, 10);
-
-                // 执行器
-                p->setBrush(kUiBody);
-                p->setPen(QPen(borderColor, 2));
-                p->drawRoundedRect(QRectF(-15, -34, 30, 18), 2, 2);
-
-                // 执行器字母
-                p->setPen(kUiTextMuted);
-                QFont mf = p->font();
-                mf.setPointSize(8);
-                mf.setBold(true);
-                mf.setFamily("Consolas");
-                p->setFont(mf);
-                p->drawText(QRectF(-15, -34, 30, 18), Qt::AlignCenter, "M");
-
-                // 状态灯
-                p->setBrush(statusColor);
-                p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(-11, -30), 3, 3);
-
-                // 阀杆
-                p->setBrush(kUiMetalMid);
-                p->setPen(QPen(kUiBorder, 1));
-                p->drawRect(QRectF(-2, -16, 4, 12));
-
-                // 阀体（菱形）
-                QPainterPath diamond;
-                diamond.moveTo(0, -2);
-                diamond.lineTo(26, 12);
-                diamond.lineTo(0, 26);
-                diamond.lineTo(-26, 12);
-                diamond.closeSubpath();
-                p->setBrush(kUiBody);
-                p->setPen(QPen(borderColor, 2));
-                p->drawPath(diamond);
-
-                // 阀瓣（随开度旋转 0~90 度）
-                const double rotation = (m_degree / 100.0) * 90.0;
-                p->save();
-                p->translate(0, 12);
-                p->rotate(rotation);
-                p->setBrush(discColor);
-                p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(0, 0), 16, 3);
-                p->restore();
-
-                // 位置指示圆盘
-                p->setBrush(kUiPanel);
-                p->setPen(QPen(kUiBorder, 1));
-                p->drawEllipse(QPointF(24, -26), 6, 6);
-                // 指针
-                const double ang = (rotation - 90.0) * 3.14159 / 180.0;
-                p->setPen(QPen(statusColor, 2, Qt::SolidLine, Qt::RoundCap));
-                p->drawLine(QPointF(24, -26), QPointF(24 + 5 * std::cos(ang), -26 + 5 * std::sin(ang)));
-
-                // 文本
-                p->setPen(kUiText);
-                QFont f = p->font();
-                f.setPointSize(9);
-                f.setBold(true);
-                p->setFont(f);
-                p->drawText(QRectF(-52, 30, 104, 18), Qt::AlignCenter, m_name);
-
-                QFont f2 = p->font();
-                f2.setPointSize(8);
-                f2.setBold(false);
-                f2.setFamily("Consolas");
-                p->setFont(f2);
-                p->setPen(kUiTextMuted);
-                const QString s = QString("POS:%1%").arg(QString::number(m_degree, 'f', 0));
-                p->drawText(QRectF(-52, 40, 104, 16), Qt::AlignCenter, s);
-
-                // 入口/出口触点（用于管道吸附）
-                p->setPen(QPen(kUiBorder, 1));
-                p->setBrush(kUiCyan);
-                p->drawEllipse(inletPortLocal(), 4, 4);
-                p->drawEllipse(outletPortLocal(), 4, 4);
+                GuiGlyph::drawValveGlyph(p, boundingRect(), m_name, m_open, m_degree, isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -803,24 +639,15 @@ namespace WaterTest
             }
 
             // 卡片 + 引线
-            QRectF boundingRect() const override { return QRectF(-52, -46, 104, 104); }
+            QRectF boundingRect() const override { return GuiGlyph::sensorBoundingRect(); }
 
-            static constexpr qreal width() { return 104; }
-            static constexpr qreal height() { return 104; }
+            static constexpr qreal width() { return 124; }
+            static constexpr qreal height() { return 110; }
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    // 网格吸附（10像素网格）
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -828,10 +655,7 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -857,69 +681,17 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                // 选中状态高亮边框
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 8, 8);
-                }
-
-                // 对齐 docs/UI-design SensorComponent：卡片式传感器 + 虚线引线 + 类型色圆点
-                const QColor typeColor = kUiPurple; // pressure
-                const QColor borderColor = kUiBorder;
-                const QColor valueColor = typeColor;
-
-                const QRectF card(-45, -40, 90, 56);
-                // 卡片底
-                p->setPen(QPen(borderColor, 2));
-                p->setBrush(kUiPanel);
-                p->drawRect(card);
-
-                // Tag
-                p->setPen(kUiTextDim);
-                QFont tagFont = p->font();
-                tagFont.setPointSize(8);
-                tagFont.setBold(false);
-                tagFont.setFamily("Consolas");
-                p->setFont(tagFont);
-                p->drawText(QRectF(card.left() + 6, card.top() + 4, card.width() - 12, 12), Qt::AlignLeft | Qt::AlignVCenter, m_name);
-
-                // Value
-                QFont valFont = p->font();
-                valFont.setPointSize(14);
-                valFont.setBold(true);
-                valFont.setFamily("Consolas");
-                p->setFont(valFont);
-                p->setPen(valueColor);
-                const QString v = QString::number(m_pressureMPa, 'f', m_pressureDisplayDecimals);
-                p->drawText(QRectF(card.left() + 6, card.top() + 18, card.width() - 12, 22), Qt::AlignLeft | Qt::AlignVCenter, v);
-
-                // Unit
-                QFont unitFont = p->font();
-                unitFont.setPointSize(8);
-                unitFont.setBold(false);
-                unitFont.setFamily("Consolas");
-                p->setFont(unitFont);
-                p->setPen(kUiTextDim);
-                p->drawText(QRectF(card.left() + 6 + 52, card.top() + 24, card.width() - 58, 14), Qt::AlignLeft | Qt::AlignVCenter, "kPa");
-
-                // Status（简化：固定 GOOD）
-                p->setBrush(kUiGreen);
-                p->setPen(Qt::NoPen);
-                p->drawRect(QRectF(card.left() + 6, card.bottom() - 10, 6, 6));
-                p->setPen(kUiTextDim);
-                p->setFont(unitFont);
-                p->drawText(QRectF(card.left() + 16, card.bottom() - 12, card.width() - 22, 10), Qt::AlignLeft | Qt::AlignVCenter, "GOOD");
-
-                // 引线（虚线）
-                p->setPen(QPen(kUiBorder, 1.5, Qt::DashLine, Qt::RoundCap));
-                p->drawLine(QPointF(0, card.bottom()), QPointF(0, card.bottom() + 16));
-                p->setBrush(typeColor);
-                p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(0, card.bottom() + 16), 3, 3);
+                GuiGlyph::drawSensorGlyph(
+                    p,
+                    boundingRect(),
+                    m_name,
+                    kPaToKgfCm2(m_pressureMPa),
+                    m_pressureDisplayDecimals,
+                    "kgf/cm^2",
+                    kUiPurple,
+                    isSelected(),
+                    true,
+                        makeGlyphTheme());
             }
 
         private:
@@ -931,8 +703,8 @@ namespace WaterTest
         class TankItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return QPointF(-55, -5); }
-            static QPointF outletPortLocal() { return QPointF(55, 50); }
+            static QPointF inletPortLocal() { return GuiGlyph::tankInletPortLocal(); }
+            static QPointF outletPortLocal() { return GuiGlyph::tankOutletPortLocal(); }
 
             explicit TankItem(const QString &name)
                 : m_name(name), m_fillPercent(0.0), m_filling(false), m_pressureMPa(0.0), m_pressureDisplayDecimals(2)
@@ -944,7 +716,7 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-70, -90, 160, 240); }
+            QRectF boundingRect() const override { return GuiGlyph::tankBoundingRect(); }
 
             static constexpr qreal width() { return 160; }
             static constexpr qreal height() { return 240; }
@@ -952,16 +724,7 @@ namespace WaterTest
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    // 网格吸附（10像素网格）
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -969,10 +732,7 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -1015,101 +775,11 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                // 选中状态高亮边框
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 18, 18);
-                }
-
-                // 对齐 docs/UI-design TankComponent：圆柱罐体（顶/壳/底）+ 半透明液位
-                const QColor borderColor = kUiBorder;
-                const QColor levelColor = kUiCyan;
-
-                // 轻阴影
-                p->setPen(Qt::NoPen);
-                p->setBrush(kUiShadow);
-                p->drawRoundedRect(QRectF(-58, -88, 116, 176).translated(3, 4), 18, 18);
-
-                // 罐体几何（在既有 boundingRect 内做缩放版）
-                const QRectF roof(-46, -74, 92, 18);
-                const QRectF shell(-46, -65, 92, 120);
-                const QRectF bottom(-46, 55, 92, 18);
-
-                // 顶/底椭圆
-                p->setBrush(kUiBody);
-                p->setPen(QPen(borderColor, 2));
-                p->drawEllipse(roof);
-                p->drawEllipse(bottom);
-
-                // 壳
-                p->setBrush(kUiPanel);
-                p->setPen(QPen(borderColor, 2));
-                p->drawRect(shell);
-
-                // 液位（clip 到 shell）
                 const double level = std::clamp(m_fillPercent, 0.0, 100.0);
-                const double fillH = shell.height() * (level / 100.0);
-                QRectF liquid(shell.left() + 2, shell.bottom() - fillH, shell.width() - 4, fillH);
-                p->save();
-                p->setClipRect(shell);
-                p->setBrush(QColor(levelColor.red(), levelColor.green(), levelColor.blue(), 120));
-                p->setPen(Qt::NoPen);
-                p->drawRect(liquid);
-                // 液面
-                p->setPen(QPen(levelColor, 2));
-                p->drawLine(QPointF(liquid.left(), liquid.top()), QPointF(liquid.right(), liquid.top()));
-                p->restore();
-
-                // 入口/出口（简化）
-                p->setBrush(kUiMetalDark);
-                p->setPen(QPen(borderColor, 2));
-                p->drawRect(QRectF(shell.left() - 18, shell.center().y() - 5, 18, 10));
-                p->drawRect(QRectF(shell.right(), shell.bottom() - 10, 18, 10));
-
-                // 支撑
-                p->setBrush(kUiMetalDark);
-                p->setPen(QPen(kUiBorder, 1));
-                p->drawRect(QRectF(shell.left() + 10, bottom.bottom() - 2, 8, 20));
-                p->drawRect(QRectF(shell.right() - 18, bottom.bottom() - 2, 8, 20));
-                p->drawRect(QRectF(shell.left() + 6, bottom.bottom() + 16, shell.width() - 12, 4));
-
-                // 人孔
-                p->setBrush(kUiMetalDark);
-                p->setPen(QPen(kUiBorder, 1.5));
-                p->drawEllipse(QRectF(-8, roof.top() + 3, 16, 6));
-
-                // 状态灯（加水中绿，否则灰）
-                const QColor lamp = m_filling ? kUiGreen : kUiBorder;
-                p->setBrush(lamp);
-                p->setPen(QPen(kUiInk, 1));
-                p->drawEllipse(QPointF(shell.right() + 14, roof.center().y()), 4, 4);
-
-                // 文本
-                p->setPen(kUiText);
-                QFont f = p->font();
-                f.setPointSize(10);
-                f.setBold(true);
-                p->setFont(f);
-                p->drawText(QRectF(-70, 78, 140, 18), Qt::AlignCenter, m_name);
-
-                QFont f2 = p->font();
-                f2.setPointSize(8);
-                f2.setBold(false);
-                f2.setFamily("Consolas");
-                p->setFont(f2);
-                p->setPen(kUiTextMuted);
-                p->drawText(QRectF(-70, 62, 140, 16), Qt::AlignCenter,
-                            QString("LV:%1%  PT:%2kpa").arg(QString::number(level, 'f', 0)).arg(QString::number(m_pressureMPa, 'f', m_pressureDisplayDecimals)));
-
-                // 入口/出口触点（用于管道吸附）
-                p->setPen(QPen(kUiBorder, 1));
-                p->setBrush(kUiCyan);
-                p->drawEllipse(inletPortLocal(), 4, 4);
-                p->drawEllipse(outletPortLocal(), 4, 4);
+                const QString detailText = QString("LV:%1%  PT:%2kgf/cm^2")
+                                               .arg(QString::number(level, 'f', 0))
+                                               .arg(QString::number(kPaToKgfCm2(m_pressureMPa), 'f', m_pressureDisplayDecimals));
+                GuiGlyph::drawTankGlyph(p, boundingRect(), m_name, level, m_filling, detailText, isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -1125,8 +795,8 @@ namespace WaterTest
         {
         public:
             // 1) 上面入口 2) 下面出口
-            static QPointF inletPortLocal() { return QPointF(80, -55); }
-            static QPointF outletPortLocal() { return QPointF(80, 35); }
+            static QPointF inletPortLocal() { return GuiGlyph::outdoorPoolInletPortLocal(); }
+            static QPointF outletPortLocal() { return GuiGlyph::outdoorPoolOutletPortLocal(); }
 
             explicit OutdoorPoolItem(const QString &name)
                 : m_name(name), m_waterLevel(80.0)
@@ -1138,7 +808,7 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-80, -100, 160, 200); }
+            QRectF boundingRect() const override { return GuiGlyph::outdoorPoolBoundingRect(); }
 
             static constexpr qreal width() { return 160; }
             static constexpr qreal height() { return 200; }
@@ -1146,16 +816,7 @@ namespace WaterTest
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    // 网格吸附（10像素网格）
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -1163,10 +824,7 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
@@ -1181,79 +839,7 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                // 选中状态高亮边框
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 3, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(2, 2, -2, -2), 12, 12);
-                }
-
-                const QColor borderColor = kUiBorder;
-                const QColor waterColor = kUiWater;
-
-                // 轻阴影
-                p->setPen(Qt::NoPen);
-                p->setBrush(kUiShadow);
-                p->drawRoundedRect(QRectF(-78, -98, 156, 196).translated(3, 4), 12, 12);
-
-                // 水池主体（矩形池体）
-                const QRectF poolBody(-70, -90, 140, 160);
-                p->setBrush(kUiPanel);
-                p->setPen(QPen(borderColor, 3));
-                p->drawRoundedRect(poolBody, 8, 8);
-
-                // 水位（半透明蓝色）
-                const double level = std::clamp(m_waterLevel, 0.0, 100.0);
-                const double fillH = poolBody.height() * (level / 100.0);
-                QRectF water(poolBody.left() + 3, poolBody.bottom() - fillH, poolBody.width() - 6, fillH);
-                p->save();
-                p->setClipRect(poolBody);
-                p->setBrush(QColor(waterColor.red(), waterColor.green(), waterColor.blue(), 120));
-                p->setPen(Qt::NoPen);
-                p->drawRect(water);
-                // 水面线
-                p->setPen(QPen(waterColor, 2));
-                p->drawLine(QPointF(water.left(), water.top()), QPointF(water.right(), water.top()));
-                p->restore();
-
-                // 出水口（两个出口在右侧）
-                p->setBrush(kUiMetalDark);
-                p->setPen(QPen(borderColor, 2));
-                // 上出口（到P1）
-                p->drawRect(QRectF(poolBody.right(), poolBody.top() + 30, 18, 10));
-                // 下出口（到P2）
-                p->drawRect(QRectF(poolBody.right(), poolBody.bottom() - 40, 18, 10));
-
-                // 底座
-                p->setBrush(kUiMetalMid);
-                p->setPen(QPen(kUiBorder, 2));
-                p->drawRect(QRectF(-75, poolBody.bottom(), 150, 8));
-
-                // 文本
-                p->setPen(kUiText);
-                QFont f = p->font();
-                f.setPointSize(10);
-                f.setBold(true);
-                p->setFont(f);
-                p->drawText(QRectF(-80, 82, 160, 18), Qt::AlignCenter, m_name);
-
-                QFont f2 = p->font();
-                f2.setPointSize(8);
-                f2.setBold(false);
-                f2.setFamily("Consolas");
-                p->setFont(f2);
-                p->setPen(kUiTextMuted);
-                p->drawText(QRectF(-80, 68, 160, 16), Qt::AlignCenter,
-                            QString("水位:%1%").arg(QString::number(level, 'f', 0)));
-
-                // 入口/出口触点（用于管道吸附）
-                p->setPen(QPen(kUiBorder, 1));
-                p->setBrush(kUiCyan);
-                p->drawEllipse(inletPortLocal(), 4, 4);
-                p->drawEllipse(outletPortLocal(), 4, 4);
+                GuiGlyph::drawOutdoorPoolGlyph(p, boundingRect(), m_name, m_waterLevel, isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -1266,9 +852,9 @@ namespace WaterTest
         {
         public:
             // 上下触点对调：让 inlet1 / inlet2 的上下位置反一下
-            static QPointF inlet1PortLocal() { return QPointF(-18, 8); }
-            static QPointF inlet2PortLocal() { return QPointF(-18, -8); }
-            static QPointF outletPortLocal() { return QPointF(18, 0); }
+            static QPointF inlet1PortLocal() { return GuiGlyph::teeNodeInlet1PortLocal(); }
+            static QPointF inlet2PortLocal() { return GuiGlyph::teeNodeInlet2PortLocal(); }
+            static QPointF outletPortLocal() { return GuiGlyph::teeNodeOutletPortLocal(); }
 
             explicit TeeNodeItem(const QString &name)
                 : m_name(name)
@@ -1280,21 +866,13 @@ namespace WaterTest
                 setFlags(flags);
             }
 
-            QRectF boundingRect() const override { return QRectF(-24, -20, 48, 40); }
+            QRectF boundingRect() const override { return GuiGlyph::teeNodeBoundingRect(); }
 
             QVariant itemChange(GraphicsItemChange change, const QVariant &value) override
             {
                 if (!hmiDragEnabled())
                     return QGraphicsItem::itemChange(change, value);
-                if (change == ItemPositionChange && scene())
-                {
-                    QPointF newPos = value.toPointF();
-                    qreal gridSize = 10.0;
-                    qreal xV = qRound(newPos.x() / gridSize) * gridSize;
-                    qreal yV = qRound(newPos.y() / gridSize) * gridSize;
-                    return QPointF(xV, yV);
-                }
-                return QGraphicsItem::itemChange(change, value);
+                return GuiGlyph::snapToGridItemChange(change, value, scene());
             }
 
             void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override
@@ -1302,35 +880,13 @@ namespace WaterTest
                 QGraphicsItem::mouseReleaseEvent(event);
                 if (!hmiDragEnabled())
                     return;
-                qInfo().noquote() << QString("[HMI坐标] %1 pos=(%2, %3)")
-                                         .arg(m_name)
-                                         .arg(pos().x(), 0, 'f', 0)
-                                         .arg(pos().y(), 0, 'f', 0);
+                qInfo().noquote() << GuiGlyph::formatMovedItemMessage(m_name, pos());
                 appendHmiPositionLine(formatHmiPositionLine("MOVE", m_name, pos()));
             }
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-
-                if (isSelected())
-                {
-                    p->setPen(QPen(kUiCyan, 2, Qt::DashLine));
-                    p->setBrush(Qt::NoBrush);
-                    p->drawRoundedRect(boundingRect().adjusted(1, 1, -1, -1), 6, 6);
-                }
-
-                // T 形节点（深灰本体 + #666 描边）
-                p->setPen(QPen(kUiBorder, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-                p->drawLine(QPointF(-14, -8), QPointF(-14, 8));
-                p->drawLine(QPointF(-14, 0), QPointF(14, 0));
-
-                // 端口触点
-                p->setPen(QPen(kUiBorder, 1));
-                p->setBrush(kUiCyan);
-                p->drawEllipse(inlet1PortLocal(), 3.5, 3.5);
-                p->drawEllipse(inlet2PortLocal(), 3.5, 3.5);
-                p->drawEllipse(outletPortLocal(), 3.5, 3.5);
+                GuiGlyph::drawTeeNodeGlyph(p, boundingRect(), isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -1805,7 +1361,7 @@ namespace WaterTest
                 setCacheMode(DeviceCoordinateCache);
             }
 
-            QRectF boundingRect() const override { return QRectF(-30, -22, 60, 44); }
+            QRectF boundingRect() const override { return GuiGlyph::safetyIndicatorBoundingRect(); }
 
             void setActive(bool a)
             {
@@ -1817,59 +1373,7 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                p->setRenderHint(QPainter::Antialiasing, true);
-                // 参考 docs/UI-design：未触发灰色，触发红色；深灰本体 + #666 描边
-                const QColor status = m_active ? kUiRed : kUiBorder;
-                const QColor border = kUiBorder;
-                const QColor fill = kUiBody;
-
-                // 简化版安全阀符号（不做动画，但用同一套 token）
-                p->setPen(QPen(border, 2));
-                p->setBrush(fill);
-                // 阀体（三角）
-                QPolygonF tri;
-                tri << QPointF(-14, 2) << QPointF(0, 20) << QPointF(14, 2);
-                p->drawPolygon(tri);
-
-                // 弹簧盒
-                p->setBrush(kUiBody);
-                p->drawRect(QRectF(-5, -20, 10, 10));
-                // 弹簧线（zigzag）
-                p->setBrush(Qt::NoBrush);
-                p->setPen(QPen(kUiTextMuted, 1.5));
-                QPainterPath spring;
-                spring.moveTo(0, -10);
-                spring.lineTo(-3, -8);
-                spring.lineTo(3, -6);
-                spring.lineTo(-3, -4);
-                spring.lineTo(3, -2);
-                spring.lineTo(-3, 0);
-                spring.lineTo(0, 2);
-                p->drawPath(spring);
-                p->setPen(QPen(border, 2));
-
-                // 排放口
-                p->setBrush(kUiPanel);
-                QPolygonF vent;
-                vent << QPointF(14, 8) << QPointF(22, 4) << QPointF(22, 12);
-                p->drawPolygon(vent);
-
-                // 入口
-                p->setBrush(fill);
-                p->drawRect(QRectF(-3, 20, 6, 12));
-
-                // 状态灯
-                p->setPen(QPen(kUiInk, 1));
-                p->setBrush(status);
-                p->drawEllipse(QPointF(-22, 10), 3, 3);
-
-                // 名称
-                p->setPen(kUiText);
-                QFont f = p->font();
-                f.setPointSize(8);
-                f.setBold(true);
-                p->setFont(f);
-                p->drawText(QRectF(-18, -34, 36, 14), Qt::AlignCenter, m_name);
+                GuiGlyph::drawSafetyIndicatorGlyph(p, m_name, m_active, makeGlyphTheme());
             }
 
         private:
@@ -2118,6 +1622,39 @@ namespace WaterTest
 
             if (devType == "valve")
             {
+                // 电动阀1/2按电磁阀逻辑处理：点击直接切换继电器状态（与其它电磁阀一致）。
+                if (devId == 1 || devId == 2)
+                {
+                    const uint8_t relayIndex = static_cast<uint8_t>(devId - 1);
+                    bool current = false;
+                    if (m_deviceManager)
+                    {
+                        (void)m_deviceManager->getRelayState(relayIndex, current);
+                    }
+
+                    const bool target = !current;
+                    bool ok = false;
+                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                    if (m_stationClient && strictMode)
+                    {
+                        ControlCommand cmd;
+                        cmd.command_type = 0;
+                        cmd.index = relayIndex;
+                        cmd.action = target ? 1 : 0;
+                        ok = m_stationClient->sendCommand(cmd);
+                    }
+                    else if (m_deviceManager)
+                    {
+                        ok = m_deviceManager->setRelay(relayIndex, target);
+                    }
+
+                    if (!ok)
+                    {
+                        QMessageBox::warning(this, "阀门控制", QString("电磁阀%1命令发送失败").arg(devId));
+                    }
+                    return;
+                }
+
                 bool isOpen = false;
                 if (m_deviceManager)
                 {
@@ -2377,21 +1914,21 @@ namespace WaterTest
         // 压力传感器图元：可通过配置控制是否显示
         if (hmiShowPressureSensors())
         {
-            auto *s1Item = new SensorItem("PS1 压力1");
+            auto *s1Item = new SensorItem("压力1");
             s1Item->setPos(ps1);
             s1Item->setZValue(2);
             s1Item->setScale(kSensorScale);
             m_scene->addItem(s1Item);
             m_itemPS1 = s1Item;
 
-            auto *s2Item = new SensorItem("PS2 压力2");
+            auto *s2Item = new SensorItem("压力2");
             s2Item->setPos(ps2);
             s2Item->setZValue(2);
             s2Item->setScale(kSensorScale);
             m_scene->addItem(s2Item);
             m_itemPS2 = s2Item;
 
-            auto *s3Item = new SensorItem("PS3 压力3");
+            auto *s3Item = new SensorItem("压力3");
             s3Item->setPos(ps3);
             s3Item->setZValue(2);
             s3Item->setScale(kSensorScale);
@@ -3034,7 +2571,7 @@ namespace WaterTest
 
         // 确认操作
         auto reply = QMessageBox::question(this, "确认",
-                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kPa")
+                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kgf/cm^2")
                                                .arg(m_pumpFrequency, 0, 'f', 1)
                                                .arg(m_targetPressure, 0, 'f', 2),
                                            QMessageBox::Yes | QMessageBox::No);
