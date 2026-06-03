@@ -24,8 +24,6 @@ namespace WaterTest
     class TestPanel;
     class AutoTestPanel;
     class Station1Panel;
-    class Station2Panel;
-    class Station3Panel;
 
     // Forward declarations for Terminal GUI widgets
     class DashboardWidget;
@@ -118,8 +116,6 @@ namespace WaterTest
         TestPanel *m_testPanel;
         AutoTestPanel *m_autoTestPanel;
         Station1Panel *m_station1Panel;
-        Station2Panel *m_station2Panel;
-        Station3Panel *m_station3Panel;
 
         QPushButton *m_connectBtn;
         QPushButton *m_disconnectBtn;

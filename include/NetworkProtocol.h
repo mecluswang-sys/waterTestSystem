@@ -70,7 +70,7 @@ namespace WaterTest
      */
     struct SensorData
     {
-        float pressure[4];      // 4 pressure sensors (Pa)
+        float pressure[6];      // 4 pressure sensors (Pa)
         float temperature[4];   // 4 temperature sensors (°C)
         float flow_rate = 0.0f; // Flow rate
         uint32_t timestamp = 0; // Timestamp (ms)

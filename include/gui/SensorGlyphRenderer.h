@@ -15,11 +15,56 @@
 
 namespace WaterTest::GuiGlyph
 {
+    /**
+     * @brief 压力传感器图元的外接矩形。
+     *
+     * 这个尺寸决定了图元在场景中的占位范围，也会影响选中框、对齐和端口连接时的视觉边界。
+     * 当前传感器采用圆形数显风格，所以外接矩形比实际圆盘略大，给标题、数值和底部端口留出空间。
+     */
     inline QRectF sensorBoundingRect() { return QRectF(-62, -46, 124, 110); }
+
+    /**
+     * @brief 传感器底部锚点的本地坐标。
+     *
+     * 这个点用于和管道对齐、连接场景中的管线，以及作为视觉上的“接口点”。
+     * 由于传感器是上下结构，这里把锚点放在图元下方中间位置。
+     */
     inline QPointF sensorAnchorPortLocal() { return QPointF(0, 32); }
+
+    /**
+     * @brief 传感器入口端口本地坐标。
+     *
+     * 目前传感器只有一个等价接口，因此入口和出口共用同一个锚点坐标。
+     */
     inline QPointF sensorInletPortLocal() { return sensorAnchorPortLocal(); }
+
+    /**
+     * @brief 传感器出口端口本地坐标。
+     *
+     * 目前传感器只有一个等价接口，因此入口和出口共用同一个锚点坐标。
+     */
     inline QPointF sensorOutletPortLocal() { return sensorAnchorPortLocal(); }
 
+    /**
+     * @brief 绘制压力传感器图元。
+     *
+     * @param p 绘制用的 QPainter，不能为空。
+     * @param boundingRect 图元外接矩形，用于选中框和整体边界控制。
+     * @param name 传感器名称，会显示在图元顶部，例如“压力4”。
+     * @param value 当前压力值。绘制时会限制到 [0,100]，作为圆形表盘/数显的显示数据。
+     * @param displayDecimals 数值显示的小数位数，用于中间数显。
+     * @param unit 单位文本，例如 "kgf/cm^2"。
+     * @param typeColor 传感器类型颜色，用于底座、接口点和强调色。
+     * @param selected 是否处于选中状态；true 时会额外绘制虚线选中框。
+     * @param drawPorts 是否绘制端口点和底部接口线；当前用于控制图元端口是否可见。
+     * @param theme HMI 主题颜色集合，决定背景、边框、文字和阴影风格。
+     *
+     * 视觉结构说明：
+     * 1. 外层圆盘：传感器主体，保留“圆形表盘”的仪表感觉。
+     * 2. 中间数显：显示当前压力值，替代原来的指针式视觉。
+     * 3. 底部接口：和管道连接的锚点位置。
+     * 4. 校准标记：仅在配置开启时显示 C/A 标记，便于调试和对点。
+     */
     inline void drawSensorGlyph(
         QPainter *p,
         const QRectF &boundingRect,
@@ -44,29 +89,35 @@ namespace WaterTest::GuiGlyph
             p->drawRoundedRect(boundingRect.adjusted(2, 2, -2, -2), 8, 8);
         }
 
+        // 圆形数显主体的中心点。
         const QPointF gaugeCenter(0.0, -2.0);
         constexpr qreal gaugeR = 30.0;
         const QRectF gaugeRect(gaugeCenter.x() - gaugeR, gaugeCenter.y() - gaugeR, gaugeR * 2.0, gaugeR * 2.0);
 
+        // 外层投影：让圆盘从背景里“浮起来”，增强仪表感。
         p->setPen(Qt::NoPen);
         p->setBrush(theme.shadow);
         p->drawEllipse(gaugeRect.translated(3.0, 4.0));
 
+        // 外圈主体：圆形传感器表盘的外壳。
         p->setBrush(theme.panel);
         p->setPen(QPen(theme.border, 2));
         p->drawEllipse(gaugeRect);
 
+        // 内层主体：比外圈略暗一些，形成层次。
         p->setBrush(theme.body);
         p->setPen(QPen(theme.border, 1.5));
         p->drawEllipse(gaugeRect.adjusted(5, 5, -5, -5));
 
-        // 外圈刻度弧（0~100）
-        const double gaugeValue = std::clamp(value, 0.0, 100.0);
-        const double ratio = gaugeValue / 100.0;
+        // 当前值限制到 0~100，保持与面板内部显示逻辑一致。
+        // const double gaugeValue = std::clamp(value, 0.0, 100.0);
+
+        // 外圈刻度弧（0~100）：保留“仪表”外观，但不再配合指针展示。
         p->setPen(QPen(theme.textDim, 1.2, Qt::SolidLine, Qt::RoundCap));
         p->setBrush(Qt::NoBrush);
         p->drawArc(gaugeRect.adjusted(2, 2, -2, -2), 225 * 16, -270 * 16);
 
+        // 外圈细刻度：作为视觉参考，让圆盘看起来像电子数显式表盘。
         p->setPen(QPen(theme.textMuted, 1.0, Qt::SolidLine, Qt::RoundCap));
         for (int tick = 0; tick <= 10; ++tick)
         {
@@ -83,16 +134,17 @@ namespace WaterTest::GuiGlyph
             p->drawLine(a, b);
         }
 
-        const double needleDeg = 225.0 - ratio * 270.0;
-        const double needleRad = needleDeg * M_PI / 180.0;
-        const QPointF needleTip(gaugeCenter.x() + std::cos(needleRad) * 23.0,
-                                gaugeCenter.y() - std::sin(needleRad) * 23.0);
-        p->setPen(QPen(typeColor, 2.4, Qt::SolidLine, Qt::RoundCap));
-        p->drawLine(gaugeCenter, needleTip);
+        // 中心色块：原来用于指针中心，现在保留为电子表盘的视觉基点。
         p->setBrush(typeColor);
-        p->setPen(QPen(theme.ink, 1));
-        p->drawEllipse(gaugeCenter, 2.8, 2.8);
+        // p->setPen(QPen(theme.ink, 1));
+        // p->drawEllipse(gaugeCenter, 2.8, 2.8);
 
+        // 数显底板：把数值从背景里“托”出来，突出数字而不是机械指针。
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor(14, 20, 28, 180));
+        p->drawRoundedRect(QRectF(-33.0, -16.0, 66.0, 24.0), 4.0, 4.0);
+
+        // 顶部名称：显示传感器名称及单位，例如“压力4 (kgf/cm^2)”。
         p->setPen(theme.text);
         QFont tagFont = p->font();
         tagFont.setPointSize(8);
@@ -102,14 +154,16 @@ namespace WaterTest::GuiGlyph
         const QString nameWithUnit = unit.isEmpty() ? name : QString("%1 (%2)").arg(name, unit);
         p->drawText(QRectF(-58, -43, 116, 12), Qt::AlignCenter, nameWithUnit);
 
+        // 中央主数值：这是压力传感器最关键的显示内容。
         QFont valFont = p->font();
-        valFont.setPointSize(13);
+        valFont.setPointSize(16);
         valFont.setBold(true);
         valFont.setFamily("Consolas");
         p->setFont(valFont);
         p->setPen(QColor(245, 248, 255));
-        p->drawText(QRectF(-28, -10, 56, 18), Qt::AlignCenter, QString::number(gaugeValue, 'f', displayDecimals));
+        p->drawText(QRectF(-33.0, -16.0, 66.0, 24.0), Qt::AlignCenter, QString::number(value, 'f', displayDecimals));
 
+        // 单位文本：和主数值分开显示，避免数字显得拥挤。
         QFont unitFont = p->font();
         unitFont.setPointSize(7);
         unitFont.setBold(false);
@@ -118,12 +172,14 @@ namespace WaterTest::GuiGlyph
         p->setPen(theme.textDim);
         p->drawText(QRectF(-34, 8, 68, 10), Qt::AlignCenter, unit);
 
+        // 底部接口线和接口点：用于和管道连接，视觉上对应传感器锚点。
         p->setPen(QPen(theme.border, 1.4, Qt::DashLine, Qt::RoundCap));
         p->drawLine(QPointF(0, gaugeRect.bottom()), QPointF(0, sensorAnchorPortLocal().y() - 3));
         p->setBrush(typeColor);
         p->setPen(QPen(theme.ink, 1));
         p->drawEllipse(QPointF(0, sensorAnchorPortLocal().y()), 2.8, 2.8);
 
+        // 调试校准标记：仅在配置开启时显示，方便现场对点。
         if (showCalibrationMarkers())
         {
             // 校准标记：中心点与底部锚点。
@@ -136,6 +192,7 @@ namespace WaterTest::GuiGlyph
 
         if (drawPorts)
         {
+            // 保留端口着色钩子，便于以后在外部场景里叠加端口可视化。
             p->setPen(QPen(theme.border, 1));
             p->setBrush(theme.cyan);
         }

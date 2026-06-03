@@ -1,6 +1,37 @@
 /**
  * @file Station1Panel.cpp
- * @brief 1号操作台面板实现（流程图展示）
+ * @brief 1号操作台面板实现（工艺流程图展示 + 实时控制）
+ *
+ * 架构概览
+ * --------
+ * Station1Panel 是一个 QWidget，内嵌 QGraphicsView+QGraphicsScene 展示工艺流程图。
+ * 场景中每个设备节点都是自定义 QGraphicsItem 子类（ValveItem / SensorItem / FlowMeterItem 等），
+ * 由 buildScene() 一次性构建，之后通过三条定时器周期刷新数据与动画。
+ *
+ * 数据来源（由 config 键 station.strict_remote_mode 切换）
+ * -------------------------------------------------------
+ * - 远程模式（strict_remote_mode=true）：从 StationClient 通过 TCP 拉取 SensorData 结构体，
+ *   同时优先尝试从本地 DeviceManager 直接读压力传感器（无 4 路上限限制）。
+ * - 本地模式（strict_remote_mode=false）：完全依赖 DeviceManager 直接访问 S7-1200 PLC。
+ *
+ * 三条定时器
+ * ----------
+ * - m_flowTimer  (50 ms)   : 更新管道流动虚线的 dashOffset，产生液体流动视觉效果。
+ * - m_dataTimer  (200 ms)  : 刷新压力/流量/阀门开度到场景图元。
+ * - m_relayTimer (1000 ms) : 回读继电器状态并更新按钮颜色（降低 PLC 无谓轮询频率）。
+ *
+ * GraphicsItem 自定义数据槽（QGraphicsItem::data / setData）
+ * ----------------------------------------------------------
+ *   data(0) = QString  图层标签，如 "hmi_grid"、"hmi_pipe_outer"
+ *   data(1) = int      压力传感器 ID，SensorItem 匹配键
+ *   data(3) = int      阀门逻辑 ID，ValveItem 阀门匹配键
+ *   data(4) = int      继电器 index，将阀门图元与继电器状态联动
+ *   data(6) = int      调压阀 ID，电动调压阀 ValveItem 专用匹配键
+ *
+ * M100 Merker 写保护机制
+ * ----------------------
+ * 1号台前4路电磁阀映射到 PLC M100.0~M100.3，写操作有 700 ms 防抖锁（m_lastM100ToggleMs）
+ * 和"预期保持"回读校验（m_expectM100Hold），防止 PLC 联锁复位逻辑导致误报弹窗。
  */
 
 #include "gui/Station1Panel.h"
@@ -19,10 +50,7 @@
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
-#include <QGraphicsTextItem>
 #include <QGraphicsPathItem>
-#include <QGraphicsPolygonItem>
-#include <QGraphicsLineItem>
 #include <QVBoxLayout>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -36,7 +64,6 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
-#include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
 #include <QDoubleSpinBox>
@@ -49,7 +76,6 @@
 #include <QEventLoop>
 #include <QMouseEvent>
 #include <QtMath>
-#include <QDir>
 #include <vector>
 #include <array>
 
@@ -57,8 +83,14 @@ namespace WaterTest
 {
     namespace
     {
+        // ===== 场景图元缩放比例 =====
+        // kDeviceItemScale      : 普通设备图元（阀门、传感器）相对原始包围框的放大系数
+        // kAccumulatorItemScale : 蓄能器图元（高度较大）使用稍小系数避免遮挡管路
         constexpr qreal kDeviceItemScale = 1.45;
         constexpr qreal kAccumulatorItemScale = 1.2;
+
+        // ===== 管道三层渲染宽度（像素） =====
+        // 外壁（金属感边框）/ 内壁（暗色管腔）/ 流动动画虚线
         constexpr qreal kPipeOuterWidth = 14.0;
         constexpr qreal kPipeInnerWidth = 9.0;
         constexpr qreal kPipeFlowWidth = 5.0;
@@ -68,62 +100,68 @@ namespace WaterTest
         // 并把节点/连线改成拟物面板与“管道”风格（外圈/内圈）。
 
         // ===== DQ 继电器定义表（含 M 区特殊映射） =====
+        /**
+         * @brief DQ 数字量输出继电器通道元信息。
+         *
+         *   index : 线性通道编号，DeviceManager::setRelay/getRelayState 使用此值。
+         *           0~3  -> M100.0~M100.3 (Merker位, writeMerkerBool)
+         *           5    -> M100.4
+         *           其余 -> Q区 (字节=index/8, 位=index%8, writeOutputBool)
+         *   label : 界面显示名，如"电磁阀1"
+         *   addr  : 可读PLC地址，如"M100.0"/"Q0.4"，仅用于按钮文字
+         *   type  : "valve"=电磁阀，"pump"=泵（泵位暂不开放界面切换）
+         */
         struct RelayDef
         {
-            uint8_t index;  // 线性索引：0 特殊映射 M100.0，其余沿用 Q 区线性索引
+            uint8_t index;  // 线性索引：0~3 映射 M100.0~M100.3，5 映射 M100.4，其余为 Q 区
             QString label;  // 设备名称
             QString addr;   // 显示地址（如 "Q0.0"）
             QString type;   // 类型提示："valve" 或 "pump"
         };
 
+        /**
+         * @brief 判断 relay index 是否映射到 M100.0~M100.3（Merker 位）
+         * 这四路需要通过 S7PLCClient::writeMerkerBool 写入，与普通 Q 区写法不同。
+         */
         static bool isM100RelayIndex(uint8_t index)
         {
             return index <= 3;
         }
 
-        // 1号操作台 DQ 输出匹配表
-        // index0~3: 关键阀门映射到 M100.0~M100.3；其余沿用 Q0.4-Q1.1
-        static const std::array<RelayDef, 10> kStation1Relays{{
+        /**
+         * @brief 判断 relay index 是否映射到 M100.4（1号台电磁阀5专用）
+         */
+        static bool relayUsesM100_4(uint8_t index)
+        {
+            // 站1电磁阀5当前绑定 relay index=5，底层映射到 M100.4。
+            return index == 5;
+        }
+
+        /** @brief 判断 relay index 是否需要驱动流程图电磁阀图元联动。 */
+        static bool relayNeedsGlyphUpdate(uint8_t index)
+        {
+            return isM100RelayIndex(index) || relayUsesM100_4(index);
+        }
+
+        // 1号操作台 DQ 输出匹配表：仅保留 5 个电磁阀。
+        static const std::array<RelayDef, 5> kStation1Relays{{
             {0,  "电磁阀1",  "M100.0", "valve"},
             {1,  "电磁阀2",  "M100.1", "valve"},
             {2,  "电磁阀3",  "M100.2", "valve"},
             {3,  "电磁阀4",  "M100.3", "valve"},
-            {4,  "调压阀电磁阀", "Q0.4", "valve"},
-            {5,  "回流阀电磁阀", "Q0.5", "valve"},
-            {6,  "备用继电器",  "Q0.6", "valve"},
-            {7,  "备用继电器",  "Q0.7", "valve"},
-            {8,  "供压泵1启停",  "Q1.0", "pump"},
-            {9,  "供压泵2启停",  "Q1.1", "pump"},
+            {5,  "电磁阀5",  "M100.4", "valve"},
         }};
 
-        // 2号操作台继电器映射（独立于1号）
-        static const std::array<RelayDef, 6> kStation2Relays{{
-            {4, "电磁阀3", "Q0.4", "valve"},
-            {5, "电磁阀4", "Q0.5", "valve"},
-            {6, "电磁阀5", "Q0.6", "valve"},
-            {7, "电磁阀6", "Q0.7", "valve"},
-            {8, "预留继电器", "Q1.0", "valve"},
-            {9, "供压泵2启停", "Q1.1", "pump"},
-        }};
-
-        // 3号操作台继电器映射（独立于1号）
-        static const std::array<RelayDef, 5> kStation3Relays{{
-            {6,  "电磁阀5", "Q0.6", "valve"},
-            {7,  "电磁阀6", "Q0.7", "valve"},
-            {8,  "电磁阀7", "Q1.0", "valve"},
-            {9,  "电磁阀8", "Q1.1", "valve"},
-            {10, "供压泵3启停", "Q1.2", "pump"},
-        }};
-
+        /**
+         * @brief 返回 1 号操作台的继电器通道列表。
+         */
         static std::vector<RelayDef> relayDefsForStation(int stationNumber)
         {
-            if (stationNumber == 2)
-                return std::vector<RelayDef>(kStation2Relays.begin(), kStation2Relays.end());
-            if (stationNumber == 3)
-                return std::vector<RelayDef>(kStation3Relays.begin(), kStation3Relays.end());
+            Q_UNUSED(stationNumber);
             return std::vector<RelayDef>(kStation1Relays.begin(), kStation1Relays.end());
         }
 
+        /** @brief 按 index 在列表中查找继电器定义，未找到返回 nullptr。 */
         static const RelayDef *findRelayDefByIndex(const std::vector<RelayDef> &defs, uint8_t index)
         {
             for (const auto &def : defs)
@@ -134,6 +172,14 @@ namespace WaterTest
             return nullptr;
         }
 
+        /**
+         * @brief 各操作台流程图中阀门图元对应的继电器 index 映射。
+         *
+         * buildScene() 用此结构将 ValveItem 的 data(4) 绑定到正确的继电器通道，
+         * 使 updateRelayButtons / setRelayValveGlyphState 能正确联动图元颜色。
+         *   v1/v2/v3 : 三路进/回路电磁阀图元对应的 relay index
+         *   test     : 测试阀图元对应的 relay index
+         */
         struct StationRelayGlyphMap
         {
             uint8_t v1;
@@ -144,13 +190,11 @@ namespace WaterTest
 
         static StationRelayGlyphMap relayGlyphMapForStation(int stationNumber)
         {
-            if (stationNumber == 2)
-                return {4, 5, 6, 7};
-            if (stationNumber == 3)
-                return {6, 7, 8, 9};
+            Q_UNUSED(stationNumber);
             return {0, 1, 3, 2};
         }
 
+        /** @brief 格式化继电器按钮多行文字：地址 / 名称 / 通断状态。 */
         static QString formatRelayBtnText(const QString &addr, const QString &label, bool on)
         {
             const QString stateText = on ? "● 通/得电" : "○ 断/失电";
@@ -158,6 +202,9 @@ namespace WaterTest
                 .arg(addr, label, stateText);
         }
 
+        /**
+         * @brief 读取传感器对象的显示小数位配置，超出 [0,6] 范围则用 fallbackDecimals。
+         */
         static int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
             if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
@@ -165,6 +212,10 @@ namespace WaterTest
             return fallbackDecimals;
         }
 
+        // ===== 压力单位换算辅助 =====
+        // 内部/网络传输单位：kPa（来自 PLC 原始值）
+        // SensorItem::setValue() 直接接收 kPa 原始值，量表 0~100 对应 0~100 kPa。
+        // kPaToKgfCm2 / fmtPressure / fmtKPa 仅用于日志输出和文字标签，不影响量表指针。
         constexpr double kKPaPerKgfCm2 = 98.0665;
 
         static double kPaToKgfCm2(double kpa)
@@ -172,16 +223,27 @@ namespace WaterTest
             return kpa / kKPaPerKgfCm2;
         }
 
+        /** @brief 将 kPa 格式化为 kgf/cm² 字符串，用于日志/Tooltip。 */
         static QString fmtPressure(double kpa, int decimals = 1)
         {
             return QString::number(kPaToKgfCm2(kpa), 'f', decimals);
         }
 
+        /** @brief 将 PressureSensor 对象压力格式化为带单位的 kgf/cm² 字符串（仅用于日志）。 */
         static QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
             return QString::number(kPaToKgfCm2(sensor.pressure), 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kgf/cm^2";
         }
 
+        /**
+         * @brief 将界面传感器 ID 解析为远程 SensorData::pressure[] 的数组下标（0~3）。
+         *
+         * 仅在 strict_remote_mode=true 且本地 DeviceManager 无法读到该传感器时使用。
+         * 优先级：
+         *   1. config "station.pressure_sensor.<id>.remote_index"（0~3 直接使用）
+         *   2. config "station.pressure_sensor.<id>.modbus_address"（1~4 则 index=address-1）
+         *   3. 回退到 fallbackIndex（保持向后兼容）
+         */
         static int resolveRemotePressureIndex(uint16_t sensorId, int fallbackIndex)
         {
             auto &cfg = ConfigManager::getInstance();
@@ -202,21 +264,39 @@ namespace WaterTest
             return fallbackIndex;
         }
 
-        static QString systemModeToText(SystemMode mode)
+        /**
+         * @brief 将界面传感器 ID 解析为本地 DeviceManager::getPressureSensor() 的实际查询 ID。
+         *
+         * config "station.pressure_sensor.<sensorId>.modbus_address" 存储的是
+         * PLC 压力数据区的序号索引（1-based），并非 Modbus 通信地址。
+         * 若配置值在 [1, pressure.count] 范围内，则用该值作为查询 ID；
+         * 否则退回原始 sensorId（向后兼容）。
+         */
+        static uint16_t resolveLocalPressureSensorId(uint16_t sensorId)
         {
-            switch (mode)
-            {
-            case SystemMode::MANUAL:
-                return QString("手动");
-            case SystemMode::AUTO:
-                return QString("自动");
-            case SystemMode::TEST:
-                return QString("测试");
-            case SystemMode::EMERGENCY:
-                return QString("紧急");
-            default:
-                return QString("未知");
-            }
+            auto &cfg = ConfigManager::getInstance();
+            const std::string prefix = "station.pressure_sensor." + std::to_string(sensorId) + ".";
+            const int modbusAddress = cfg.getInt(prefix + "modbus_address", -1);
+            const int pressureCount = std::max(1, cfg.getInt("pressure.count", 7));
+
+            // 本地PLC路径下，modbus_address 作为“压力数据区序号索引”使用。
+            if (modbusAddress >= 1 && modbusAddress <= pressureCount)
+                return static_cast<uint16_t>(modbusAddress);
+            return sensorId;
+        }
+
+        static uint16_t configuredPressureSensorId(const Station1Panel::PanelConfig &panelConfig, int psNumber)
+        {
+            const int configIndex = psNumber - 1;
+            if (configIndex < 0 || configIndex >= static_cast<int>(panelConfig.pressureSensorIds.size()))
+                return 0;
+            return panelConfig.pressureSensorIds[static_cast<size_t>(configIndex)];
+        }
+
+        static std::vector<int> visiblePressureSensorNumbers(int stationNumber)
+        {
+            Q_UNUSED(stationNumber);
+            return {3, 4, 5, 6, 7, 8};
         }
 
         static QString deviceStatusToText(DeviceStatus status)
@@ -234,13 +314,6 @@ namespace WaterTest
             default:
                 return QString("未知");
             }
-        }
-
-        static QString selfCheckCell(bool ok)
-        {
-            const QString color = ok ? "#3fb950" : "#f85149";
-            const QString text = ok ? "OK" : "NG";
-            return QString("<span style='color:%1;font-weight:800'>%2</span>").arg(color, text);
         }
 
         static void ensureHmiConfigLoadedOnce()
@@ -450,6 +523,11 @@ namespace WaterTest
             }();
         }
 
+        /**
+         * @brief 确保 UI 颜色 token 已按当前主题初始化（仅初始化一次）。
+         * 读取 config "ui.hmi.theme"（默认跟随 "ui.theme"），支持 graphite/light/ocean。
+         * @return true 表示本次调用发生了主题切换，调用方可据此触发场景重绘。
+         */
         static bool ensureUiTokensInitialized()
         {
             static QString applied;
@@ -475,6 +553,10 @@ namespace WaterTest
             return true;
         }
 
+        /**
+         * @brief 在场景中绘制点阵网格背景并设置渐变底色。
+         * 先清除旧网格（data(0)=="hmi_grid"），再重新绘制次网格（每 100px）和主网格（每 400px）。
+         */
         static void addBlueGridBackground(QGraphicsScene *scene, const QRectF &rect)
         {
             if (!scene)
@@ -519,6 +601,10 @@ namespace WaterTest
             }
         }
 
+        /**
+         * @brief 向场景添加一段默认规格的三层管道（外壁+内壁+流动层）。
+         * arrowTip/arrowFrom 保留参数，当前未绘制箭头（Q_UNUSED），流动方向由动画偏移体现。
+         */
         static void addHmiPipeWithArrow(QGraphicsScene *scene,
                                         const QPainterPath &path,
                                         const QPointF &arrowTip,
@@ -541,6 +627,9 @@ namespace WaterTest
             Q_UNUSED(arrowFrom);
         }
 
+        /**
+         * @brief 向场景添加自定义规格的三层管道，用于需要更粗管径的主干段（如供压总管）。
+         */
         static void addHmiPipeWithArrowCustom(QGraphicsScene *scene,
                                               const QPainterPath &path,
                                               const QPointF &arrowTip,
@@ -566,38 +655,19 @@ namespace WaterTest
             Q_UNUSED(arrowFrom);
         }
 
-        static void addDebugPointMarker(QGraphicsScene *scene,
-                                        const QPointF &point,
-                                        const QString &label,
-                                        const QColor &color = QColor("#ff4d4f"))
-        {
-            if (!scene)
-                return;
-
-            QPen pen(color, 2.0);
-            QBrush brush(color);
-            auto *dot = scene->addEllipse(point.x() - 5.0, point.y() - 5.0, 10.0, 10.0, pen, brush);
-            dot->setZValue(20);
-            dot->setData(0, "debug_marker");
-
-            auto *text = scene->addText(label);
-            text->setDefaultTextColor(color);
-            QFont font = text->font();
-            font.setPointSize(9);
-            font.setBold(true);
-            text->setFont(font);
-            text->setPos(point + QPointF(8.0, -20.0));
-            text->setZValue(20);
-            text->setData(0, "debug_marker");
-        }
-
         // ========== Station1 的图标化拟物设备图元（与 PreparationPanel 同风格） ==========
+        // 所有 Item 类均内联在匿名 namespace 中，不对外暴露。
+        // 渲染逻辑委托给 GuiGlyph 命名空间下对应的 draw*Glyph 函数。
+
+        /**
+         * @brief 蓄能器图元。
+         * 端口：inletPortLocal()=上端进液口，outletPortLocal()=下端出液口，
+         *        returnPortLocal()=侧面回液口（可选，由 showReturnPort 控制）。
+         */
         class AccumulatorItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return GuiGlyph::accumulatorInletPortLocal(); }
             static QPointF outletPortLocal() { return GuiGlyph::accumulatorOutletPortLocal(); }
-            static QPointF returnPortLocal() { return GuiGlyph::accumulatorReturnPortLocal(); }
 
             explicit AccumulatorItem(const QString &name, bool showReturnPort = true)
                 : m_name(name), m_showReturnPort(showReturnPort)
@@ -618,6 +688,16 @@ namespace WaterTest
             bool m_showReturnPort = true;
         };
 
+        /**
+         * @brief 阀门图元（含电磁阀、截止阀、电动调压阀三种外观）。
+         *
+         * regulatingStyle=true  : 电动调压阀外观（含上方仪表盘，包围框更大）
+         * plainRegulatingStyle  : 简化调压阀外观（无仪表盘）
+         *
+         * data(3) = 阀门逻辑 ID（DeviceManager::getValve/controlValve）
+         * data(4) = 继电器 index（与继电器状态联动，驱动 open/degree）
+         * data(6) = 电动调压阀 ID（DeviceManager::getRegulatingValve/setValveOpeningPercent）
+         */
         class ValveItem : public QGraphicsItem
         {
         public:
@@ -687,6 +767,10 @@ namespace WaterTest
             bool m_plainRegulatingStyle = false;
         };
 
+        /**
+         * @brief 遍历场景，将 data(4)==relayIndex 的 ValveItem 设置为开/关状态。
+         * 由 updateRelayButtons() 和 onRelayBtnClicked() 在继电器状态变化时调用（乐观更新）。
+         */
         static void setRelayValveGlyphState(QGraphicsScene *scene, uint8_t relayIndex, bool on)
         {
             if (!scene)
@@ -709,12 +793,15 @@ namespace WaterTest
             }
         }
 
+        /**
+         * @brief 三通阀图元（一进两出）。
+         * 端口：inletPortLocal()=进口，outletPortLocal()=主出口，branchPortLocal()=分支口。
+         */
         class ThreeWayValveItem : public QGraphicsItem
         {
         public:
             static QPointF inletPortLocal() { return GuiGlyph::threeWayValveInletPortLocal(); }
             static QPointF outletPortLocal() { return GuiGlyph::threeWayValveOutletPortLocal(); }
-            static QPointF branchPortLocal() { return GuiGlyph::threeWayValveBranchPortLocal(); }
 
             explicit ThreeWayValveItem(const QString &name)
                 : m_name(name)
@@ -734,11 +821,16 @@ namespace WaterTest
             QString m_name;
         };
 
+        /**
+         * @brief 压力传感器图元。
+         *
+         * data(1) = 传感器 ID，updateSensorValues() 用此键定位图元并推送压力值。
+         * setValue() 接收原始 kPa 值，量表 0~100 对应 0~100 kPa（约 0~1 kgf/cm²）。
+         */
         class SensorItem : public QGraphicsItem
         {
         public:
             static QPointF inletPortLocal() { return GuiGlyph::sensorInletPortLocal(); }
-            static QPointF outletPortLocal() { return GuiGlyph::sensorOutletPortLocal(); }
 
             explicit SensorItem(const QString &name, const QString &unit = "kgf/cm^2", QColor typeColor = QColor())
                 : m_name(name), m_value(0.0), m_unit(unit), m_typeColor(typeColor.isValid() ? typeColor : kUiPurple)
@@ -789,6 +881,10 @@ namespace WaterTest
             QColor m_typeColor;
         };
 
+        /**
+         * @brief 流量计图元，显示瞬时流量和报警状态。
+         * setAlarmDetail() 接收 emptyPipeAlarm（空管报警）和 excitationAlarm（励磁报警）。
+         */
         class FlowMeterItem : public QGraphicsItem
         {
         public:
@@ -866,12 +962,13 @@ namespace WaterTest
             int m_excitationAlarm;
         };
 
+        /**
+         * @brief 回路节点图元（三口：进/出/底部旁通），用于 2/3 号台的回路汇合点。
+         */
         class LoopItem : public QGraphicsItem
         {
         public:
-            static QPointF inletPortLocal() { return GuiGlyph::loopInletPortLocal(); }
             static QPointF outletPortLocal() { return GuiGlyph::loopOutletPortLocal(); }
-            static QPointF bottomPortLocal() { return GuiGlyph::loopBottomPortLocal(); }
 
             explicit LoopItem(const QString &name)
                 : m_name(name)
@@ -891,6 +988,12 @@ namespace WaterTest
             QString m_name;
         };
 
+        /**
+         * @brief 连接两个设备端口（场景坐标），自动选择横平竖直走线规则：
+         *   - 同行（|dy|<=20）：水平主干 + 末端短竖线
+         *   - 同列（|dx|<=20）：竖直主干 + 末端短横线
+         *   - 跨行跨列：中间水平走线（取起终点 Y 均值）
+         */
         static void connectPorts(QGraphicsScene *scene, const QPointF &start, const QPointF &end)
         {
             if (!scene)
@@ -984,6 +1087,22 @@ namespace WaterTest
         setRealtimeUpdatesEnabled(false);
     }
 
+    /**
+     * @brief 初始化 UI 布局、QGraphicsView、三条定时器，并构建流程图场景。
+     *
+     * 布局结构：
+     *   QVBoxLayout
+     *     QHBoxLayout (工具栏：开始/停止/系统自检按钮)
+     *     QGraphicsView (占满剩余空间，填充场景)
+     *
+     * 关键连接：
+     * - m_scene::selectionChanged -> 阀门点击弹出控制对话框
+     * - m_flowTimer  -> updatePipeFlowAnimation()
+     * - m_dataTimer  -> updateSensorValues()
+     * - m_relayTimer -> updateRelayButtons()
+     */
+    // ===== UI 构建层 =====
+    // 这里负责窗口、工具栏、QGraphicsView/QGraphicsScene 和定时器初始化。
     void Station1Panel::setupUI()
     {
         auto *layout = new QVBoxLayout(this);
@@ -1271,6 +1390,14 @@ namespace WaterTest
         }
     }
 
+    /**
+     * @brief 在给定容器 Widget 内构建"继电器输出控制 (DQ)"面板。
+     *
+     * 按钮网格：最多 5 列，按 visibleBtnCount 顺序排列。
+     * 1号台的 relay0（电磁阀1）隐藏按钮，由流程图图元直接控制。
+     * 泵类继电器按钮（tone=warn）仅展示状态，不响应点击切换。
+     * 构建后将按钮指针存入 m_relayBtns[index]，供 updateRelayButtons() 更新文字和颜色。
+     */
     void Station1Panel::buildRelayPanel(QWidget *container)
     {
         const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
@@ -1565,10 +1692,8 @@ namespace WaterTest
             const auto vreg = m_deviceManager->getRegulatingValve(1);
             const bool ok = (vreg.id != 0 && vreg.deviceStatus == DeviceStatus::ONLINE);
             setStep(IDX_VREG, ok ? STEP_OK : STEP_FAIL,
-                      ok ? QString::fromUtf8("在线, 目标: %1 kgf/cm^2, 实际: %2 kgf/cm^2, 开度: %3%")
-                             .arg(fmtPressure(vreg.setPressure, 1))
-                             .arg(fmtPressure(vreg.actualPressure, 1))
-                             .arg(vreg.openingPercent, 0, 'f', 0)
+                     ok ? QString::fromUtf8("在线, 当前开度: %1%")
+                         .arg(vreg.openingPercent, 0, 'f', 0)
                        : QString::fromUtf8("离线或未配置"));
         }
 
@@ -1790,6 +1915,16 @@ namespace WaterTest
             transitionTo(SelfCheckFlowState::FINISH, QString::fromUtf8("自检流程完成"));
         QCoreApplication::processEvents();
     }
+    /**
+     * @brief 拦截 QGraphicsView::viewport 的鼠标释放事件，实现流程图阀门图元点击控制。
+     *
+     * 点击流程：
+     *   1. 命中检测：从鼠标位置向上遍历 parentItem 链，找到有 data(4) 的图元
+     *   2. 防抖：同一 relay index 600 ms 内的重复点击被忽略；全局锁 700 ms
+     *   3. 通过 onRelayBtnClicked() 执行实际开关逻辑
+     *
+     * 全局锁（m_relayGlyphLockUntilMs）防止多个图元同时被点击或动画帧触发二次命中。
+     */
     bool Station1Panel::eventFilter(QObject *watched, QEvent *event)
     {
         if (m_view && watched == m_view->viewport() && event && event->type() == QEvent::MouseButtonRelease)
@@ -1838,6 +1973,18 @@ namespace WaterTest
         return QWidget::eventFilter(watched, event);
     }
 
+    /**
+     * @brief 从 DeviceManager 回读所有继电器状态，刷新按钮文字/颜色和阀门图元。
+     *
+     * @param force true=强制刷新（即使面板不可见），false=仅在 isVisible() 时执行
+     *
+     * 执行逻辑：
+     * 1. 读取每个 relay 的当前通断状态（getRelayState）
+     * 2. 若是 M100 通道，检查"预期保持"是否被 PLC 联锁复位（弹窗提示）
+     * 3. M100.0~M100.3 的图元颜色通过 setRelayValveGlyphState 联动
+     * 4. strict_remote_mode=true 时跳过按钮文字刷新（避免误覆盖远程状态）
+     * 5. 只在状态实际变化时重绘按钮，避免闪烁
+     */
     void Station1Panel::updateRelayButtons(bool force)
     {
         if (!force && !isVisible())
@@ -1884,8 +2031,8 @@ namespace WaterTest
                 }
             }
 
-            // 图元颜色联动：M100.0 ~ M100.3 对应图元随 relay 状态变化。
-            if (isM100RelayIndex(relays[i].index))
+            // 图元颜色联动：M100.0 ~ M100.3 以及电磁阀5(M100.4) 对应图元随 relay 状态变化。
+            if (relayNeedsGlyphUpdate(relays[i].index))
                 setRelayValveGlyphState(m_scene, relays[i].index, on);
 
             if (skipRelayButtonPaint)
@@ -1905,6 +2052,22 @@ namespace WaterTest
         }
     }
 
+    /**
+     * @brief 处理继电器切换请求（来自按钮面板或流程图图元点击）。
+     *
+     * @param index  继电器线性索引（对应 RelayDef::index）
+     * @param source 调用来源标识（"relay_panel_button" / "glyph"），仅用于调试日志
+     *
+     * 执行流程：
+     * 1. M100 通道防抖：同一路 700 ms 内重复操作被丢弃（m_lastM100ToggleMs）
+     * 2. 泵类通道（type=="pump"）拦截并弹出"现场联调"提示，不执行切换
+     * 3. 读取当前状态（getRelayState 或按钮缓存），取反得到目标状态
+     * 4. 发送控制命令：
+     *    - 远程模式（m_stationClient && strict_remote_mode）：通过 StationClient::sendCommand
+     *    - 本地模式：通过 DeviceManager::setRelay
+     * 5. 成功后做"乐观更新"：立即刷新按钮和图元，避免等待下一个 relayTimer 周期
+     * 6. 本地模式下 250 ms 后执行 updateRelayButtons() 校准真实状态
+     */
     void Station1Panel::onRelayBtnClicked(uint8_t index, const char *source)
     {
         if (isM100RelayIndex(index))
@@ -1918,6 +2081,11 @@ namespace WaterTest
                 return;
             }
             m_lastM100ToggleMs[index] = nowMs;
+        }
+        else if (relayUsesM100_4(index))
+        {
+            qInfo() << "[M100][Station1Panel] relay mapped to M100.4"
+                    << "index=" << index;
         }
 
         const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
@@ -2022,7 +2190,7 @@ namespace WaterTest
             btn->setProperty("dqOn", target);
             btn->style()->unpolish(btn);
             btn->style()->polish(btn);
-            if (isM100RelayIndex(index))
+            if (relayNeedsGlyphUpdate(index))
                 setRelayValveGlyphState(m_scene, index, target);
             qInfo() << "[M100][Station1Panel] ui optimistic update"
                     << "index=" << index
@@ -2162,60 +2330,17 @@ namespace WaterTest
         int valveIdTest = 3;
         int valveIdBack = 4;
 
-        switch (m_panelConfig.stationNumber)
-        {
-        case 1:
-            labelV1 = QString::fromUtf8("电磁阀1");
-            labelV2 = QString::fromUtf8("电磁阀2");
-            labelVReg1 = QString::fromUtf8("电动调压阀1");
-            labelTestValve = QString::fromUtf8("电磁阀3（待测试电磁阀）");
-            labelVBack1 = QString::fromUtf8("电磁阀4");
-            labelVReg2 = QString::fromUtf8("电动调压阀2");
-            valveIdV1 = 1;
-            valveIdV2 = 2;
-            valveIdTest = 3;
-            valveIdBack = 4;
-            break;
-        case 2:
-            labelV1 = QString::fromUtf8("电磁阀5");
-            labelV2 = QString::fromUtf8("电磁阀6");
-            labelVReg1 = QString::fromUtf8("电动调压阀3");
-            labelTestValve = QString::fromUtf8("电磁阀7（待测试电磁阀）");
-            labelVBack1 = QString::fromUtf8("电磁阀8");
-            labelVReg2 = QString::fromUtf8("电动调压阀4");
-            valveIdV1 = 5;
-            valveIdV2 = 6;
-            valveIdTest = 7;
-            valveIdBack = 8;
-            break;
-        case 3:
-            labelV1 = QString::fromUtf8("电磁阀9");
-            labelV2 = QString::fromUtf8("电磁阀10");
-            labelVReg1 = QString::fromUtf8("电动调压阀5");
-            labelTestValve = QString::fromUtf8("电磁阀11（待测试电磁阀）");
-            labelVBack1 = QString::fromUtf8("电磁阀12");
-            labelVReg2 = QString::fromUtf8("电动调压阀6");
-            valveIdV1 = 9;
-            valveIdV2 = 10;
-            valveIdTest = 11;
-            valveIdBack = 12;
-            break;
-        default:
-        {
-            const int valveNoBase = 1 + (m_panelConfig.stationNumber - 1) * 2;
-            labelV1 = QString::fromUtf8("电磁阀%1").arg(valveNoBase);
-            labelV2 = QString::fromUtf8("电磁阀%1").arg(valveNoBase + 1);
-            labelVReg1 = QString::fromUtf8("电动调压阀%1").arg(m_panelConfig.stationNumber);
-            labelTestValve = QString::fromUtf8("电磁阀%1（待测试电磁阀）").arg(valveNoBase + 2);
-            labelVBack1 = QString::fromUtf8("电磁阀%1").arg(valveNoBase + 3);
-            labelVReg2 = QString::fromUtf8("电动调压阀%1").arg(m_panelConfig.stationNumber + 1);
-            valveIdV1 = valveNoBase;
-            valveIdV2 = valveNoBase + 1;
-            valveIdTest = valveNoBase + 2;
-            valveIdBack = valveNoBase + 3;
-            break;
-        }
-        }
+        Q_UNUSED(m_panelConfig);
+        labelV1 = QString::fromUtf8("电磁阀1");
+        labelV2 = QString::fromUtf8("电磁阀2");
+        labelVReg1 = QString::fromUtf8("电动调压阀1");
+        labelTestValve = QString::fromUtf8("待测电磁阀");
+        labelVBack1 = QString::fromUtf8("电磁阀4");
+        labelVReg2 = QString::fromUtf8("电动调压阀2");
+        valveIdV1 = 1;
+        valveIdV2 = 2;
+        valveIdTest = 3;
+        valveIdBack = 4;
 
         if (!m_scene)
             return;
@@ -2241,9 +2366,8 @@ namespace WaterTest
         caption->setData(0, "hmi_caption");
         caption->setZValue(5);
 
-        // ==== 图标化设备布局（两排）====
-        // 该区块只负责“坐标定义”，尽量把可调参数集中，避免后续叠加偏移难维护。
-        const bool simplifiedStation1 = (m_panelConfig.stationNumber == 1);
+        // ==== 图标化设备布局（单套简化布局）====
+        // 1号台现在只保留这一套布局。
         const qreal gridStepX = 300;
         const qreal gridBaseX = 10;
         const qreal stationBaseShiftX = 200;
@@ -2257,20 +2381,14 @@ namespace WaterTest
         // 列坐标（以“列号”而不是硬编码 x）
         const auto colX = [&](qreal col) { return gridBaseX + stationBaseShiftX + gridStepX * col; };
 
-        // 1号台：直接使用显式坐标（便于人工微调）；2/3号台沿用列坐标规则。
-        // 下面几个长度参数里，和你当前关注点最相关的是 fmRightPipeLen：
-        // 它控制“流量计右出口出来后，先向右走多远，再向下拐”的那一小段水平距离。
-        // 由于当前走线采用三段折线：start -> p1 -> p2 -> end，
-        // 其中 p1 是右上拐点，p2 是右下拐点，所以 p1.x()/p2.x() 越大，
-        // 你肉眼看到的“右侧转折横向管道”就越长。
-        const qreal xAcc = simplifiedStation1 ? 200.0 : colX(0.0);
-        const qreal xV3w = colX(1.0);
+        // 1号台固定坐标：只保留这一套简化布局。
+        const qreal xAcc = 200.0;
         const qreal xFmStation1 = 1650.0;
         const qreal fmTopTransitionPipeLen = 90.0;
-        const qreal fmRightPipeLen = simplifiedStation1 ? 180.0 : 90.0;
+        const qreal fmRightPipeLen = 180.0;
         const qreal station1InletPipeLen = 240.0;
-        const qreal station1TopRowShift = simplifiedStation1 ? -160.0 : 0.0;
-        const qreal station1V1ShiftX = simplifiedStation1 ? -100.0 : 0.0;
+        const qreal station1TopRowShift = -160.0;
+        const qreal station1V1ShiftX = -100.0;
         const qreal valveOutletOffsetX = ValveItem::outletPortLocal().x();
         const qreal valveInletOffsetX = ValveItem::inletPortLocal().x();
         const QPointF flowMeterInletLocal = FlowMeterItem::inletPortLocal();
@@ -2282,43 +2400,42 @@ namespace WaterTest
         const qreal valveOutletOffsetXScene = valveOutletOffsetX * kDeviceItemScale;
         const qreal flowMeterLeftOffsetXScene = flowMeterLeftPortLocal.x() * kDeviceItemScale;
         const qreal station1VRegAnchorX = xFmStation1 + flowMeterLeftOffsetXScene - valveOutletOffsetXScene - fmTopTransitionPipeLen + station1TopRowShift;
-                const qreal station1ValveToValvePipeLen = station1InletPipeLen;
-        const qreal xV1 = simplifiedStation1
-                      ? (((xAcc + station1TopRowShift) + (station1VRegAnchorX - (xAcc + station1TopRowShift)) / 3.0) + station1V1ShiftX)
-                      : colX(2.0);
-                const qreal xV2 = simplifiedStation1
-                                                            ? (xV1 + station1ValveToValvePipeLen + (valveOutletOffsetX - valveInletOffsetX) * kDeviceItemScale)
-                                                            : colX(3.0);
-        const qreal xVReg = simplifiedStation1
-                                                                ? (xV2 + station1ValveToValvePipeLen + (valveOutletOffsetX - valveInletOffsetX) * kDeviceItemScale)
-                                : colX(4.0);
+        const qreal station1ValveToValvePipeLen = station1InletPipeLen;
+        const qreal xV1 = ((xAcc + station1TopRowShift) + (station1VRegAnchorX - (xAcc + station1TopRowShift)) / 3.0) + station1V1ShiftX;
+        const qreal xV2 = xV1 + station1ValveToValvePipeLen + (valveOutletOffsetX - valveInletOffsetX) * kDeviceItemScale;
+        const qreal xVReg = xV2 + station1ValveToValvePipeLen + (valveOutletOffsetX - valveInletOffsetX) * kDeviceItemScale;
         const uint16_t topRegValveId = static_cast<uint16_t>(std::max(1, m_panelConfig.stationNumber * 2 - 1));
         const uint16_t bottomRegValveId = static_cast<uint16_t>(topRegValveId + 1);
-        const qreal xPs3 = (((xAcc + station1TopRowShift) + AccumulatorItem::outletPortLocal().x()) +
-                    (xV1 + ValveItem::inletPortLocal().x())) *
-                   0.5;
         const qreal xPs1 = (xV1 + xV2) * 0.5;
         const qreal xPs2 = (xV2 + xVReg) * 0.5;
 
         // 下排与上排对齐：流量计放到右侧竖向落点，待测阀3与电动调压阀1同列。
-        const qreal station1FlowMeterShiftX = simplifiedStation1 ? -140.0 : 0.0;
-        const qreal xFm = simplifiedStation1 ? (xFmStation1 + station1TopRowShift + station1FlowMeterShiftX) : (xVReg + 260.0);
-        const qreal yFm = simplifiedStation1 ? (yRow1 + row1AfterAccumulatorYOffset) : yRow1;
-        const qreal flowMeterScale = simplifiedStation1 ? 1.25 : kDeviceItemScale;
-        const qreal xTestValve = simplifiedStation1 ? xFm : xVReg;
-        const qreal xVBack1 = simplifiedStation1 ? xVReg : xV1;
-        const qreal xVBackReg = simplifiedStation1 ? xV2 : xAcc;
-        const qreal xLoop = xAcc;
-        // 1号台电磁阀5与压力罐同列，回路末端通过折线回接到压力罐。
-        const qreal xV5 = simplifiedStation1 ? xV1 : (xAcc + gridStepX * -0.95);
-        const qreal xPs8 = simplifiedStation1 ? xPs1 : (xVBackReg + xV5) * 0.5;
-        const qreal xPt1 = simplifiedStation1 ? xFm : (xFm + xTestValve) * 0.5;
-        const qreal xPt2 = simplifiedStation1 ? xPs2 : (xTestValve + xVBack1) * 0.5;
+        const qreal station1FlowMeterShiftX = -140.0;
+        const qreal xFm = xFmStation1 + station1TopRowShift + station1FlowMeterShiftX;
+        const qreal yFm = yRow1 + row1AfterAccumulatorYOffset;
+        const qreal flowMeterScale = 1.25;
+        const qreal xTestValve = xFm;
+        const qreal xVBack1 = xVReg;
+        const qreal xVBackReg = xV2;
+        const qreal xV5 = xV1;
+        const qreal xPs8 = xPs1;
+        const qreal xPt1 = xFm;
+        const qreal xPt2 = xPs2;
         auto place = [&](QGraphicsItem *it, qreal cx, qreal cy)
         {
             if (!it)
                 return;
             it->setPos(QPointF(cx, cy));
+            it->setTransformOriginPoint(it->boundingRect().center());
+            it->setScale(kDeviceItemScale);
+            it->setZValue(2);
+            m_scene->addItem(it);
+        };
+
+        auto addDeferred = [&](QGraphicsItem *it)
+        {
+            if (!it)
+                return;
             it->setTransformOriginPoint(it->boundingRect().center());
             it->setScale(kDeviceItemScale);
             it->setZValue(2);
@@ -2337,29 +2454,10 @@ namespace WaterTest
             item->setX(item->x() + (refPortX - itemPortX));
         };
 
-        // 第一排（从左到右，列 0~6）
-        AccumulatorItem *acc = nullptr;
-        if (!simplifiedStation1)
-        {
-            acc = new AccumulatorItem("压力罐", true);
-            place(acc, xAcc, yRow1);
-            acc->setScale(kAccumulatorItemScale);
-        }
-
-        SensorItem *ps3 = nullptr;
-        if (simplifiedStation1)
-        {
-            ps3 = new SensorItem(QString("压力3"), "kgf/cm^2", kUiPurple);
-            ps3->setData(1, 3);
-            place(ps3, xPs3, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
-        }
-
-        ThreeWayValveItem *v3w = nullptr;
-        if (!simplifiedStation1)
-        {
-            v3w = new ThreeWayValveItem("电动三通切换阀");
-            place(v3w, xV3w, yRow1 + row1AfterAccumulatorYOffset);
-        }
+        // 第一排（从左到右）
+        auto *ps3 = new SensorItem(QString::fromUtf8("压力3"), "kgf/cm^2", kUiPurple);
+        ps3->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 3)));
+        addDeferred(ps3);
 
         auto *v1 = new ValveItem(labelV1, true, 100.0);
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
@@ -2368,9 +2466,9 @@ namespace WaterTest
         v1->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
         // 压力传感器上置：使底部红点与主干管道平齐。
-        auto *ps1 = new SensorItem(QString("压力%1").arg(m_panelConfig.pressureSensorIds[0]), "kgf/cm^2", kUiPurple);
-        ps1->setData(1, static_cast<int>(m_panelConfig.pressureSensorIds[0]));
-        place(ps1, xPs1, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
+        auto *ps4 = new SensorItem(QString::fromUtf8("压力4"), "kgf/cm^2", kUiPurple);
+        ps4->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 4)));
+        addDeferred(ps4);
 
         auto *v2 = new ValveItem(labelV2, true, 100.1);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
@@ -2378,30 +2476,29 @@ namespace WaterTest
         v2->setData(4, relayGlyphMap.v2);
         v2->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
-        auto *ps2 = new SensorItem(QString("压力%1").arg(m_panelConfig.pressureSensorIds[1]), "kgf/cm^2", kUiPurple);
-        ps2->setData(1, static_cast<int>(m_panelConfig.pressureSensorIds[1]));
-        place(ps2, xPs2, yRow1 + row1AfterAccumulatorYOffset + pressureSensorTapYOffset);
+        auto *ps5 = new SensorItem(QString::fromUtf8("压力5"), "kgf/cm^2", kUiPurple);
+        ps5->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 5)));
+        addDeferred(ps5);
 
-        auto *vReg = new ValveItem(labelVReg1, false, 0.0, true, simplifiedStation1);
+        auto *vReg = new ValveItem(labelVReg1, false, 0.0, true, true);
         place(vReg, xVReg, yRow1 + row1AfterAccumulatorYOffset);
         vReg->setData(3, 6);
         vReg->setData(6, static_cast<int>(topRegValveId));
+
+        
 
         // 第二排（从右到左，列 6~0）
         auto *fm = new FlowMeterItem("流量计");
         place(fm, xFm, yFm);
         fm->setScale(flowMeterScale);
-        if (simplifiedStation1)
-        {
-            const qreal targetMainPipeY = vReg->mapToScene(ValveItem::outletPortLocal()).y();
-            const qreal fmLeftPortY = fm->mapToScene(flowMeterLeftPortLocal).y();
-            fm->setY(fm->y() + (targetMainPipeY - fmLeftPortY));
-        }
+        const qreal targetMainPipeY = vReg->mapToScene(ValveItem::outletPortLocal()).y();
+        const qreal fmLeftPortY = fm->mapToScene(flowMeterLeftPortLocal).y();
+        fm->setY(fm->y() + (targetMainPipeY - fmLeftPortY));
 
-        auto *pt1 = new SensorItem(QString("压力%1").arg(m_panelConfig.pressureSensorIds[2]), "kgf/cm^2", kUiOrange);
-        pt1->setData(1, static_cast<int>(m_panelConfig.pressureSensorIds[2]));
-        pt1->setData(2, "kgf/cm^2");
-        place(pt1, xPt1, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
+        auto *ps6 = new SensorItem(QString::fromUtf8("压力6"), "kgf/cm^2", kUiOrange);
+        ps6->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 6)));
+        ps6->setData(2, "kgf/cm^2");
+        addDeferred(ps6);
 
         auto *testValve = new ValveItem(labelTestValve, false, 100.2);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
@@ -2409,10 +2506,10 @@ namespace WaterTest
         testValve->setData(4, relayGlyphMap.test);
         testValve->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
-        auto *pt2 = new SensorItem(QString("压力%1").arg(m_panelConfig.pressureSensorIds[3]), "kgf/cm^2", kUiOrange);
-        pt2->setData(1, static_cast<int>(m_panelConfig.pressureSensorIds[3]));
-        pt2->setData(2, "kgf/cm^2");
-        place(pt2, xPt2, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
+        auto *ps7 = new SensorItem(QString::fromUtf8("压力7"), "kgf/cm^2", kUiOrange);
+        ps7->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 7)));
+        ps7->setData(2, "kgf/cm^2");
+        addDeferred(ps7);
 
         auto *vBack1 = new ValveItem(labelVBack1, true, 100.3);
         place(vBack1, xVBack1, yRow2 + row2AfterFlowMeterYOffset);
@@ -2420,33 +2517,21 @@ namespace WaterTest
         vBack1->setData(4, relayGlyphMap.v3);
         vBack1->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
-        auto *vBackReg = new ValveItem(labelVReg2, false, 0.0, true, simplifiedStation1);
+        auto *vBackReg = new ValveItem(labelVReg2, false, 0.0, true, true);
         place(vBackReg, xVBackReg, yRow2 + row2AfterFlowMeterYOffset);
         vBackReg->setData(3, 9);
         vBackReg->setData(6, static_cast<int>(bottomRegValveId));
 
-        SensorItem *ps8 = nullptr;
-        ValveItem *v5 = nullptr;
-        if (simplifiedStation1)
-        {
-            ps8 = new SensorItem(QString("压力8"), "kgf/cm^2", kUiOrange);
-            ps8->setData(1, 8);
-            ps8->setData(2, "kgf/cm^2");
-            place(ps8, xPs8, yRow2 + row2AfterFlowMeterYOffset + pressureSensorTapYOffset);
+        auto *ps8 = new SensorItem(QString("压力8"), "kgf/cm^2", kUiOrange);
+        ps8->setData(1, 8);
+        ps8->setData(2, "kgf/cm^2");
+        addDeferred(ps8);
 
-            v5 = new ValveItem(QString::fromUtf8("电磁阀5"), true, 100.0);
-            place(v5, xV5, yRow2 + row2AfterFlowMeterYOffset);
-            v5->setData(3, 5);
-            v5->setData(4, 5);
-            v5->setFlag(QGraphicsItem::ItemIsSelectable, false);
-        }
-
-        LoopItem *loopNode = nullptr;
-        if (!simplifiedStation1)
-        {
-            loopNode = new LoopItem("回路");
-            place(loopNode, xLoop, yRow2);
-        }
+        auto *v5 = new ValveItem(QString::fromUtf8("电磁阀5"), true, 100.0);
+        place(v5, xV5, yRow2 + row2AfterFlowMeterYOffset);
+        v5->setData(3, 5);
+        v5->setData(4, 5);
+        v5->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
         auto alignSensorAnchorToPipeMid = [&](SensorItem *sensor, const QPointF &pipeStart, const QPointF &pipeEnd)
         {
@@ -2456,79 +2541,58 @@ namespace WaterTest
             const QPointF mid((pipeStart.x() + pipeEnd.x()) * 0.5,
                               (pipeStart.y() + pipeEnd.y()) * 0.5);
             const QPointF anchorLocal = SensorItem::inletPortLocal();
-            sensor->setPos(mid.x() - anchorLocal.x() * kDeviceItemScale,
-                           mid.y() - anchorLocal.y() * kDeviceItemScale);
+            const QPointF anchorScene = sensor->mapToScene(anchorLocal);
+            const QPointF delta = mid - anchorScene;
+            sensor->setPos(sensor->pos() + delta);
         };
 
-        alignSensorAnchorToPipeMid(ps1,
+        alignSensorAnchorToPipeMid(ps4,
                                    v1->mapToScene(ValveItem::outletPortLocal()),
                                    v2->mapToScene(ValveItem::inletPortLocal()));
-        alignSensorAnchorToPipeMid(ps2,
+        alignSensorAnchorToPipeMid(ps5,
                                    v2->mapToScene(ValveItem::outletPortLocal()),
                                    vReg->mapToScene(ValveItem::inletPortLocal()));
 
-        if (simplifiedStation1 && ps3)
         {
-            const QPointF end = v1->mapToScene(ValveItem::inletPortLocal());
-            const QPointF start(end.x() - station1InletPipeLen, end.y());
-            alignSensorAnchorToPipeMid(ps3, start, end);
-        }
-
-        {
-            // 这里不是直接画主管道，而是先用和主管道相同的几何点位去安放 PT1。
-            // 这样 PT1 会始终贴着“右侧竖直下落段”附近，不会因为后面改拐点长度而漂到错误位置。
+            // ps6 放在 p2 与电磁阀右侧接口之间的管道中点，避免随着管线长度变化漂移。
             //
             // 几何含义：
-            // fmRight  : 流量计右出口
-            // testOut  : 待测阀右侧端口
-            // elbowX   : 右侧拐点所在的统一 x 坐标
+            // fmRight        : 流量计右出口
+            // valveRightPort : 电磁阀右侧端口
+            // elbowX         : 右侧拐点所在的统一 x 坐标
             // p1       : 上拐点（先向右走到这里）
             // p2       : 下拐点（再沿竖线下落到这里）
             const QPointF fmRight = fm->mapToScene(flowMeterRightPortLocal);
-            const QPointF testOut = testValve->mapToScene(ValveItem::outletPortLocal());
-            const qreal elbowX = std::max(fmRight.x(), testOut.x()) + fmRightPipeLen;
+            const QPointF valveRightPort = testValve->mapToScene(ValveItem::outletPortLocal());
+            const qreal elbowX = std::max(fmRight.x(), valveRightPort.x()) + fmRightPipeLen;
             const QPointF p1(elbowX, fmRight.y());
-            const QPointF p2(elbowX, testOut.y());
-            alignSensorAnchorToPipeMid(pt1, p2, testOut);
-            if (simplifiedStation1)
-                pt1->setX(pt1->x() + 90.0);
+            const QPointF p2(elbowX, valveRightPort.y());
+            alignSensorAnchorToPipeMid(ps6, p2, valveRightPort);
         }
 
-        alignSensorAnchorToPipeMid(pt2,
+        alignSensorAnchorToPipeMid(ps7,
                                    testValve->mapToScene(ValveItem::inletPortLocal()),
                                    vBack1->mapToScene(ValveItem::outletPortLocal()));
 
-        if (simplifiedStation1 && ps8 && v5)
-        {
-            alignSensorAnchorToPipeMid(ps8,
-                                       vBackReg->mapToScene(ValveItem::inletPortLocal()),
-                                       v5->mapToScene(ValveItem::outletPortLocal()));
+        alignSensorAnchorToPipeMid(ps8,
+                                   vBackReg->mapToScene(ValveItem::inletPortLocal()),
+                                   v5->mapToScene(ValveItem::outletPortLocal()));
 
-            // 1号台关键图元按端口精确对齐，避免仅按图元中心对齐造成视觉误差。
-            alignItemPortX(vBack1, ValveItem::inletPortLocal(), vReg, ValveItem::inletPortLocal());
-            alignItemPortX(vBackReg, ValveItem::inletPortLocal(), v2, ValveItem::inletPortLocal());
-            alignItemPortX(v5, ValveItem::inletPortLocal(), v1, ValveItem::inletPortLocal());
-            alignItemPortX(ps8, SensorItem::inletPortLocal(), ps1, SensorItem::inletPortLocal());
-        }
+        // 1号台关键图元按端口精确对齐，避免仅按图元中心对齐造成视觉误差。
+        alignItemPortX(vBack1, ValveItem::inletPortLocal(), vReg, ValveItem::inletPortLocal());
+        alignItemPortX(vBackReg, ValveItem::inletPortLocal(), v2, ValveItem::inletPortLocal());
+        alignItemPortX(v5, ValveItem::inletPortLocal(), v1, ValveItem::inletPortLocal());
+        alignItemPortX(ps8, SensorItem::inletPortLocal(), ps4, SensorItem::inletPortLocal());
 
         // ==== 管道连接（四段主流程，按工艺流向编号）====
 
-        // 管路 1：上排供压主线
-        // 1号台：左侧来流 -> 电动阀 V1 -> 电动阀 V2 -> 电动调压阀（压力3上置测点）。
-        // 2/3号台：蓄能器 -> 电动三通切换阀 -> 电动阀 V1 -> 电动阀 V2 -> 电动调压阀。
-        if (simplifiedStation1)
-        {
-            const QPointF end = v1->mapToScene(ValveItem::inletPortLocal());
-            const QPointF start(end.x() - station1InletPipeLen, end.y());
-            QPainterPath path(start);
-            path.lineTo(end);
-            addHmiPipeWithArrow(m_scene, path, end, start);
-        }
-        else
-        {
-            connectPorts(m_scene, acc->mapToScene(AccumulatorItem::outletPortLocal()), v3w->mapToScene(ThreeWayValveItem::inletPortLocal()));
-            connectPorts(m_scene, v3w->mapToScene(ThreeWayValveItem::outletPortLocal()), v1->mapToScene(ValveItem::inletPortLocal()));
-        }
+        // 管路 1：上排供压主线（单布局）
+        const QPointF end = v1->mapToScene(ValveItem::inletPortLocal());
+        const QPointF start(end.x() - station1InletPipeLen, end.y());
+        QPainterPath path(start);
+        path.lineTo(end);
+        addHmiPipeWithArrow(m_scene, path, end, start);
+        alignSensorAnchorToPipeMid(ps3, start, end);
         connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()));
         connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()));
 
@@ -2581,33 +2645,21 @@ namespace WaterTest
                                       kPipeInnerWidth + 2.0,
                                       kPipeFlowWidth + 1.0);
 
-            // 调图辅助：把右侧两个拐点直接标红，方便现场肉眼确认“长度参数”到底在控制哪两个点。
-            if (simplifiedStation1)
-            {
-                addDebugPointMarker(m_scene, p1, "P1");
-                addDebugPointMarker(m_scene, p2, "P2");
-            }
         }
         connectPorts(m_scene, testValve->mapToScene(ValveItem::inletPortLocal()), vBack1->mapToScene(ValveItem::outletPortLocal()));
 
         // 管路 4：下排收口段
         // 1号台：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 电磁阀5 -> 左侧去向（压力8为上置测点，不串接在主管道内）。
-        // 2/3号台：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 回路节点（loopNode）。
         connectPorts(m_scene, vBack1->mapToScene(ValveItem::inletPortLocal()), vBackReg->mapToScene(ValveItem::outletPortLocal()));
-        if (simplifiedStation1)
+        connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), v5->mapToScene(ValveItem::outletPortLocal()));
+        // 电磁阀5左侧出口：直接向左引出到站外去向。
         {
-            connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), v5->mapToScene(ValveItem::outletPortLocal()));
-            {
-                // 电磁阀5左侧出口：直接向左引出到站外去向。
-                const QPointF start = v5->mapToScene(ValveItem::inletPortLocal());
-                const QPointF end(start.x() - station1InletPipeLen, start.y());
-                QPainterPath path(start);
-                path.lineTo(end);
-                addHmiPipeWithArrow(m_scene, path, end, start);
-            }
+            const QPointF start = v5->mapToScene(ValveItem::inletPortLocal());
+            const QPointF end(start.x() - station1InletPipeLen, start.y());
+            QPainterPath path(start);
+            path.lineTo(end);
+            addHmiPipeWithArrow(m_scene, path, end, start);
         }
-        else
-            connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), loopNode->mapToScene(LoopItem::outletPortLocal()));
 
         // 注：按需求不再绘制“回路 -> 蓄能器”的闭环管路。
 
@@ -2630,6 +2682,15 @@ namespace WaterTest
         m_view->fitInView(r, Qt::KeepAspectRatio);
     }
 
+    /**
+     * @brief 更新管道流动动画（50 ms 定时器驱动）。
+     *
+     * 通过递减 m_flowDashOffset 并赋给所有 data(0)=="hmi_pipe_flow" 路径项的 QPen::dashOffset，
+     * 产生液体从左向右流动的视觉效果。
+     * 仅在至少一台供压泵运行（remote: flow_rate>0.001 / local: pump.isRunning）时显示动画层。
+     */
+    // ===== 逻辑控制层 =====
+    // 这里负责继电器回读、阀门切换、自检流程和传感器刷新。
     void Station1Panel::updatePipeFlowAnimation()
     {
         if (!isVisible())
@@ -2674,6 +2735,26 @@ namespace WaterTest
         }
     }
 
+    /**
+     * @brief 刷新场景中所有传感器/阀门/流量计图元的显示值（200 ms 定时器驱动）。
+     *
+     * @param force true=强制刷新（即使面板不可见），false=不可见时跳过
+     *
+    * 远程分支（m_stationClient && strict_remote_mode=true）：
+    *   1. 遍历当前页面实际显示的 PS 编号，并按“PS n -> pressureSensorIds[n-1]”取配置值。
+    *   2. 每个传感器优先从本地 DeviceManager 通过 resolveLocalPressureSensorId() 读取；
+    *      本地无数据则退回远程 SensorData::pressure[resolveRemotePressureIndex()] 。
+     *   3. 从远程 SensorData::flow_rate 刷新流量计。
+     *   4. 从本地 DeviceManager::getRegulatingValve() 刷新电动调压阀开度。
+     *
+     * 本地分支（strict_remote_mode=false 或无 StationClient）：
+    *   1. 遍历当前页面实际显示的 PS 编号，并按“PS n -> pressureSensorIds[n-1]”读取本地压力传感器。
+     *   2. 阀门状态：data(6) 存在则读调压阀开度；data(4) 存在则由继电器状态驱动（跳过）；
+     *      其余读 DeviceManager::getValve() 状态。
+     *   3. 从 DeviceManager::getFlowMeter() 刷新流量计和报警状态。
+     *
+     * 注意：setValue() 直接传入原始 kPa 值（SensorGlyphRenderer 量表 0~100 对应 0~100 kPa）。
+     */
     void Station1Panel::updateSensorValues(bool force)
     {
         if (!force && !isVisible())
@@ -2688,52 +2769,33 @@ namespace WaterTest
             const SensorData net = m_stationClient->getLatestSensorData();
             const auto allItems = m_scene->items();
 
-            const auto &mappedSensorIds = m_panelConfig.pressureSensorIds;
-            for (size_t idx = 0; idx < mappedSensorIds.size(); ++idx)
+            const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
+            for (size_t idx = 0; idx < visiblePsNumbers.size(); ++idx)
             {
-                const int sensorId = static_cast<int>(mappedSensorIds[idx]);
-                const int remotePressureIndex = resolveRemotePressureIndex(mappedSensorIds[idx], static_cast<int>(idx));
-                for (auto *it : allItems)
+                const int psNumber = visiblePsNumbers[idx];
+                const uint16_t configuredSensorId = configuredPressureSensorId(m_panelConfig, psNumber);
+                if (configuredSensorId == 0)
+                    continue;
+
+                const int sensorId = static_cast<int>(configuredSensorId);
+                double pressureKpa = 0.0;
+                bool hasMappedLocalPressure = false;
+                if (m_deviceManager)
                 {
-                    if (!it)
-                        continue;
-                    const QVariant v = it->data(1);
-                    if (!v.isValid() || v.toInt() != sensorId)
-                        continue;
-
-                    auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                    if (!sensorItem)
-                        continue;
-
-                    sensorItem->setValue(static_cast<double>(net.pressure[remotePressureIndex]));
-                    sensorItem->setDisplayDecimals(2);
-                }
-            }
-
-            if (m_panelConfig.stationNumber == 1)
-            {
-                {
-                    const int sensorId = 3;
-                    const int remotePressureIndex = resolveRemotePressureIndex(static_cast<uint16_t>(sensorId), 2);
-                    for (auto *it : allItems)
+                    const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
+                    if (sensor.id != 0)
                     {
-                        if (!it)
-                            continue;
-                        const QVariant v = it->data(1);
-                        if (!v.isValid() || v.toInt() != sensorId)
-                            continue;
-
-                        auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                        if (!sensorItem)
-                            continue;
-
-                        sensorItem->setValue(static_cast<double>(net.pressure[remotePressureIndex]));
-                        sensorItem->setDisplayDecimals(2);
+                        pressureKpa = static_cast<double>(sensor.pressure);
+                        hasMappedLocalPressure = true;
                     }
                 }
 
-                const int sensorId = 8;
-                const int remotePressureIndex = resolveRemotePressureIndex(static_cast<uint16_t>(sensorId), 3);
+                if (!hasMappedLocalPressure)
+                {
+                    const int remotePressureIndex = std::clamp(resolveRemotePressureIndex(configuredSensorId, static_cast<int>(idx)), 0, 3);
+                    pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
+                }
+
                 for (auto *it : allItems)
                 {
                     if (!it)
@@ -2746,7 +2808,7 @@ namespace WaterTest
                     if (!sensorItem)
                         continue;
 
-                    sensorItem->setValue(static_cast<double>(net.pressure[remotePressureIndex]));
+                    sensorItem->setValue(pressureKpa);
                     sensorItem->setDisplayDecimals(2);
                 }
             }
@@ -2803,53 +2865,15 @@ namespace WaterTest
 
         const auto allItems = m_scene->items();
 
-        for (uint16_t mappedSensorId : m_panelConfig.pressureSensorIds)
+        const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
+        for (int psNumber : visiblePsNumbers)
         {
-            const int sensorId = static_cast<int>(mappedSensorId);
-            const auto sensor = m_deviceManager->getPressureSensor(mappedSensorId);
-            for (auto *it : allItems)
-            {
-                if (!it)
-                    continue;
+            const uint16_t configuredSensorId = configuredPressureSensorId(m_panelConfig, psNumber);
+            if (configuredSensorId == 0)
+                continue;
 
-                const QVariant v = it->data(1);
-                if (!v.isValid() || v.toInt() != sensorId)
-                    continue;
-
-                auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                if (!sensorItem)
-                    continue;
-
-                sensorItem->setValue(static_cast<double>(sensor.pressure));
-                sensorItem->setDisplayDecimals(sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
-            }
-        }
-
-        if (m_panelConfig.stationNumber == 1)
-        {
-            {
-                const int sensorId = 3;
-                const auto sensor = m_deviceManager->getPressureSensor(static_cast<uint16_t>(sensorId));
-                for (auto *it : allItems)
-                {
-                    if (!it)
-                        continue;
-
-                    const QVariant v = it->data(1);
-                    if (!v.isValid() || v.toInt() != sensorId)
-                        continue;
-
-                    auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                    if (!sensorItem)
-                        continue;
-
-                    sensorItem->setValue(static_cast<double>(sensor.pressure));
-                    sensorItem->setDisplayDecimals(sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
-                }
-            }
-
-            const int sensorId = 8;
-            const auto sensor = m_deviceManager->getPressureSensor(static_cast<uint16_t>(sensorId));
+            const int sensorId = static_cast<int>(configuredSensorId);
+            const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
             for (auto *it : allItems)
             {
                 if (!it)

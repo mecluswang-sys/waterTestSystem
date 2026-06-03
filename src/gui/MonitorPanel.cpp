@@ -495,7 +495,7 @@ namespace WaterTest
             QString statusText;
             QColor bgColor(200, 200, 200);
 
-            if (valve.alarmActive || valve.deviceStatus == DeviceStatus::FAULT)
+            if (valve.deviceStatus == DeviceStatus::FAULT)
             {
                 statusText = "故障";
                 bgColor = QColor(255, 100, 100);

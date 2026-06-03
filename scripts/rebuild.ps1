@@ -5,6 +5,24 @@ param(
     [string]$BuildType = "Release"
 )
 
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $ScriptDir
+$BuildDir = Join-Path $RepoRoot "build"
+$BuildScript = Join-Path $ScriptDir "build.ps1"
+
+$generateStamp = Join-Path $BuildDir "CMakeFiles\generate.stamp.list"
+$cacheFile = Join-Path $BuildDir "CMakeCache.txt"
+
+if (-not (Test-Path $BuildDir) -or -not (Test-Path $cacheFile) -or -not (Test-Path $generateStamp)) {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Water Test System - Quick Rebuild" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "" 
+    Write-Host "Build directory is incomplete; falling back to full CMake reconfigure..." -ForegroundColor Yellow
+    & $BuildScript -BuildType $BuildType
+    exit $LASTEXITCODE
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Water Test System - Quick Rebuild" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan

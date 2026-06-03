@@ -32,7 +32,7 @@ namespace WaterTest
         struct PanelConfig
         {
             int stationNumber = 1;
-            std::array<uint16_t, 4> pressureSensorIds{{4, 5, 6, 7}};
+            std::array<uint16_t, 15> pressureSensorIds{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}};
             uint16_t flowMeterId = 1;
         };
 

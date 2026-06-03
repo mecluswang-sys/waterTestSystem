@@ -695,8 +695,6 @@ namespace WaterTest
     void AutoTestPanel::applyTestCondition(const TestCondition &condition)
     {
         // 应用测试条件到设备
-        // 设置目标压力（通过调压阀）
-        // m_deviceManager->setRegulatingValvePressure(1, condition.targetPressure);
 
         // 设置阀门电压
         m_testValveVoltageSpinBox->setValue(condition.valveVoltage);

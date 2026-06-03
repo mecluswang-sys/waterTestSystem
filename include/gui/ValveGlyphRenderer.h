@@ -42,9 +42,12 @@ namespace WaterTest::GuiGlyph
             p->drawRoundedRect(boundingRect.adjusted(2, 2, -2, -2), 10, 10);
         }
 
-        const QColor iconColor = open ? QColor(32, 84, 170) : QColor(88, 105, 132);
-        const QColor frameColor = open ? theme.green : theme.red;
-        const QColor stateTint = open ? QColor(32, 84, 170, 32) : QColor(88, 105, 132, 24);
+        // 开启态统一使用更醒目的绿色系，便于和关闭态区分。
+        const QColor openColor = theme.green.lighter(120);
+        const QColor iconColor = open ? openColor : QColor(88, 105, 132);
+        const QColor frameColor = open ? openColor : theme.red;
+        const QColor stateTint = open ? QColor(openColor.red(), openColor.green(), openColor.blue(), 40)
+                          : QColor(88, 105, 132, 24);
         const bool isRegulatingValve = regulatingStyle || name.contains(QString::fromUtf8("调压阀"));
 
         if (isRegulatingValve && !plainRegulatingStyle)
@@ -102,7 +105,7 @@ namespace WaterTest::GuiGlyph
             p->drawArc(gaugeRect, 225 * 16, -270 * 16);
 
             // 进度弧（从0到当前开度）
-            const QColor accent = open ? QColor(56, 170, 255) : QColor(170, 132, 92);
+            const QColor accent = open ? openColor : QColor(170, 132, 92);
             p->setPen(QPen(accent, 2.4, Qt::SolidLine, Qt::RoundCap));
             p->drawArc(gaugeRect, 225 * 16, static_cast<int>(-270.0 * ratio * 16.0));
 

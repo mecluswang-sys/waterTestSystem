@@ -221,11 +221,11 @@ namespace WaterTest
         auto validator = std::make_shared<ValidationProcessor<RegulatingValve>>(
             [](const RegulatingValve &valve)
             {
-                if (valve.setPressure < 0 || valve.setPressure > 2000000.0f)
+                if (valve.openingSetpoint < 0.0f || valve.openingSetpoint > 100.0f)
                 {
                     return false;
                 }
-                if (valve.actualPressure < 0 || valve.actualPressure > 2000000.0f)
+                if (valve.openingPercent < 0.0f || valve.openingPercent > 100.0f)
                 {
                     return false;
                 }
@@ -243,8 +243,8 @@ namespace WaterTest
                 if (m_loggingEnabled)
                 {
                     writeLog("RegulatingValve " + std::to_string(packet.data.id) +
-                             " processed: Set=" + std::to_string(packet.data.setPressure) +
-                             " Pa, Actual=" + std::to_string(packet.data.actualPressure) + " Pa");
+                             " processed: Cmd=" + std::to_string(packet.data.openingSetpoint) +
+                             " %, Feedback=" + std::to_string(packet.data.openingPercent) + " %");
                 }
             });
     }
