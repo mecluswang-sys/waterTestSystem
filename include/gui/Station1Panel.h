@@ -7,6 +7,8 @@
 #define STATION1_PANEL_H
 
 #include <QWidget>
+#include <QLabel>
+#include <QGroupBox>
 #include <memory>
 #include <vector>
 #include <array>
@@ -15,6 +17,7 @@ class QShowEvent;
 class QHideEvent;
 class QTimer;
 class QPushButton;
+class QFrame;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -63,6 +66,8 @@ namespace WaterTest
 
     private:
         void setupUI();
+        void setupStageOverview(QWidget *parent);
+        void setActiveStageIndex(int stageIndex);
         void buildScene();
         void applyAutoFit();
         void setRealtimeUpdatesEnabled(bool enabled);
@@ -89,6 +94,33 @@ namespace WaterTest
         std::vector<QPushButton *> m_relayBtns;
         QPushButton *m_startBtn;
         QPushButton *m_stopBtn;
+
+        QGroupBox *m_stageOverviewGroup;
+        std::array<QFrame *, 5> m_stageCardFrames{{nullptr, nullptr, nullptr, nullptr, nullptr}};
+        std::array<QLabel *, 5> m_stageNameLabels{{nullptr, nullptr, nullptr, nullptr, nullptr}};
+        std::array<QLabel *, 5> m_stageParamLabels{{nullptr, nullptr, nullptr, nullptr, nullptr}};
+        std::array<std::array<QLabel *, 3>, 5> m_stageRowLabelLabels{{
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}}
+        }};
+        std::array<std::array<QFrame *, 3>, 5> m_stageRowFrames{{
+            std::array<QFrame *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QFrame *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QFrame *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QFrame *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QFrame *, 3>{{nullptr, nullptr, nullptr}}
+        }};
+        std::array<std::array<QLabel *, 3>, 5> m_stageValueLabels{{
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
+            std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}}
+        }};
+        int m_activeStageIndex = 0;
 
         // M100.0 ~ M100.3 置位后若被 PLC 快速复位，用于触发可视化提示
         std::array<bool, 4> m_expectM100Hold{{false, false, false, false}};

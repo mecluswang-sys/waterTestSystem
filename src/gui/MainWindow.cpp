@@ -10,6 +10,7 @@
 #include "gui/AutoTestPanel.h"
 #include "gui/Station1Panel.h"
 #include "gui/ConfigDialog.h"
+#include "PumpWidget.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
 #include "S7PLCClient.h"
@@ -33,6 +34,7 @@
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QSizePolicy>
 #include <QStyle>
 #include <QTime>
 #include <QDateTime>
@@ -380,6 +382,29 @@ namespace WaterTest
                 disabledLayout->addStretch();
                 m_tabWidget->addTab(disabled, "⑤ 1号操作台");
             }
+        }
+
+        // Tab 6: 泵绘制预览
+        {
+            auto *pumpPreviewPage = new QWidget(this);
+            auto *pumpPreviewLayout = new QVBoxLayout(pumpPreviewPage);
+            pumpPreviewLayout->setContentsMargins(12, 12, 12, 12);
+            pumpPreviewLayout->setSpacing(10);
+
+            auto *pumpPreviewTitle = new QLabel("泵绘制预览", pumpPreviewPage);
+            pumpPreviewTitle->setObjectName("pageTitle");
+            pumpPreviewLayout->addWidget(pumpPreviewTitle);
+
+            auto *pumpPreviewHint = new QLabel("用于查看 PumpWidget 的动态渲染效果。", pumpPreviewPage);
+            pumpPreviewHint->setWordWrap(true);
+            pumpPreviewLayout->addWidget(pumpPreviewHint);
+
+            auto *pumpWidget = new PumpWidget(pumpPreviewPage);
+            pumpWidget->setMinimumSize(700, 480);
+            pumpWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+            pumpPreviewLayout->addWidget(pumpWidget, 1);
+
+            m_tabWidget->addTab(pumpPreviewPage, "⑥ 泵绘制预览");
         }
 
         mainLayout->addWidget(m_tabWidget);

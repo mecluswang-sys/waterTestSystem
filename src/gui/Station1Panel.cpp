@@ -67,6 +67,7 @@
 #include <QScrollBar>
 #include <QSlider>
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QTextEdit>
 #include <QMessageBox>
 #include <QStyle>
@@ -1148,10 +1149,34 @@ namespace WaterTest
         m_view->setTransformationAnchor(QGraphicsView::AnchorViewCenter);
         m_view->setResizeAnchor(QGraphicsView::AnchorViewCenter);
 
+        // 预留下半部分的测试阶段区：固定高度约 220px，用于展示 5 个阶段及其参数。
+        // 上半部分流程图保留为主视觉，下半部分用于阶段化测试信息。
+        m_stageOverviewGroup = new QGroupBox("测试阶段概览", this);
+        m_stageOverviewGroup->setMinimumHeight(208);
+        m_stageOverviewGroup->setMaximumHeight(208);
+        m_stageOverviewGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // m_stageOverviewGroup->setStyleSheet(
+        //     "QGroupBox {"
+        //     " font-weight: 700;"
+        //     " color: #21303d;"
+        //     " border: 1px solid #d1dae4;"
+        //     " border-radius: 14px;"
+        //     " margin-top: 14px;"
+        //     " background: #f6f8fb;"
+        //     " }"
+        //     "QGroupBox::title {"
+        //     " subcontrol-origin: margin;"
+        //     " left: 12px;"
+        //     " padding: 0 6px;"
+        //     " }"
+        // );
+        setupStageOverview(m_stageOverviewGroup);
+
         m_scene = new QGraphicsScene(this);
         m_view->setScene(m_scene);
         m_view->viewport()->installEventFilter(this);
         layout->addWidget(m_view, 1);
+        layout->addWidget(m_stageOverviewGroup, 0);
 
         m_flowTimer = new QTimer(this);
         connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
@@ -1168,6 +1193,7 @@ namespace WaterTest
 
         buildScene();
         updateRelayButtons();
+        setActiveStageIndex(0);
 
         // 点击阀门图元后弹出控制面板，避免误触：选中后立即清除选中态
         connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]()
@@ -1227,27 +1253,27 @@ namespace WaterTest
                 slider->setValue(qRound(currentOpening * 10.0f));
                 slider->setMinimumHeight(44);
                 slider->setTickPosition(QSlider::NoTicks);
-                slider->setStyleSheet(
-                    "QSlider::groove:horizontal {"
-                    " height: 20px;"
-                    " border-radius: 6px;"
-                    " background: #2b3948;"
-                    " }"
-                    "QSlider::sub-page:horizontal {"
-                    " background: #4cc3a0;"
-                    " border-radius: 6px;"
-                    " }"
-                    "QSlider::add-page:horizontal {"
-                    " background: #55697f;"
-                    " border-radius: 6px;"
-                    " }"
-                    "QSlider::handle:horizontal {"
-                    " width: 26px;"
-                    " margin: -10px 0;"
-                    " border-radius: 13px;"
-                    " background: #eaf2ff;"
-                    " border: 1px solid #8fa3b8;"
-                    " }");
+                // slider->setStyleSheet(
+                //     "QSlider::groove:horizontal {"
+                //     " height: 20px;"
+                //     " border-radius: 6px;"
+                //     " background: #2b3948;"
+                //     " }"
+                //     "QSlider::sub-page:horizontal {"
+                //     " background: #4cc3a0;"
+                //     " border-radius: 6px;"
+                //     " }"
+                //     "QSlider::add-page:horizontal {"
+                //     " background: #55697f;"
+                //     " border-radius: 6px;"
+                //     " }"
+                //     "QSlider::handle:horizontal {"
+                //     " width: 26px;"
+                //     " margin: -10px 0;"
+                //     " border-radius: 13px;"
+                //     " background: #eaf2ff;"
+                //     " border: 1px solid #8fa3b8;"
+                //     " }");
                 mainLayout->addWidget(slider);
 
                 // auto *spin = new QDoubleSpinBox(&dialog);
@@ -1386,6 +1412,252 @@ namespace WaterTest
 
         // 初始状态仅当前可见页面保持实时刷新，降低Tab切换负载。
         setRealtimeUpdatesEnabled(isVisible());
+    }
+
+    void Station1Panel::setupStageOverview(QWidget *parent)
+    {
+        auto *mainLayout = new QVBoxLayout(parent);
+        mainLayout->setContentsMargins(10, 8, 10, 10);
+        mainLayout->setSpacing(8);
+
+        auto *grid = new QGridLayout();
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(0);
+
+        const std::array<QString, 5> stageNames{{
+            QString::fromUtf8("低压开阀"),
+            QString::fromUtf8("高压开阀"),
+            QString::fromUtf8("低压内泄露"),
+            QString::fromUtf8("高压内泄露"),
+            QString::fromUtf8("高压外泄漏")
+        }};
+
+        const std::array<std::array<QString, 3>, 5> stageRowLabels{{
+            std::array<QString, 3>{{QString::fromUtf8("开阀时间"), QString::fromUtf8("关阀时间"), QString::fromUtf8("压力降低")}},
+            std::array<QString, 3>{{QString::fromUtf8("开阀时间"), QString::fromUtf8("关阀时间"), QString::fromUtf8("压力升高")}},
+            std::array<QString, 3>{{QString::fromUtf8("压力升降"), QString::fromUtf8("测试次数"), QString::fromUtf8("泄露值")}},
+            std::array<QString, 3>{{QString::fromUtf8("压力升降"), QString::fromUtf8("测试次数"), QString::fromUtf8("泄露值")}},
+            std::array<QString, 3>{{QString::fromUtf8("压力升降"), QString::fromUtf8("测试次数"), QString::fromUtf8("泄露值")}}
+        }};
+
+        const std::array<std::array<QString, 3>, 5> stageRowValues{{
+            std::array<QString, 3>{{QString::fromUtf8("3S"), QString::fromUtf8("2S"), QString::fromUtf8("10kPa")}},
+            std::array<QString, 3>{{QString::fromUtf8("--"), QString::fromUtf8("--"), QString::fromUtf8("--")}},
+            std::array<QString, 3>{{QString::fromUtf8("--"), QString::fromUtf8("--"), QString::fromUtf8("--")}},
+            std::array<QString, 3>{{QString::fromUtf8("--"), QString::fromUtf8("--"), QString::fromUtf8("--")}},
+            std::array<QString, 3>{{QString::fromUtf8("--"), QString::fromUtf8("--"), QString::fromUtf8("--")}}
+        }};
+
+        auto makeRow = [](QFrame *parentFrame, const QString &labelText, const QString &valueText, bool active) {
+            auto *rowFrame = new QFrame(parentFrame);
+            rowFrame->setObjectName("stageRow");
+            rowFrame->setFixedHeight(30);
+            rowFrame->setStyleSheet(QString(
+                                          "QFrame#stageRow {"
+                                          " border: 1px solid %1;"
+                                          " border-radius: 8px;"
+                                          " background: #fcfdff;"
+                                          " }")
+                                          .arg(active ? QStringLiteral("#c7e4d0") : QStringLiteral("#e3e9ef")));
+
+            auto *rowLayout = new QHBoxLayout(rowFrame);
+            rowLayout->setContentsMargins(10, 0, 10, 0);
+            rowLayout->setSpacing(6);
+
+            auto *label = new QLabel(labelText, rowFrame);
+            label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            label->setStyleSheet(QString(
+                                     "QLabel {"
+                                     " color: %1;"
+                                     " font-size: 11px;"
+                                     " font-weight: 600;"
+                                     " background-color: #fcfdff;"
+                                     " }")
+                                     .arg(active ? QStringLiteral("#24463a") : QStringLiteral("#5c6d7d")));
+
+            auto *value = new QLabel(valueText, rowFrame);
+            value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            value->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            value->setStyleSheet(QString(
+                                     "QLabel {"
+                                     " color: %1;"
+                                     " font-size: 11px;"
+                                     " font-weight: 700;"
+                                     " background-color: #fcfdff;"
+                                     " }")
+                                     .arg(active ? QStringLiteral("#2b8a4b") : QStringLiteral("#263441")));
+
+            rowLayout->addWidget(label, 1);
+            rowLayout->addWidget(value, 1);
+
+            return std::pair<QFrame *, QLabel *>{rowFrame, value};
+        };
+
+        for (int i = 0; i < 5; ++i)
+        {
+            auto *card = new QFrame(parent);
+            card->setObjectName("stageCard");
+            card->setFrameShape(QFrame::NoFrame);
+            card->setFrameShadow(QFrame::Plain);
+            card->setMinimumHeight(170);
+            card->setStyleSheet(
+                "QFrame#stageCard {"
+                " border: 1px solid #dbe3ea;"
+                " border-radius: 16px;"
+                " background: #fcfdff;"
+                " }");
+
+            auto *cardLayout = new QVBoxLayout(card);
+            cardLayout->setContentsMargins(10, 8, 10, 10);
+            cardLayout->setSpacing(6);
+
+            const bool isActiveStage = (i == m_activeStageIndex);
+            const QString headerColor = isActiveStage ? QStringLiteral("#2f9f57") : QStringLiteral("#33495c");
+
+            auto *statusBar = new QFrame(card);
+            statusBar->setFixedHeight(4);
+            statusBar->setStyleSheet(QStringLiteral("QFrame { background: %1; border: none; border-radius: 2px; }").arg(headerColor));
+
+            auto *nameLabel = new QLabel(stageNames[static_cast<size_t>(i)], card);
+            nameLabel->setObjectName("stageName");
+            nameLabel->setFixedHeight(28);
+            nameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            nameLabel->setStyleSheet(QString(
+                                         "QLabel#stageName {"
+                                         " color: #f8fbff;"
+                                         " font-weight: 700;"
+                                         " font-size: 12px;"
+                                         " background: %1;"
+                                         " border-radius: 8px;"
+                                         " padding-left: 10px;"
+                                         " }")
+                                         .arg(headerColor));
+
+            auto *bodyFrame = new QFrame(card);
+            bodyFrame->setObjectName("stageBody");
+            bodyFrame->setFrameShape(QFrame::NoFrame);
+            bodyFrame->setFrameShadow(QFrame::Plain);
+            bodyFrame->setStyleSheet("QFrame#stageBody { border: 0px; background: #fcfdff; }");
+
+            auto *bodyLayout = new QVBoxLayout(bodyFrame);
+            bodyLayout->setContentsMargins(2, 0, 2, 0);
+            bodyLayout->setSpacing(4);
+
+            auto *paramFrame = new QFrame(bodyFrame);
+            auto *paramLayout = new QVBoxLayout(paramFrame);
+            paramLayout->setContentsMargins(0, 0, 0, 0);
+            paramLayout->setSpacing(4);
+
+            for (int row = 0; row < 3; ++row)
+            {
+                const auto rowPair = makeRow(paramFrame,
+                                             stageRowLabels[static_cast<size_t>(i)][static_cast<size_t>(row)],
+                                             stageRowValues[static_cast<size_t>(i)][static_cast<size_t>(row)],
+                                             isActiveStage);
+                paramLayout->addWidget(rowPair.first);
+                m_stageRowLabelLabels[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.first->findChild<QLabel *>();
+                m_stageRowFrames[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.first;
+                m_stageValueLabels[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.second;
+            }
+
+            paramLayout->addStretch(1);
+            bodyLayout->addWidget(paramFrame);
+
+            cardLayout->addWidget(statusBar);
+            cardLayout->addWidget(nameLabel);
+            cardLayout->addWidget(bodyFrame, 1);
+
+            m_stageCardFrames[static_cast<size_t>(i)] = card;
+            m_stageNameLabels[static_cast<size_t>(i)] = nameLabel;
+            m_stageParamLabels[static_cast<size_t>(i)] = m_stageValueLabels[static_cast<size_t>(i)][0];
+
+            grid->addWidget(card, 0, i);
+        }
+
+        for (int col = 0; col < 5; ++col)
+            grid->setColumnStretch(col, 1);
+
+        mainLayout->addLayout(grid);
+    }
+
+    void Station1Panel::setActiveStageIndex(int stageIndex)
+    {
+        if (stageIndex < 0 || stageIndex >= static_cast<int>(m_stageNameLabels.size()))
+            return;
+
+        m_activeStageIndex = stageIndex;
+
+        for (int i = 0; i < static_cast<int>(m_stageNameLabels.size()); ++i)
+        {
+            auto *card = m_stageCardFrames[static_cast<size_t>(i)];
+            auto *nameLabel = m_stageNameLabels[static_cast<size_t>(i)];
+            if (!card || !nameLabel)
+                continue;
+
+            const bool isActive = (i == m_activeStageIndex);
+            const QString headerColor = isActive ? QStringLiteral("#2ea84f") : QStringLiteral("#2d3c4a");
+
+            card->setStyleSheet(QString(
+                                    "QFrame#stageCard {"
+                                    " border: %1px solid %2;"
+                                    " border-radius: 16px;"
+                                    " background: %3;"
+                                    " }")
+                                    .arg(isActive ? 2 : 1)
+                                    .arg(isActive ? QStringLiteral("#2f9f57") : QStringLiteral("#dbe3ea"))
+                                    .arg(isActive ? QStringLiteral("#eefaf2") : QStringLiteral("#fcfdff")));
+
+            nameLabel->setStyleSheet(QString(
+                                         "QLabel#stageName {"
+                                         " color: #f7fbff;"
+                                         " font-weight: 700;"
+                                         " font-size: 12px;"
+                                         " background: %1;"
+                                         " border-radius: 8px;"
+                                         " padding-left: 10px;"
+                                         " }")
+                                         .arg(headerColor));
+
+            for (int row = 0; row < 3; ++row)
+            {
+                auto *rowFrame = m_stageRowFrames[static_cast<size_t>(i)][static_cast<size_t>(row)];
+                auto *rowLabel = m_stageRowLabelLabels[static_cast<size_t>(i)][static_cast<size_t>(row)];
+                auto *valueLabel = m_stageValueLabels[static_cast<size_t>(i)][static_cast<size_t>(row)];
+                if (!rowFrame || !rowLabel || !valueLabel)
+                    continue;
+
+                const QString rowBg = isActive ? QStringLiteral("#f2fbf5") : QStringLiteral("#fcfdff");
+                rowFrame->setStyleSheet(QString(
+                                            "QFrame#stageRow {"
+                                            " border: 1px solid %1;"
+                                            " border-radius: 8px;"
+                                            " background: #fcfdff;"
+                                            " }")
+                                            .arg(isActive ? QStringLiteral("#c7e4d0") : QStringLiteral("#e3e9ef")));
+
+                rowLabel->setStyleSheet(QString(
+                                            "QLabel {"
+                                            " color: %1;"
+                                            " font-size: 11px;"
+                                            " font-weight: 600;"
+                                            " background-color: %2;"
+                                            " }")
+                                            .arg(isActive ? QStringLiteral("#24463a") : QStringLiteral("#5c6d7d"))
+                                            .arg(rowBg));
+
+                valueLabel->setStyleSheet(QString(
+                                              "QLabel {"
+                                              " color: %1;"
+                                              " font-size: 11px;"
+                                              " font-weight: 700;"
+                                              " background-color: %2;"
+                                              " }")
+                                              .arg(isActive ? QStringLiteral("#2b8a4b") : QStringLiteral("#263441"))
+                                              .arg(rowBg));
+            }
+        }
     }
 
     void Station1Panel::setRealtimeUpdatesEnabled(bool enabled)
