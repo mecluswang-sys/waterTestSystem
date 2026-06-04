@@ -17,7 +17,7 @@
  * 三条定时器
  * ----------
  * - m_flowTimer  (50 ms)   : 更新管道流动虚线的 dashOffset，产生液体流动视觉效果。
- * - m_dataTimer  (200 ms)  : 刷新压力/流量/阀门开度到场景图元。
+ * - m_dataTimer  (100 ms)  : 刷新压力/流量/阀门开度到场景图元。
  * - m_relayTimer (1000 ms) : 回读继电器状态并更新按钮颜色（降低 PLC 无谓轮询频率）。
  *
  * GraphicsItem 自定义数据槽（QGraphicsItem::data / setData）
@@ -1159,7 +1159,7 @@ namespace WaterTest
 
         m_dataTimer = new QTimer(this);
         connect(m_dataTimer, &QTimer::timeout, this, [this]() { updateSensorValues(); });
-        m_dataTimer->start(200);
+        m_dataTimer->start(100);
 
         // 继电器状态刷新：1 秒一次（降低无意义的 Q 区轮询频率）
         m_relayTimer = new QTimer(this);
@@ -1221,26 +1221,51 @@ namespace WaterTest
                 mainLayout->addWidget(infoLabel);
 
                 auto *slider = new QSlider(Qt::Horizontal, &dialog);
-                slider->setRange(0, 100);
-                slider->setValue(qRound(currentOpening));
+                slider->setRange(0, 1000);
+                slider->setSingleStep(1);
+                slider->setPageStep(10);
+                slider->setValue(qRound(currentOpening * 10.0f));
+                slider->setMinimumHeight(44);
+                slider->setTickPosition(QSlider::NoTicks);
+                slider->setStyleSheet(
+                    "QSlider::groove:horizontal {"
+                    " height: 20px;"
+                    " border-radius: 6px;"
+                    " background: #2b3948;"
+                    " }"
+                    "QSlider::sub-page:horizontal {"
+                    " background: #4cc3a0;"
+                    " border-radius: 6px;"
+                    " }"
+                    "QSlider::add-page:horizontal {"
+                    " background: #55697f;"
+                    " border-radius: 6px;"
+                    " }"
+                    "QSlider::handle:horizontal {"
+                    " width: 26px;"
+                    " margin: -10px 0;"
+                    " border-radius: 13px;"
+                    " background: #eaf2ff;"
+                    " border: 1px solid #8fa3b8;"
+                    " }");
                 mainLayout->addWidget(slider);
 
-                auto *spin = new QDoubleSpinBox(&dialog);
-                spin->setRange(0.0, 100.0);
-                spin->setDecimals(1);
-                spin->setSingleStep(1.0);
-                spin->setValue(static_cast<double>(currentOpening));
-                mainLayout->addWidget(spin);
+                // auto *spin = new QDoubleSpinBox(&dialog);
+                // spin->setRange(0.0, 100.0);
+                // spin->setDecimals(1);
+                // spin->setSingleStep(1.0);
+                // spin->setValue(static_cast<double>(currentOpening));
+                // mainLayout->addWidget(spin);
 
-                connect(slider, &QSlider::valueChanged, &dialog, [spin](int value) {
-                    if (qRound(spin->value()) != value)
-                        spin->setValue(static_cast<double>(value));
-                });
-                connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, [slider](double value) {
-                    const int iv = qRound(value);
-                    if (slider->value() != iv)
-                        slider->setValue(iv);
-                });
+                // connect(slider, &QSlider::valueChanged, &dialog, [spin](int value) {
+                //     if (qRound(spin->value()) != value)
+                //         spin->setValue(static_cast<double>(value));
+                // });
+                // connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, [slider](double value) {
+                //     const int iv = qRound(value);
+                //     if (slider->value() != iv)
+                //         slider->setValue(iv);
+                // });
 
                 auto *buttons = new QHBoxLayout();
                 auto *applyBtn = new QPushButton("设定开度", &dialog);
@@ -1264,7 +1289,7 @@ namespace WaterTest
                     {
                         ok = m_deviceManager->setValveOpeningPercent(
                             static_cast<uint16_t>(regulatingValveId),
-                            static_cast<float>(spin->value()));
+                            static_cast<float>(slider->value()) / 10.0f);
                     }
 
                     if (!ok)
@@ -1376,7 +1401,7 @@ namespace WaterTest
         if (m_dataTimer)
         {
             if (enabled)
-                m_dataTimer->start(200);
+                m_dataTimer->start(100);
             else
                 m_dataTimer->stop();
         }
