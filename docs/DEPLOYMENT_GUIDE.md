@@ -246,8 +246,8 @@ Station connected: 操作台4 (ID: 4)
 ```
 Connected to Terminal Server
 Receiving sensor data...
-Pressure P1: 10.43 kgf/cm^2
-Pressure P2: 10.44 kgf/cm^2
+Pressure P1: 1023 kPa
+Pressure P2: 1024 kPa
 Temperature T1: 25.5°C
 ...
 ```

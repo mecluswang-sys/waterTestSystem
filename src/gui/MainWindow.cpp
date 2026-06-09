@@ -1233,8 +1233,9 @@ namespace WaterTest
         targetPressure->setRange(0.0, 20.0);
         targetPressure->setDecimals(2);
         targetPressure->setSingleStep(0.05);
-        targetPressure->setValue(kPaToKgfCm2(config.getFloat("station.test.target_pressure_kpa", 100.0f)));
-        targetForm->addRow("测试压力:", makeInputWithUnit(targetPressure, "kgf/cm^2"));
+        targetPressure->setRange(0.0, 1000.0);
+        targetPressure->setValue(config.getFloat("station.test.target_pressure_kpa", 100.0f));
+        targetForm->addRow("测试压力:", makeInputWithUnit(targetPressure, "kPa"));
 
         auto *targetVoltage = new QDoubleSpinBox(&dialog);
         targetVoltage->setRange(0.0, 500.0);
@@ -1285,7 +1286,7 @@ namespace WaterTest
 
         auto updatePreview = [&]() {
             previewLabel->setText(
-                QString("Pressure: %1 kgf/cm^2\nVoltage : %2 V\nValve   : %3\nCycles  : %4\nStation : %5")
+                QString("Pressure: %1 kPa\nVoltage : %2 V\nValve   : %3\nCycles  : %4\nStation : %5")
                     .arg(targetPressure->value(), 0, 'f', 2)
                     .arg(targetVoltage->value(), 0, 'f', 1)
                     .arg(valveMode->currentText())
@@ -1308,7 +1309,7 @@ namespace WaterTest
         buttons->button(QDialogButtonBox::Cancel)->setText("取消");
 
         connect(resetBtn, &QPushButton::clicked, &dialog, [=]() {
-            targetPressure->setValue(kPaToKgfCm2(100.0));
+            targetPressure->setValue(100.0);
             targetVoltage->setValue(24.0);
             valveMode->setCurrentIndex(0);
             openCount->setValue(10);
@@ -1321,7 +1322,7 @@ namespace WaterTest
 
         if (dialog.exec() == QDialog::Accepted)
         {
-            config.setFloat("station.test.target_pressure_kpa", static_cast<float>(kgfCm2ToKPa(targetPressure->value())));
+            config.setFloat("station.test.target_pressure_kpa", static_cast<float>(targetPressure->value()));
             config.setFloat("station.test.target_voltage_v", static_cast<float>(targetVoltage->value()));
             config.setString("station.test.valve_mode", valveMode->currentData().toString().toStdString());
             config.setInt("station.test.open_count", openCount->value());
@@ -1412,8 +1413,8 @@ namespace WaterTest
         if (m_dataStatsLabel)
         {
             m_dataStatsLabel->setText(
-                QString("采样: P1=%1 kgf/cm^2, F=%2 | Ts=%3")
-                    .arg(kPaToKgfCm2(data.pressure[0]), 0, 'f', 2)
+                QString("采样: P1=%1 kPa, F=%2 | Ts=%3")
+                    .arg(data.pressure[0], 0, 'f', 2)
                     .arg(data.flow_rate, 0, 'f', 2)
                     .arg(data.timestamp));
         }

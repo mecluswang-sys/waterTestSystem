@@ -24,7 +24,8 @@ namespace WaterTest::GuiGlyph
         qreal innerWidth = 8.0,
         qreal flowWidth = 4.0,
         int baseZ = 1,
-        const QVariant &flowTag = QVariant("hmi_pipe_flow"))
+        const QVariant &flowTag = QVariant("hmi_pipe_flow"),
+        const QVariant &segmentTag = QVariant())
     {
         if (!scene || path.isEmpty())
             return;
@@ -42,6 +43,8 @@ namespace WaterTest::GuiGlyph
         auto *flow = scene->addPath(path, flowPen);
         flow->setZValue(baseZ + 2);
         flow->setData(0, flowTag);
+        if (segmentTag.isValid())
+            flow->setData(1, segmentTag);
         flow->setVisible(false);
     }
 

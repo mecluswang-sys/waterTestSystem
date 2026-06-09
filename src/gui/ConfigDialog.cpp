@@ -97,19 +97,19 @@ namespace WaterTest
         m_pressureMaxLimitSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureMaxLimitSpinBox->setRange(0.0, 1000.0);
         m_pressureMaxLimitSpinBox->setDecimals(1);
-        m_pressureMaxLimitSpinBox->setSuffix(" kgf/cm^2");
+        m_pressureMaxLimitSpinBox->setSuffix(" kPa");
         pressureLayout->addRow("最大压力:", m_pressureMaxLimitSpinBox);
 
         m_pressureMinLimitSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureMinLimitSpinBox->setRange(0.0, 1000.0);
         m_pressureMinLimitSpinBox->setDecimals(1);
-        m_pressureMinLimitSpinBox->setSuffix(" kgf/cm^2");
+        m_pressureMinLimitSpinBox->setSuffix(" kPa");
         pressureLayout->addRow("最小压力:", m_pressureMinLimitSpinBox);
 
         m_pressureAlarmThresholdSpinBox = new QDoubleSpinBox(pressureGroup);
         m_pressureAlarmThresholdSpinBox->setRange(0.0, 1000.0);
         m_pressureAlarmThresholdSpinBox->setDecimals(1);
-        m_pressureAlarmThresholdSpinBox->setSuffix(" kgf/cm^2");
+        m_pressureAlarmThresholdSpinBox->setSuffix(" kPa");
         pressureLayout->addRow("报警阈值:", m_pressureAlarmThresholdSpinBox);
 
         sensorLayout->addWidget(pressureGroup);

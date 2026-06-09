@@ -368,16 +368,14 @@ namespace WaterTest
             return true;
         }
 
-        constexpr double kKPaPerKgfCm2 = 98.0665;
-
         static double kPaToKgfCm2(double kpa)
         {
-            return kpa / kKPaPerKgfCm2;
+            return kpa;
         }
 
         static QString fmtKPa(double pa)
         {
-            return QString::number(kPaToKgfCm2(pa / 1e3), 'f', 2) + " kgf/cm^2";
+            return QString::number(pa, 'f', 2) + " kPa";
         }
 
         static int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 1)
@@ -389,7 +387,7 @@ namespace WaterTest
 
         static QString fmtKPa(const PressureSensor &sensor, int fallbackDecimals = 1)
         {
-            return QString::number(kPaToKgfCm2(sensor.pressure), 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kgf/cm^2";
+            return QString::number(sensor.pressure, 'f', pressureDisplayDecimals(sensor, fallbackDecimals)) + " kPa";
         }
 
         constexpr qreal kPumpItemWidth = 110;
@@ -687,7 +685,7 @@ namespace WaterTest
                     m_name,
                     kPaToKgfCm2(m_pressureMPa),
                     m_pressureDisplayDecimals,
-                    "kgf/cm^2",
+                    "kPa",
                     kUiPurple,
                     isSelected(),
                     true,
@@ -776,7 +774,7 @@ namespace WaterTest
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 const double level = std::clamp(m_fillPercent, 0.0, 100.0);
-                const QString detailText = QString("LV:%1%  PT:%2kgf/cm^2")
+                const QString detailText = QString("LV:%1%  PT:%2kPa")
                                                .arg(QString::number(level, 'f', 0))
                                                .arg(QString::number(kPaToKgfCm2(m_pressureMPa), 'f', m_pressureDisplayDecimals));
                 GuiGlyph::drawTankGlyph(p, boundingRect(), m_name, level, m_filling, detailText, isSelected(), makeGlyphTheme());
@@ -2074,11 +2072,14 @@ namespace WaterTest
 
         // 打开管道动画（流动虚线）
         const bool anyPumpRunningAtInit = m_deviceManager &&
-                                          (m_deviceManager->getPump(1).isRunning || m_deviceManager->getPump(2).isRunning);
+                          (m_deviceManager->getPump(1).isRunning || m_deviceManager->getPump(2).isRunning);
+        const bool anyValveOpenAtInit = m_deviceManager &&
+                        ((m_deviceManager->getValve(1).status == ValveStatus::OPEN || m_deviceManager->getValve(1).status == ValveStatus::OPENING) ||
+                         (m_deviceManager->getValve(2).status == ValveStatus::OPEN || m_deviceManager->getValve(2).status == ValveStatus::OPENING));
         for (auto *pipe : m_pipes)
         {
             if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
-                dp->setFlowing(anyPumpRunningAtInit);
+            dp->setFlowing(anyPumpRunningAtInit || anyValveOpenAtInit);
         }
 
         // 启动管道更新定时器
@@ -2373,11 +2374,15 @@ namespace WaterTest
         updateValveStatus();
 
         const bool anyPumpRunning = m_deviceManager->getPump(1).isRunning ||
-                                    m_deviceManager->getPump(2).isRunning;
+                        m_deviceManager->getPump(2).isRunning;
+        const bool anyValveOpen = (m_deviceManager->getValve(1).status == ValveStatus::OPEN ||
+                       m_deviceManager->getValve(1).status == ValveStatus::OPENING ||
+                       m_deviceManager->getValve(2).status == ValveStatus::OPEN ||
+                       m_deviceManager->getValve(2).status == ValveStatus::OPENING);
         for (auto *pipe : m_pipes)
         {
             if (auto *dp = dynamic_cast<DynamicPipe *>(pipe))
-                dp->setFlowing(anyPumpRunning);
+            dp->setFlowing(anyPumpRunning || anyValveOpen);
         }
 
         updateWaterLevel();
@@ -2571,7 +2576,7 @@ namespace WaterTest
 
         // 确认操作
         auto reply = QMessageBox::question(this, "确认",
-                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kgf/cm^2")
+                                           QString("确定开始加水吗？\n\n流程：\n1. 启动变频泵1（频率: %1 Hz）\n2. 打开电动阀1(进水阀)\n3. 监测压力直至达到 %2 kPa")
                                                .arg(m_pumpFrequency, 0, 'f', 1)
                                                .arg(m_targetPressure, 0, 'f', 2),
                                            QMessageBox::Yes | QMessageBox::No);

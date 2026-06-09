@@ -53,7 +53,7 @@ namespace WaterTest::GuiGlyph
      * @param name 传感器名称，会显示在图元顶部，例如“压力4”。
      * @param value 当前压力值。绘制时会限制到 [0,100]，作为圆形表盘/数显的显示数据。
      * @param displayDecimals 数值显示的小数位数，用于中间数显。
-     * @param unit 单位文本，例如 "kgf/cm^2"。
+    * @param unit 单位文本，例如 "kPa"。
      * @param typeColor 传感器类型颜色，用于底座、接口点和强调色。
      * @param selected 是否处于选中状态；true 时会额外绘制虚线选中框。
      * @param drawPorts 是否绘制端口点和底部接口线；当前用于控制图元端口是否可见。
@@ -144,7 +144,7 @@ namespace WaterTest::GuiGlyph
         p->setBrush(QColor(14, 20, 28, 180));
         p->drawRoundedRect(QRectF(-33.0, -16.0, 66.0, 24.0), 4.0, 4.0);
 
-        // 顶部名称：显示传感器名称及单位，例如“压力4 (kgf/cm^2)”。
+        // 顶部名称：显示传感器名称及单位，例如“压力4 (kPa)”。
         p->setPen(theme.text);
         QFont tagFont = p->font();
         tagFont.setPointSize(8);

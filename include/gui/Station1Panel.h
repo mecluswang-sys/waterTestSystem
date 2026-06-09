@@ -18,6 +18,7 @@ class QHideEvent;
 class QTimer;
 class QPushButton;
 class QFrame;
+class QGraphicsPathItem;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -71,6 +72,7 @@ namespace WaterTest
         void buildScene();
         void applyAutoFit();
         void setRealtimeUpdatesEnabled(bool enabled);
+        void updatePipeFlowVisibility();
         void updatePipeFlowAnimation();
         void updateSensorValues(bool force = false);
 
@@ -89,6 +91,7 @@ namespace WaterTest
         QTimer *m_dataTimer;
         QTimer *m_relayTimer;
         qreal m_flowDashOffset;
+        std::vector<QGraphicsPathItem *> m_flowPipeItems;
 
         // DQ 继电器按钮列表（与 kStation1Relays 同序）
         std::vector<QPushButton *> m_relayBtns;
