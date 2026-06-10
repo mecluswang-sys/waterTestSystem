@@ -268,6 +268,13 @@ set SNAP7_ROOT=C:\snap7            # Windows
 
 MIT License
 
+本项目本身继续采用 MIT License；如果发布包含 Qt 的 Windows 安装包，请同时确认：
+
+- Qt 运行库采用动态链接方式随程序分发
+- 安装包中包含 gpl.txt 和 lgpl.txt
+- “关于”对话框中能看到 Qt 致谢和许可证提示
+- 若后续引入新的 Qt 模块或静态链接方式，请重新核对对应许可义务
+
 ## 联系方式
 
 如有问题或建议，请联系开发团队。

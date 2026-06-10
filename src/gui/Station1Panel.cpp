@@ -571,6 +571,9 @@ namespace WaterTest
             }
         }
 
+    namespace
+    {
+
         /**
          * @brief 向场景添加一段默认规格的三层管道（外壁+内壁+流动层）。
          * arrowTip/arrowFrom 保留参数，当前未绘制箭头（Q_UNUSED），流动方向由动画偏移体现。
@@ -957,7 +960,7 @@ namespace WaterTest
                 if (range <= 0)
                     return;
 
-                constexpr int kMinorStep = 50;  // 5.0%
+                constexpr int kMinorStep = 50;   // 5.0%
                 constexpr int kMajorStep = 100;  // 10.0%
 
                 QStyleOptionSlider opt;
@@ -974,10 +977,9 @@ namespace WaterTest
                 pen.setWidth(1);
                 painter.setPen(pen);
 
-                const int tickTop = qMin(height() - 24, groove.bottom() + 7);
-                const int shortTickBottom = qMin(height() - 18, tickTop + 6);
-                const int longTickBottom = qMin(height() - 16, tickTop + 10);
-                const int labelTop = qMin(height() - 14, longTickBottom + 3);
+                const int tickTop = qMin(height() - 10, groove.bottom() + 6);
+                const int shortTickBottom = qMin(height() - 6, tickTop + 4);
+                const int longTickBottom = qMin(height() - 4, tickTop + 8);
 
                 for (int value = minimumValue; value <= maximumValue; value += kMinorStep)
                 {
@@ -985,13 +987,6 @@ namespace WaterTest
                     const int x = groove.left() + qRound(progress * groove.width());
                     const bool majorTick = (value == minimumValue) || (value == maximumValue) || (((value - minimumValue) % kMajorStep) == 0);
                     painter.drawLine(QPointF(x, tickTop), QPointF(x, majorTick ? longTickBottom : shortTickBottom));
-
-                    if (majorTick)
-                    {
-                        const int displayPercent = value / 10;
-                        QRect labelRect(x - 18, labelTop, 36, height() - labelTop - 1);
-                        painter.drawText(labelRect, Qt::AlignHCenter | Qt::AlignTop, QString::number(displayPercent));
-                    }
                 }
             }
         };
@@ -1066,6 +1061,8 @@ namespace WaterTest
             addHmiPipeWithArrow(scene, path, end, QPointF(end.x(), midY), segmentId);
         }
     }
+
+    } // namespace
 
     Station1Panel::Station1Panel(std::shared_ptr<DeviceManager> deviceManager,
                                  QWidget *parent,
@@ -1217,7 +1214,7 @@ namespace WaterTest
 
         m_dataTimer = new QTimer(this);
         connect(m_dataTimer, &QTimer::timeout, this, [this]() { updateSensorValues(); });
-        m_dataTimer->start(50);
+        m_dataTimer->start(100);
 
         // 继电器状态刷新：1 秒一次（降低无意义的 Q 区轮询频率）
         m_relayTimer = new QTimer(this);
@@ -1271,53 +1268,179 @@ namespace WaterTest
                 QDialog dialog(this);
                 dialog.setWindowTitle("调压阀开度控制");
                 dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-                dialog.resize(240, 160);
-                dialog.setMinimumSize(240, 160);
+                dialog.resize(420, 280);
+                dialog.setMinimumSize(420, 280);
+                dialog.setStyleSheet(
+                    "QDialog { background: #0e1622; }"
+                    "QFrame#regValveCard {"
+                    " background: #162231;"
+                    " border: 1px solid #2a4056;"
+                    " border-radius: 16px;"
+                    " }"
+                    "QLabel#regValveTitle {"
+                    " color: #f2f6fb;"
+                    " font-size: 16px;"
+                    " font-weight: 700;"
+                    " }"
+                    "QLabel#regValveHint {"
+                    " color: #9eafbf;"
+                    " font-size: 12px;"
+                    " }"
+                    "QLabel#regValveSection {"
+                    " color: #d7e2ee;"
+                    " font-size: 12px;"
+                    " font-weight: 600;"
+                    " }"
+                    "QLabel#regValveFieldLabel {"
+                    " color: #d7e2ee;"
+                    " font-size: 13px;"
+                    " }"
+                    "QDoubleSpinBox {"
+                    " color: #eef4ff;"
+                    " background: #0f1a27;"
+                    " border: 1px solid #33485d;"
+                    " border-radius: 10px;"
+                    " padding: 4px 10px;"
+                    " min-height: 30px;"
+                    " }"
+                    "QDoubleSpinBox:focus {"
+                    " border-color: #4cc3a0;"
+                    " }"
+                    "QPushButton {"
+                    " min-height: 34px;"
+                    " min-width: 96px;"
+                    " border-radius: 10px;"
+                    " padding: 0 16px;"
+                    " }"
+                    "QPushButton#regValveApply {"
+                    " color: #ffffff;"
+                    " background: #2e8b57;"
+                    " border: 1px solid #2f9f57;"
+                    " }"
+                    "QPushButton#regValveApply:hover { background: #349763; }"
+                    "QPushButton#regValveCancel {"
+                    " color: #dbe6f2;"
+                    " background: #203046;"
+                    " border: 1px solid #31455d;"
+                    " }"
+                    "QPushButton#regValveCancel:hover { background: #26384f; }");
 
-                auto *mainLayout = new QVBoxLayout(&dialog);
-                auto *infoLabel = new QLabel(QString("%1\n当前开度: %2%")
+                auto *rootLayout = new QVBoxLayout(&dialog);
+                rootLayout->setContentsMargins(16, 16, 16, 16);
+                rootLayout->setSpacing(12);
+
+                auto *titleLabel = new QLabel("调压阀开度控制", &dialog);
+                titleLabel->setObjectName("regValveTitle");
+                rootLayout->addWidget(titleLabel);
+
+                auto *hintLabel = new QLabel(QString("%1\n当前开度: %2%")
                                                  .arg(valveName)
                                                  .arg(QString::number(currentOpening, 'f', 1)),
                                              &dialog);
-                mainLayout->addWidget(infoLabel);
+                hintLabel->setObjectName("regValveHint");
+                hintLabel->setWordWrap(true);
+                rootLayout->addWidget(hintLabel);
 
-                auto *slider = new TickedSlider(Qt::Horizontal, &dialog);
+                auto *card = new QFrame(&dialog);
+                card->setObjectName("regValveCard");
+                auto *cardLayout = new QVBoxLayout(card);
+                cardLayout->setContentsMargins(16, 14, 16, 14);
+                cardLayout->setSpacing(12);
+
+                auto *targetHeader = new QLabel("目标开度", card);
+                targetHeader->setObjectName("regValveSection");
+                cardLayout->addWidget(targetHeader);
+
+                auto *targetRow = new QWidget(card);
+                auto *targetRowLayout = new QHBoxLayout(targetRow);
+                targetRowLayout->setContentsMargins(0, 0, 0, 0);
+                // targetRowLayout->setSpacing(12);
+                auto *targetLabel = new QLabel("开度数值", targetRow);
+                targetLabel->setObjectName("regValveFieldLabel");
+                targetLabel->setMinimumWidth(72);
+                targetLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+                auto *openingSpinBox = new QDoubleSpinBox(targetRow);
+                openingSpinBox->setRange(0.0, 100.0);
+                openingSpinBox->setDecimals(1);
+                openingSpinBox->setSingleStep(0.5);
+                openingSpinBox->setValue(currentOpening);
+                // openingSpinBox->setSuffix(" %");
+                openingSpinBox->setAlignment(Qt::AlignCenter);
+                openingSpinBox->setMinimumWidth(180);
+                openingSpinBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                openingSpinBox->setFixedHeight(20);
+                targetRowLayout->addWidget(targetLabel);
+                targetRowLayout->addWidget(openingSpinBox, 1);
+                targetRowLayout->addStretch();
+                cardLayout->addWidget(targetRow);
+
+                auto *sliderHeader = new QHBoxLayout();
+                auto *sliderLabel = new QLabel("滑块调节", card);
+                sliderLabel->setObjectName("regValveSection");
+                sliderHeader->addWidget(sliderLabel);
+                sliderHeader->addStretch();
+                cardLayout->addLayout(sliderHeader);
+
+                auto *slider = new TickedSlider(Qt::Horizontal, card);
                 slider->setRange(0, 1000);
                 slider->setSingleStep(50);
                 slider->setPageStep(100);
                 slider->setValue(qRound(currentOpening * 10.0f));
-                slider->setMinimumHeight(48);
+                slider->setMinimumHeight(56);
                 slider->setTickPosition(QSlider::NoTicks);
                 slider->setTickInterval(50);
                 slider->setStyleSheet(
                     "QSlider::groove:horizontal {"
-                    " height: 20px;"
-                    " border-radius: 6px;"
-                    " background: #2b3948;"
+                    " height: 14px;"
+                    " border-radius: 7px;"
+                    " background: #314457;"
                     " }"
                     "QSlider::sub-page:horizontal {"
                     " background: #4cc3a0;"
-                    " border-radius: 6px;"
+                    " border-radius: 7px;"
                     " }"
                     "QSlider::add-page:horizontal {"
-                    " background: #55697f;"
-                    " border-radius: 6px;"
+                    " background: #5b6f84;"
+                    " border-radius: 7px;"
                     " }"
                     "QSlider::handle:horizontal {"
-                    " width: 26px;"
-                    " margin: -10px 0;"
-                    " border-radius: 13px;"
+                    " width: 24px;"
+                    " margin: -8px 0;"
+                    " border-radius: 12px;"
                     " background: #eaf2ff;"
                     " border: 1px solid #8fa3b8;"
                     " }");
-                mainLayout->addWidget(slider);
+                cardLayout->addWidget(slider);
 
                 auto *buttons = new QHBoxLayout();
+                buttons->addStretch();
+                buttons->setSpacing(12);
                 auto *applyBtn = new QPushButton("设定开度", &dialog);
+                applyBtn->setObjectName("regValveApply");
                 auto *cancelBtn = new QPushButton("取消", &dialog);
+                cancelBtn->setObjectName("regValveCancel");
                 buttons->addWidget(applyBtn);
                 buttons->addWidget(cancelBtn);
-                mainLayout->addLayout(buttons);
+                cardLayout->addLayout(buttons);
+
+                rootLayout->addWidget(card);
+
+                connect(slider, &QSlider::valueChanged, &dialog, [openingSpinBox](int value) {
+                    const double targetOpening = static_cast<double>(value) / 10.0;
+                    if (!qFuzzyCompare(openingSpinBox->value(), targetOpening))
+                    {
+                        openingSpinBox->blockSignals(true);
+                        openingSpinBox->setValue(targetOpening);
+                        openingSpinBox->blockSignals(false);
+                    }
+                });
+                connect(openingSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog, [slider](double value) {
+                    const int targetValue = qRound(value * 10.0);
+                    if (slider->value() != targetValue)
+                    {
+                        slider->setValue(targetValue);
+                    }
+                });
 
                 connect(applyBtn, &QPushButton::clicked, &dialog, [&, regulatingValveId]() {
                     const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
@@ -1334,7 +1457,7 @@ namespace WaterTest
                     {
                         ok = m_deviceManager->setValveOpeningPercent(
                             static_cast<uint16_t>(regulatingValveId),
-                            static_cast<float>(slider->value()) / 10.0f);
+                            static_cast<float>(openingSpinBox->value()));
                     }
 
                     if (!ok)
@@ -1692,7 +1815,7 @@ namespace WaterTest
         if (m_dataTimer)
         {
             if (enabled)
-                m_dataTimer->start(50);
+                m_dataTimer->start(100);
             else
                 m_dataTimer->stop();
         }
@@ -2635,6 +2758,10 @@ namespace WaterTest
     void Station1Panel::buildScene()
     {
         m_flowPipeItems.clear();
+        m_pressureSensorItems.fill(nullptr);
+        m_valveItems.fill(nullptr);
+        m_regulatingValveItems.fill(nullptr);
+        m_flowMeterItem = nullptr;
 
         const auto relayGlyphMap = relayGlyphMapForStation(m_panelConfig.stationNumber);
         QString labelV1;
@@ -2776,32 +2903,44 @@ namespace WaterTest
         auto *ps3 = new SensorItem(QString::fromUtf8("压力3"), "kPa", kUiPurple);
         ps3->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 3)));
         addDeferred(ps3);
+        if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 3); sensorId < m_pressureSensorItems.size())
+            m_pressureSensorItems[sensorId] = ps3;
 
         auto *v1 = new ValveItem(labelV1, true, 100.0);
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
         v1->setData(3, valveIdV1);
         v1->setData(4, relayGlyphMap.v1);
         v1->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        if (valveIdV1 < static_cast<int>(m_valveItems.size()))
+            m_valveItems[static_cast<size_t>(valveIdV1)] = v1;
 
         // 压力传感器上置：使底部红点与主干管道平齐。
         auto *ps4 = new SensorItem(QString::fromUtf8("压力4"), "kPa", kUiPurple);
         ps4->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 4)));
         addDeferred(ps4);
+        if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 4); sensorId < m_pressureSensorItems.size())
+            m_pressureSensorItems[sensorId] = ps4;
 
         auto *v2 = new ValveItem(labelV2, true, 100.1);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
         v2->setData(3, valveIdV2);
         v2->setData(4, relayGlyphMap.v2);
         v2->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        if (valveIdV2 < static_cast<int>(m_valveItems.size()))
+            m_valveItems[static_cast<size_t>(valveIdV2)] = v2;
 
         auto *ps5 = new SensorItem(QString::fromUtf8("压力5"), "kPa", kUiPurple);
         ps5->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 5)));
         addDeferred(ps5);
+        if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 5); sensorId < m_pressureSensorItems.size())
+            m_pressureSensorItems[sensorId] = ps5;
 
         auto *vReg = new ValveItem(labelVReg1, false, 0.0, true, true);
         place(vReg, xVReg, yRow1 + row1AfterAccumulatorYOffset);
         vReg->setData(3, 6);
         vReg->setData(6, static_cast<int>(topRegValveId));
+        if (topRegValveId < m_regulatingValveItems.size())
+            m_regulatingValveItems[topRegValveId] = vReg;
 
         
 
@@ -2809,6 +2948,7 @@ namespace WaterTest
         auto *fm = new FlowMeterItem("流量计");
         place(fm, xFm, yFm);
         fm->setScale(flowMeterScale);
+        m_flowMeterItem = fm;
         const qreal targetMainPipeY = vReg->mapToScene(ValveItem::outletPortLocal()).y();
         const qreal fmLeftPortY = fm->mapToScene(flowMeterLeftPortLocal).y();
         fm->setY(fm->y() + (targetMainPipeY - fmLeftPortY));
@@ -2817,39 +2957,51 @@ namespace WaterTest
         ps6->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 6)));
         ps6->setData(2, "kPa");
         addDeferred(ps6);
+        if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 6); sensorId < m_pressureSensorItems.size())
+            m_pressureSensorItems[sensorId] = ps6;
 
         auto *testValve = new ValveItem(labelTestValve, false, 100.2);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
         testValve->setData(3, valveIdTest);
         testValve->setData(4, relayGlyphMap.test);
         testValve->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        if (valveIdTest < static_cast<int>(m_valveItems.size()))
+            m_valveItems[static_cast<size_t>(valveIdTest)] = testValve;
 
         auto *ps7 = new SensorItem(QString::fromUtf8("压力7"), "kPa", kUiOrange);
         ps7->setData(1, static_cast<int>(configuredPressureSensorId(m_panelConfig, 7)));
         ps7->setData(2, "kPa");
         addDeferred(ps7);
+        if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 7); sensorId < m_pressureSensorItems.size())
+            m_pressureSensorItems[sensorId] = ps7;
 
         auto *vBack1 = new ValveItem(labelVBack1, true, 100.3);
         place(vBack1, xVBack1, yRow2 + row2AfterFlowMeterYOffset);
         vBack1->setData(3, valveIdBack);
         vBack1->setData(4, relayGlyphMap.v3);
         vBack1->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        if (valveIdBack < static_cast<int>(m_valveItems.size()))
+            m_valveItems[static_cast<size_t>(valveIdBack)] = vBack1;
 
         auto *vBackReg = new ValveItem(labelVReg2, false, 0.0, true, true);
         place(vBackReg, xVBackReg, yRow2 + row2AfterFlowMeterYOffset);
         vBackReg->setData(3, 9);
         vBackReg->setData(6, static_cast<int>(bottomRegValveId));
+        if (bottomRegValveId < m_regulatingValveItems.size())
+            m_regulatingValveItems[bottomRegValveId] = vBackReg;
 
         auto *ps8 = new SensorItem(QString("压力8"), "kPa", kUiOrange);
         ps8->setData(1, 8);
         ps8->setData(2, "kPa");
         addDeferred(ps8);
+        m_pressureSensorItems[8] = ps8;
 
         auto *v5 = new ValveItem(QString::fromUtf8("电磁阀5"), true, 100.0);
         place(v5, xV5, yRow2 + row2AfterFlowMeterYOffset);
         v5->setData(3, 5);
         v5->setData(4, 5);
         v5->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        m_valveItems[5] = v5;
 
         auto alignSensorAnchorToPipeMid = [&](SensorItem *sensor, const QPointF &pipeStart, const QPointF &pipeEnd)
         {
@@ -3091,6 +3243,9 @@ namespace WaterTest
         if (!m_scene)
             return;
 
+        if (m_flowPipeItems.empty())
+            return;
+
         m_flowDashOffset += 5.0;
         if (m_flowDashOffset < -10000.0)
             m_flowDashOffset = 0.0;
@@ -3135,10 +3290,39 @@ namespace WaterTest
             return;
 
         const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        auto updateSensorItemById = [&](uint16_t sensorId, double pressureKpa, int decimals) {
+            if (sensorId >= m_pressureSensorItems.size())
+                return;
+            auto *sensorItem = dynamic_cast<SensorItem *>(m_pressureSensorItems[sensorId]);
+            if (!sensorItem)
+                return;
+            sensorItem->setValue(pressureKpa);
+            sensorItem->setDisplayDecimals(decimals);
+        };
+
+        auto updateRegulatingValveById = [&](uint16_t regId, double openingPercent) {
+            if (regId >= m_regulatingValveItems.size())
+                return;
+            auto *valveItem = dynamic_cast<ValveItem *>(m_regulatingValveItems[regId]);
+            if (!valveItem)
+                return;
+            valveItem->setOpen(openingPercent > 0.1);
+            valveItem->setDegree(openingPercent);
+        };
+
+        auto updateFlowMeterItem = [&](double flowRate, const QString &unit, bool hasAlarm, int emptyPipeAlarm, int excitationAlarm) {
+            auto *flowItem = dynamic_cast<FlowMeterItem *>(m_flowMeterItem);
+            if (!flowItem)
+                return;
+            flowItem->setFlow(flowRate);
+            flowItem->setUnit(unit);
+            flowItem->setAlarm(hasAlarm);
+            flowItem->setAlarmDetail(emptyPipeAlarm, excitationAlarm);
+        };
+
         if (m_stationClient && strictRemoteMode)
         {
             const SensorData net = m_stationClient->getLatestSensorData();
-            const auto allItems = m_scene->items();
 
             const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
             for (size_t idx = 0; idx < visiblePsNumbers.size(); ++idx)
@@ -3167,62 +3351,17 @@ namespace WaterTest
                     pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
                 }
 
-                for (auto *it : allItems)
-                {
-                    if (!it)
-                        continue;
-                    const QVariant v = it->data(1);
-                    if (!v.isValid() || v.toInt() != sensorId)
-                        continue;
-
-                    auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                    if (!sensorItem)
-                        continue;
-
-                    sensorItem->setValue(pressureKpa);
-                    sensorItem->setDisplayDecimals(2);
-                }
+                updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 2);
             }
 
-            for (auto *it : allItems)
-            {
-                if (!it)
-                    continue;
-
-                auto *flowItem = dynamic_cast<FlowMeterItem *>(it);
-                if (!flowItem)
-                    continue;
-
-                flowItem->setFlow(static_cast<double>(net.flow_rate));
-                flowItem->setUnit("L/min");
-                flowItem->setAlarm(false);
-                flowItem->setAlarmDetail(0, 0);
-            }
+            updateFlowMeterItem(static_cast<double>(net.flow_rate), QString("L/min"), false, 0, 0);
 
             if (m_deviceManager)
             {
-                for (auto *it : allItems)
-                {
-                    if (!it)
-                        continue;
-
-                    auto *valveItem = dynamic_cast<ValveItem *>(it);
-                    if (!valveItem)
-                        continue;
-
-                    const QVariant regVar = it->data(6);
-                    if (!regVar.isValid())
-                        continue;
-
-                    const int regId = regVar.toInt();
-                    if (regId <= 0)
-                        continue;
-
-                    const auto rv = m_deviceManager->getRegulatingValve(static_cast<uint16_t>(regId));
-                    const double opening = qBound(0.0, static_cast<double>(rv.openingPercent), 100.0);
-                    valveItem->setOpen(opening > 0.1);
-                    valveItem->setDegree(opening);
-                }
+                const auto topRv = m_deviceManager->getRegulatingValve(1);
+                updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));
+                const auto bottomRv = m_deviceManager->getRegulatingValve(2);
+                updateRegulatingValveById(2, qBound(0.0, static_cast<double>(bottomRv.openingPercent), 100.0));
             }
 
             updatePipeFlowVisibility();
@@ -3236,8 +3375,6 @@ namespace WaterTest
         if (!m_deviceManager)
             return;
 
-        const auto allItems = m_scene->items();
-
         const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
         for (int psNumber : visiblePsNumbers)
         {
@@ -3247,95 +3384,38 @@ namespace WaterTest
 
             const int sensorId = static_cast<int>(configuredSensorId);
             const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
-            for (auto *it : allItems)
-            {
-                if (!it)
-                    continue;
-
-                const QVariant v = it->data(1);
-                if (!v.isValid() || v.toInt() != sensorId)
-                    continue;
-
-                auto *sensorItem = dynamic_cast<SensorItem *>(it);
-                if (!sensorItem)
-                    continue;
-
-                sensorItem->setValue(static_cast<double>(sensor.pressure));
-                sensorItem->setDisplayDecimals(sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
-            }
+            updateSensorItemById(static_cast<uint16_t>(sensorId), static_cast<double>(sensor.pressure), sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
         }
 
-        for (auto *it : allItems)
+        for (int valveId : {1, 2, 3, 4, 5})
         {
-            if (!it)
+            if (static_cast<size_t>(valveId) >= m_valveItems.size())
                 continue;
-
-            auto *valveItem = dynamic_cast<ValveItem *>(it);
+            auto *valveItem = dynamic_cast<ValveItem *>(m_valveItems[static_cast<size_t>(valveId)]);
             if (!valveItem)
                 continue;
-
-            const QVariant regVar = it->data(6);
-            if (regVar.isValid())
-            {
-                const int regId = regVar.toInt();
-                if (regId > 0)
-                {
-                    const auto rv = m_deviceManager->getRegulatingValve(static_cast<uint16_t>(regId));
-                    const double opening = qBound(0.0, static_cast<double>(rv.openingPercent), 100.0);
-                    valveItem->setOpen(opening > 0.1);
-                    valveItem->setDegree(opening);
-                }
-                continue;
-            }
-
-            if (m_panelConfig.stationNumber == 1 && it->data(4).isValid())
-            {
-                const int relayIndex = it->data(4).toInt();
-                bool on = false;
-                if (m_deviceManager->getRelayState(static_cast<uint8_t>(relayIndex), on))
-                {
-                    valveItem->setOpen(on);
-                    valveItem->setDegree(on ? 100.0 : 0.0);
-                }
-                continue;
-            }
-
-            const QVariant v = it->data(3);
-            if (!v.isValid())
-                continue;
-
-            const int valveId = v.toInt();
-            if (valveId <= 0)
-                continue;
-
             const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
             const bool open = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
             valveItem->setOpen(open);
             valveItem->setDegree(static_cast<double>(valve.openingDegree));
         }
 
+        const auto topRv = m_deviceManager->getRegulatingValve(1);
+        updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));
+        const auto bottomRv = m_deviceManager->getRegulatingValve(2);
+        updateRegulatingValveById(2, qBound(0.0, static_cast<double>(bottomRv.openingPercent), 100.0));
+
         updatePipeFlowVisibility();
 
         const auto flowMeter = m_deviceManager->getFlowMeter(m_panelConfig.flowMeterId);
         const bool hasFlowAlarm = (flowMeter.emptyPipeAlarm != 0 || flowMeter.excitationAlarm != 0);
-
-        for (auto *it : allItems)
-        {
-            if (!it)
-                continue;
-
-            auto *flowItem = dynamic_cast<FlowMeterItem *>(it);
-            if (!flowItem)
-                continue;
-
-            flowItem->setFlow(static_cast<double>(flowMeter.flowRate));
-            flowItem->setUnit((!flowMeter.unitLabel.empty() && flowMeter.unitLabel != "unknown")
-                                  ? QString::fromStdString(flowMeter.unitLabel)
-                                  : QString("L/min"));
-            flowItem->setAlarm(hasFlowAlarm);
-            flowItem->setAlarmDetail(static_cast<int>(flowMeter.emptyPipeAlarm),
-                                     static_cast<int>(flowMeter.excitationAlarm));
-        }
+        updateFlowMeterItem(static_cast<double>(flowMeter.flowRate),
+                            (!flowMeter.unitLabel.empty() && flowMeter.unitLabel != "unknown")
+                                ? QString::fromStdString(flowMeter.unitLabel)
+                                : QString("L/min"),
+                            hasFlowAlarm,
+                            static_cast<int>(flowMeter.emptyPipeAlarm),
+                            static_cast<int>(flowMeter.excitationAlarm));
 
         pollPhysicalStartStopButtons();
     }

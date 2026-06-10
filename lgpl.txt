@@ -1,0 +1,11 @@
+GNU LESSER GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc.
+<https://fsf.org/>
+
+This file is included in the distribution as the LGPLv3 notice file.
+For the official full text, see:
+https://www.gnu.org/licenses/lgpl-3.0.txt
+
+The official license text governs the terms of the GNU Lesser General Public License.

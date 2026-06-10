@@ -1,0 +1,11 @@
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc.
+<https://fsf.org/>
+
+This file is included in the distribution as the GPLv3 notice file.
+For the official full text, see:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+The official license text governs the terms of the GNU General Public License.

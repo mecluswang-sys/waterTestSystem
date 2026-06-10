@@ -73,6 +73,7 @@ set(SOURCES
     src/gui/TestPanel.cpp
     src/gui/AutoTestPanel.cpp
     src/gui/Station1Panel.cpp
+    src/gui/TickedSlider.cpp
     examples/PumpWidget.cpp
 )
 
@@ -104,6 +105,7 @@ set(HEADERS
     include/gui/TestPanel.h
     include/gui/AutoTestPanel.h
     include/gui/Station1Panel.h
+    include/gui/TickedSlider.h
     examples/PumpWidget.h
 )
 
@@ -189,6 +191,7 @@ endif()
 
 # 安装规则
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+install(FILES ${CMAKE_SOURCE_DIR}/gpl.txt ${CMAKE_SOURCE_DIR}/lgpl.txt DESTINATION bin)
 install(DIRECTORY config/ DESTINATION bin/config)
 
 # 打印配置信息

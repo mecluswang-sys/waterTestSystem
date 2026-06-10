@@ -4,15 +4,18 @@
  */
 
 #include "gui/MonitorPanel.h"
+#include "gui/TickedSlider.h"
 #include "DeviceManager.h"
 #include "DeviceTypes.h"
 #include "ConfigManager.h"
+#include "PumpWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QHeaderView>
 #include <QGroupBox>
 #include <QGridLayout>
+#include <QSizePolicy>
 #include <QDateTime>
 #include <algorithm>
 #include <filesystem>
@@ -191,8 +194,64 @@ namespace WaterTest
         // 列/行拉伸，使两列均分宽度
         mainLayout->setColumnStretch(0, 1);
         mainLayout->setColumnStretch(1, 1);
+        mainLayout->setColumnStretch(2, 1);
         mainLayout->setRowStretch(0, 1);
         mainLayout->setRowStretch(1, 1);
+
+        QGroupBox *publicDrawGroup = new QGroupBox("公共绘制区", this);
+        publicDrawGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        QVBoxLayout *publicDrawLayout = new QVBoxLayout(publicDrawGroup);
+        publicDrawLayout->setContentsMargins(4, 4, 4, 4);
+        publicDrawLayout->setSpacing(8);
+
+        auto *sliderCaption = new QLabel("手动拖动刻度滑块，观察绘制与输入响应。", publicDrawGroup);
+        sliderCaption->setWordWrap(true);
+        publicDrawLayout->addWidget(sliderCaption);
+
+        auto *sliderValueLabel = new QLabel("当前值：0.0", publicDrawGroup);
+        publicDrawLayout->addWidget(sliderValueLabel);
+
+        auto *tickedSlider = new TickedSlider(Qt::Horizontal, publicDrawGroup);
+        tickedSlider->setRange(0, 1000);
+        tickedSlider->setSingleStep(50);
+        tickedSlider->setPageStep(100);
+        tickedSlider->setTickPosition(QSlider::NoTicks);
+        tickedSlider->setTickInterval(50);
+        tickedSlider->setMinimumHeight(56);
+        tickedSlider->setStyleSheet(
+            "QSlider::groove:horizontal {"
+            " height: 14px;"
+            " border-radius: 7px;"
+            " background: rgba(25, 35, 50, 210);"
+            " margin: 0 10px;"
+            " }"
+            "QSlider::sub-page:horizontal {"
+            " border-radius: 7px;"
+            " background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #27c1ff, stop:1 #78e8ff);"
+            " }"
+            "QSlider::add-page:horizontal {"
+            " border-radius: 7px;"
+            " background: rgba(40, 55, 75, 180);"
+            " }"
+            "QSlider::handle:horizontal {"
+            " width: 20px;"
+            " margin: -6px -8px;"
+            " border-radius: 10px;"
+            " background: #f5fbff;"
+            " border: 1px solid rgba(38, 142, 210, 220);"
+            " }");
+        publicDrawLayout->addWidget(tickedSlider);
+
+        auto *pumpWidget = new PumpWidget(publicDrawGroup);
+        pumpWidget->setMinimumSize(700, 420);
+        pumpWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        publicDrawLayout->addWidget(pumpWidget, 1);
+
+        connect(tickedSlider, &QSlider::valueChanged, publicDrawGroup, [sliderValueLabel](int value) {
+            sliderValueLabel->setText(QStringLiteral("当前值：%1.%2").arg(value / 10).arg(value % 10));
+        });
+
+        mainLayout->addWidget(publicDrawGroup, 1, 1, 1, 2);
 
         setLayout(mainLayout);
     }

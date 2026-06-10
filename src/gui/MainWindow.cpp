@@ -10,7 +10,6 @@
 #include "gui/AutoTestPanel.h"
 #include "gui/Station1Panel.h"
 #include "gui/ConfigDialog.h"
-#include "PumpWidget.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
 #include "S7PLCClient.h"
@@ -35,6 +34,8 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QSizePolicy>
+#include <QTimer>
+#include <QtGlobal>
 #include <QStyle>
 #include <QTime>
 #include <QDateTime>
@@ -382,29 +383,6 @@ namespace WaterTest
                 disabledLayout->addStretch();
                 m_tabWidget->addTab(disabled, "⑤ 1号操作台");
             }
-        }
-
-        // Tab 6: 泵绘制预览
-        {
-            auto *pumpPreviewPage = new QWidget(this);
-            auto *pumpPreviewLayout = new QVBoxLayout(pumpPreviewPage);
-            pumpPreviewLayout->setContentsMargins(12, 12, 12, 12);
-            pumpPreviewLayout->setSpacing(10);
-
-            auto *pumpPreviewTitle = new QLabel("泵绘制预览", pumpPreviewPage);
-            pumpPreviewTitle->setObjectName("pageTitle");
-            pumpPreviewLayout->addWidget(pumpPreviewTitle);
-
-            auto *pumpPreviewHint = new QLabel("用于查看 PumpWidget 的动态渲染效果。", pumpPreviewPage);
-            pumpPreviewHint->setWordWrap(true);
-            pumpPreviewLayout->addWidget(pumpPreviewHint);
-
-            auto *pumpWidget = new PumpWidget(pumpPreviewPage);
-            pumpWidget->setMinimumSize(700, 480);
-            pumpWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-            pumpPreviewLayout->addWidget(pumpWidget, 1);
-
-            m_tabWidget->addTab(pumpPreviewPage, "⑥ 泵绘制预览");
         }
 
         mainLayout->addWidget(m_tabWidget);
@@ -1341,11 +1319,19 @@ namespace WaterTest
 
     void MainWindow::onAbout()
     {
-        QMessageBox::about(this, "关于本软件",
-                           "<h3>水质测试系统 v2.0</h3>"
-                           "<p>Terminal-Station 分布式架构</p>"
-                           "<p>与西门子 S7-1200 PLC 兼容</p>"
-                           "<p>用于实时监控和控制水质测试设备</p>");
+        QMessageBox::about(
+            this,
+            "关于本软件",
+            QString(
+                "<h3>水质测试系统 v2.0</h3>"
+                "<p>Terminal-Station 分布式架构</p>"
+                "<p>与西门子 S7-1200 PLC 兼容</p>"
+                "<p>用于实时监控和控制水质测试设备</p>"
+                "<hr>"
+                "<p><b>Qt 版本</b>：%1</p>"
+                "<p>本程序使用 Qt Widgets / Qt Network / Qt SQL / Qt SerialPort。Qt 以动态链接方式随安装包分发，并附带 gpl.txt / lgpl.txt 与 Qt 官方致谢。</p>"
+                "<p>Qt is a trademark of The Qt Company Ltd. and its respective owners.</p>")
+                .arg(QT_VERSION_STR));
     }
 
     void MainWindow::onPLCConnected()

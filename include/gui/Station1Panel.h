@@ -18,6 +18,7 @@ class QHideEvent;
 class QTimer;
 class QPushButton;
 class QFrame;
+class QGraphicsItem;
 class QGraphicsPathItem;
 
 class QGraphicsView;
@@ -91,7 +92,12 @@ namespace WaterTest
         QTimer *m_dataTimer;
         QTimer *m_relayTimer;
         qreal m_flowDashOffset;
+        bool m_pipeFlowAnimationEnabled;
         std::vector<QGraphicsPathItem *> m_flowPipeItems;
+        std::array<QGraphicsItem *, 16> m_pressureSensorItems{};
+        std::array<QGraphicsItem *, 16> m_valveItems{};
+        std::array<QGraphicsItem *, 3> m_regulatingValveItems{};
+        QGraphicsItem *m_flowMeterItem = nullptr;
 
         // DQ 继电器按钮列表（与 kStation1Relays 同序）
         std::vector<QPushButton *> m_relayBtns;
