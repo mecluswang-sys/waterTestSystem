@@ -420,18 +420,19 @@ namespace WaterTest
             QPointF outdoorPoolPos{110, 340};
             QPointF pump1Pos{440, 150};
             QPointF pump2Pos{440, 540};
-            QPointF valve1Pos{800, 132};
-            QPointF valve2Pos{800, 522};
+            QPointF valve1Pos{900, 124.5};
+            QPointF valve2Pos{900, 514.5};
             QPointF tankPos{1200, 260};
+            QPointF valve3Pos{1500, 335};
             // 微调：让 Tank(outlet) 与 V3(inlet) 的端口 y 对齐，从而该段管道为“一条直线”
             // Tank outlet: tankPos.y + 1.5 * 50 = 260 + 75 = 335
             // V3 inlet:     valve3Pos.y + 1.5 * 12 = valve3Pos.y + 18 -> 335 => valve3Pos.y = 317
-            QPointF valve3Pos{1500, 317};
+            
             QPointF teePos{1770, 450};
 
             // 压力传感器（卡片显示）
-            QPointF ps1Pos{630, 100};
-            QPointF ps2Pos{630, 490};
+            QPointF ps1Pos{660, 73};
+            QPointF ps2Pos{660, 463};
             QPointF ps3Pos{1200, 80};
 
             QPointF outdoorPool() const { return outdoorPoolPos; }
@@ -548,7 +549,7 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawPumpGlyph(p, boundingRect(), m_name, m_running, m_frequencyHz, isSelected(), makeGlyphTheme());
+                GuiGlyph::drawPumpPreviewGlyph(p, boundingRect(), m_name, m_running, m_frequencyHz, isSelected(), makeGlyphTheme());
             }
 
         private:
@@ -1000,6 +1001,15 @@ namespace WaterTest
                     p->setPen(flowPen);
                     p->drawPath(path);
                 }
+
+                // 手工 waypoint 视为关键路径节点，直接标红，便于现场确认管道拐点
+                // if (!m_waypointsStartLocal.isEmpty())
+                // {
+                //     p->setPen(Qt::NoPen);
+                //     p->setBrush(QColor(220, 60, 60));
+                //     for (const QPointF &wpScene : waypointScenePositions())
+                //         p->drawEllipse(wpScene, 4.5, 4.5);
+                // }
 
                 // 选中/悬浮时显示可拖拽拐点（管道拖拽不好用时，用这个改走线）
                 if (isSelected() || m_hovered)
@@ -1854,11 +1864,11 @@ namespace WaterTest
         // 手工管道走向：如需调整，把对应 QList 填上 waypoint（场景坐标）即可。
         // 注意：这里不要用 const，因为需要给成员赋值。
         HmiPipeWaypointsConfig pipeWps;
-        pipeWps.poolToP1Scene = {QPointF(280, 340), QPointF(280, 150)};
-        pipeWps.p1ToV1Scene = {QPointF(540, 150), QPointF(660, 150)};
-        pipeWps.poolToP2Scene = {QPointF(280, 440), QPointF(280, 540)};
-        pipeWps.p2ToV2Scene = {QPointF(540, 540), QPointF(660, 540)};
-        pipeWps.v2ToTeeScene = {QPointF(900, 540), QPointF(1660, 459)};
+        pipeWps.poolToP1Scene = {QPointF(280, 175), QPointF(350, 175)};
+        pipeWps.poolToP2Scene = {QPointF(280, 566), QPointF(350, 566)};
+        // pipeWps.p1ToV1Scene = {QPointF(520, 124), QPointF(840, 124)};
+        // pipeWps.p2ToV2Scene = {QPointF(540, 540), QPointF(660, 540)};
+        pipeWps.v2ToTeeScene = {QPointF(1200, 514.5), QPointF(1650, 460)};
         // pipeWps.v2ToTeeScene = {QPointF(540, 540), QPointF(660, 540)};
 
         // 设备图元
