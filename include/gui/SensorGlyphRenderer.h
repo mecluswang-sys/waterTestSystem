@@ -142,7 +142,7 @@ namespace WaterTest::GuiGlyph
         // 数显底板：把数值从背景里“托”出来，突出数字而不是机械指针。
         p->setPen(Qt::NoPen);
         p->setBrush(QColor(14, 20, 28, 180));
-        p->drawRoundedRect(QRectF(-33.0, -16.0, 66.0, 24.0), 4.0, 4.0);
+        p->drawRoundedRect(QRectF(-43.0, -16.0, 86.0, 24.0), 4.0, 4.0);
 
         // 顶部名称：显示传感器名称及单位，例如“压力4 (kPa)”。
         p->setPen(theme.text);
@@ -161,7 +161,7 @@ namespace WaterTest::GuiGlyph
         valFont.setFamily("Consolas");
         p->setFont(valFont);
         p->setPen(QColor(245, 248, 255));
-        p->drawText(QRectF(-33.0, -16.0, 66.0, 24.0), Qt::AlignCenter, QString::number(value, 'f', displayDecimals));
+        p->drawText(QRectF(-43.0, -16.0, 86.0, 24.0), Qt::AlignCenter, QString::number(value, 'f', displayDecimals));
 
         // 单位文本：和主数值分开显示，避免数字显得拥挤。
         QFont unitFont = p->font();
@@ -170,7 +170,7 @@ namespace WaterTest::GuiGlyph
         unitFont.setFamily("Consolas");
         p->setFont(unitFont);
         p->setPen(theme.textDim);
-        p->drawText(QRectF(-34, 8, 68, 10), Qt::AlignCenter, unit);
+        p->drawText(QRectF(-43.0, 8, 86.0, 10), Qt::AlignCenter, unit);
 
         // 底部接口线和接口点：用于和管道连接，视觉上对应传感器锚点。
         p->setPen(QPen(theme.border, 1.4, Qt::DashLine, Qt::RoundCap));

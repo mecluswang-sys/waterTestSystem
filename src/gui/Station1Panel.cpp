@@ -5,7 +5,7 @@
  * 架构概览
  * --------
  * Station1Panel 是一个 QWidget，内嵌 QGraphicsView+QGraphicsScene 展示工艺流程图。
- * 场景中每个设备节点都是自定义 QGraphicsItem 子类（ValveItem / SensorItem / FlowMeterItem 等），
+ * 场景中每个设备节点都是自定义 QGraphicsItem 子类（ElectricValveItem / RegulatingValveItem / SensorItem / FlowMeterItem 等），
  * 由 buildScene() 一次性构建，之后通过三条定时器周期刷新数据与动画。
  *
  * 数据来源（由 config 键 station.strict_remote_mode 切换）
@@ -18,15 +18,16 @@
  * ----------
  * - m_flowTimer  (50 ms)   : 更新管道流动虚线的 dashOffset，产生液体流动视觉效果。
  * - m_dataTimer  (100 ms)  : 刷新压力/流量/阀门开度到场景图元。
+ *                             阀门图元额外使用短时稳定缓存，抑制 PLC 回读瞬态抖动。
  * - m_relayTimer (1000 ms) : 回读继电器状态并更新按钮颜色（降低 PLC 无谓轮询频率）。
  *
  * GraphicsItem 自定义数据槽（QGraphicsItem::data / setData）
  * ----------------------------------------------------------
  *   data(0) = QString  图层标签，如 "hmi_grid"、"hmi_pipe_outer"
  *   data(1) = int      压力传感器 ID，SensorItem 匹配键
- *   data(3) = int      阀门逻辑 ID，ValveItem 阀门匹配键
- *   data(4) = int      继电器 index，将阀门图元与继电器状态联动
- *   data(6) = int      调压阀 ID，电动调压阀 ValveItem 专用匹配键
+ *   data(3) = int      电磁阀逻辑 ID，ElectricValveItem 匹配键
+ *   data(4) = int      继电器 index，将电磁阀图元与继电器状态联动
+ *   data(6) = int      调压阀 ID，RegulatingValveItem 专用匹配键
  *
  * M100 Merker 写保护机制
  * ----------------------
@@ -40,6 +41,8 @@
 #include "gui/HmiGlyphThemeUtils.h"
 #include "gui/InstrumentGlyphRenderer.h"
 #include "gui/PipeGlyphRenderer.h"
+#include "gui/ElectricValveItem.h"
+#include "gui/RegulatingValveItem.h"
 #include "gui/ProcessValveGlyphRenderer.h"
 #include "gui/SensorGlyphRenderer.h"
 #include "gui/ValveGlyphRenderer.h"
@@ -668,86 +671,7 @@ namespace WaterTest
         };
 
         /**
-         * @brief 阀门图元（含电磁阀、截止阀、电动调压阀三种外观）。
-         *
-         * regulatingStyle=true  : 电动调压阀外观（含上方仪表盘，包围框更大）
-         * plainRegulatingStyle  : 简化调压阀外观（无仪表盘）
-         *
-         * data(3) = 阀门逻辑 ID（DeviceManager::getValve/controlValve）
-         * data(4) = 继电器 index（与继电器状态联动，驱动 open/degree）
-         * data(6) = 电动调压阀 ID（DeviceManager::getRegulatingValve/setValveOpeningPercent）
-         */
-        class ValveItem : public QGraphicsItem
-        {
-        public:
-            static QPointF inletPortLocal() { return GuiGlyph::valveInletPortLocal(); }
-            static QPointF outletPortLocal() { return GuiGlyph::valveOutletPortLocal(); }
-
-            explicit ValveItem(const QString &name,
-                               bool open = true,
-                               double degree = 100.0,
-                               bool regulatingStyle = false,
-                               bool plainRegulatingStyle = false)
-                : m_name(name),
-                  m_open(open),
-                  m_degree(degree),
-                  m_regulatingStyle(regulatingStyle),
-                  m_plainRegulatingStyle(plainRegulatingStyle)
-            {
-                setCacheMode(DeviceCoordinateCache);
-                setFlags(QGraphicsItem::ItemIsSelectable);
-            }
-
-            QRectF boundingRect() const override
-            {
-                // 调压阀包含上方仪表与下方文字，使用更大的包围框避免边缘裁切。
-                if (m_regulatingStyle)
-                    return QRectF(-55, -55, 114, 122);
-                return QRectF(-50, -48, 104, 108);
-            }
-
-            void setOpen(bool open)
-            {
-                if (m_open == open)
-                    return;
-                m_open = open;
-                update();
-            }
-
-            void setDegree(double degree)
-            {
-                if (qFuzzyCompare(m_degree, degree))
-                    return;
-                m_degree = degree;
-                update();
-            }
-
-            const QString &getName() const { return m_name; }
-
-            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
-            {
-                GuiGlyph::drawValveGlyph(
-                    p,
-                    boundingRect(),
-                    m_name,
-                    m_open,
-                    m_degree,
-                    isSelected(),
-                    makeGlyphTheme(),
-                    m_regulatingStyle,
-                    m_plainRegulatingStyle);
-            }
-
-        private:
-            QString m_name;
-            bool m_open;
-            double m_degree;
-            bool m_regulatingStyle = false;
-            bool m_plainRegulatingStyle = false;
-        };
-
-        /**
-         * @brief 遍历场景，将 data(4)==relayIndex 的 ValveItem 设置为开/关状态。
+         * @brief 遍历场景，将 data(4)==relayIndex 的电磁阀图元设置为开/关状态。
          * 由 updateRelayButtons() 和 onRelayBtnClicked() 在继电器状态变化时调用（乐观更新）。
          */
         static void setRelayValveGlyphState(QGraphicsScene *scene, uint8_t relayIndex, bool on)
@@ -763,7 +687,7 @@ namespace WaterTest
                 if (!v.isValid() || v.toInt() != relayIndex)
                     continue;
 
-                auto *valve = dynamic_cast<ValveItem *>(it);
+                auto *valve = dynamic_cast<ElectricValveItem *>(it);
                 if (!valve)
                     continue;
 
@@ -1251,7 +1175,7 @@ namespace WaterTest
             m_scene->clearSelection();
             m_scene->blockSignals(false);
 
-            auto *valveItem = dynamic_cast<ValveItem *>(item);
+            auto *valveItem = dynamic_cast<ElectricValveItem *>(item);
             const QString valveName = valveItem ? valveItem->getName() : QString("阀门 #%1").arg(valveId);
 
             const QVariant regIdVar = item->data(6);
@@ -1329,12 +1253,11 @@ namespace WaterTest
                 rootLayout->setContentsMargins(16, 16, 16, 16);
                 rootLayout->setSpacing(12);
 
-                auto *titleLabel = new QLabel("调压阀开度控制", &dialog);
+                auto *titleLabel = new QLabel(valveName, &dialog); // "调压阀开度控制"
                 titleLabel->setObjectName("regValveTitle");
                 rootLayout->addWidget(titleLabel);
 
-                auto *hintLabel = new QLabel(QString("%1\n当前开度: %2%")
-                                                 .arg(valveName)
+                auto *hintLabel = new QLabel(QString("当前开度: %1%")                                                 
                                                  .arg(QString::number(currentOpening, 'f', 1)),
                                              &dialog);
                 hintLabel->setObjectName("regValveHint");
@@ -1347,15 +1270,15 @@ namespace WaterTest
                 cardLayout->setContentsMargins(16, 14, 16, 14);
                 cardLayout->setSpacing(12);
 
-                auto *targetHeader = new QLabel("目标开度", card);
-                targetHeader->setObjectName("regValveSection");
-                cardLayout->addWidget(targetHeader);
+                // auto *targetHeader = new QLabel("目标开度", card);
+                // targetHeader->setObjectName("regValveSection");
+                // cardLayout->addWidget(targetHeader);
 
                 auto *targetRow = new QWidget(card);
                 auto *targetRowLayout = new QHBoxLayout(targetRow);
                 targetRowLayout->setContentsMargins(0, 0, 0, 0);
                 // targetRowLayout->setSpacing(12);
-                auto *targetLabel = new QLabel("开度数值", targetRow);
+                auto *targetLabel = new QLabel("开度数值（%）", targetRow);
                 targetLabel->setObjectName("regValveFieldLabel");
                 targetLabel->setMinimumWidth(72);
                 targetLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
@@ -1368,18 +1291,18 @@ namespace WaterTest
                 openingSpinBox->setAlignment(Qt::AlignCenter);
                 openingSpinBox->setMinimumWidth(180);
                 openingSpinBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-                openingSpinBox->setFixedHeight(20);
+                // openingSpinBox->setFixedHeight(20);
                 targetRowLayout->addWidget(targetLabel);
                 targetRowLayout->addWidget(openingSpinBox, 1);
                 targetRowLayout->addStretch();
                 cardLayout->addWidget(targetRow);
 
-                auto *sliderHeader = new QHBoxLayout();
-                auto *sliderLabel = new QLabel("滑块调节", card);
-                sliderLabel->setObjectName("regValveSection");
-                sliderHeader->addWidget(sliderLabel);
-                sliderHeader->addStretch();
-                cardLayout->addLayout(sliderHeader);
+                // auto *sliderHeader = new QHBoxLayout();
+                // auto *sliderLabel = new QLabel("滑块调节", card);
+                // sliderLabel->setObjectName("regValveSection");
+                // sliderHeader->addWidget(sliderLabel);
+                // sliderHeader->addStretch();
+                // cardLayout->addLayout(sliderHeader);
 
                 auto *slider = new TickedSlider(Qt::Horizontal, card);
                 slider->setRange(0, 1000);
@@ -2834,8 +2757,8 @@ namespace WaterTest
         const qreal station1InletPipeLen = 240.0;
         const qreal station1TopRowShift = -160.0;
         const qreal station1V1ShiftX = -100.0;
-        const qreal valveOutletOffsetX = ValveItem::outletPortLocal().x();
-        const qreal valveInletOffsetX = ValveItem::inletPortLocal().x();
+        const qreal valveOutletOffsetX = ElectricValveItem::outletPortLocal().x();
+        const qreal valveInletOffsetX = ElectricValveItem::inletPortLocal().x();
         const QPointF flowMeterInletLocal = FlowMeterItem::inletPortLocal();
         const QPointF flowMeterOutletLocal = FlowMeterItem::outletPortLocal();
         const QPointF flowMeterLeftPortLocal =
@@ -2906,7 +2829,7 @@ namespace WaterTest
         if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 3); sensorId < m_pressureSensorItems.size())
             m_pressureSensorItems[sensorId] = ps3;
 
-        auto *v1 = new ValveItem(labelV1, true, 100.0);
+        auto *v1 = new ElectricValveItem(labelV1, makeGlyphTheme(), true, 100.0);
         place(v1, xV1, yRow1 + row1AfterAccumulatorYOffset);
         v1->setData(3, valveIdV1);
         v1->setData(4, relayGlyphMap.v1);
@@ -2921,7 +2844,7 @@ namespace WaterTest
         if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 4); sensorId < m_pressureSensorItems.size())
             m_pressureSensorItems[sensorId] = ps4;
 
-        auto *v2 = new ValveItem(labelV2, true, 100.1);
+        auto *v2 = new ElectricValveItem(labelV2, makeGlyphTheme(), true, 100.1);
         place(v2, xV2, yRow1 + row1AfterAccumulatorYOffset);
         v2->setData(3, valveIdV2);
         v2->setData(4, relayGlyphMap.v2);
@@ -2935,7 +2858,7 @@ namespace WaterTest
         if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 5); sensorId < m_pressureSensorItems.size())
             m_pressureSensorItems[sensorId] = ps5;
 
-        auto *vReg = new ValveItem(labelVReg1, false, 0.0, true, true);
+        auto *vReg = new RegulatingValveItem(labelVReg1, makeGlyphTheme(), false, 0.0);
         place(vReg, xVReg, yRow1 + row1AfterAccumulatorYOffset);
         vReg->setData(3, 6);
         vReg->setData(6, static_cast<int>(topRegValveId));
@@ -2949,7 +2872,7 @@ namespace WaterTest
         place(fm, xFm, yFm);
         fm->setScale(flowMeterScale);
         m_flowMeterItem = fm;
-        const qreal targetMainPipeY = vReg->mapToScene(ValveItem::outletPortLocal()).y();
+        const qreal targetMainPipeY = vReg->mapToScene(RegulatingValveItem::outletPortLocal()).y();
         const qreal fmLeftPortY = fm->mapToScene(flowMeterLeftPortLocal).y();
         fm->setY(fm->y() + (targetMainPipeY - fmLeftPortY));
 
@@ -2960,7 +2883,7 @@ namespace WaterTest
         if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 6); sensorId < m_pressureSensorItems.size())
             m_pressureSensorItems[sensorId] = ps6;
 
-        auto *testValve = new ValveItem(labelTestValve, false, 100.2);
+        auto *testValve = new ElectricValveItem(labelTestValve, makeGlyphTheme(), false, 100.2);
         place(testValve, xTestValve, yRow2 + row2AfterFlowMeterYOffset);
         testValve->setData(3, valveIdTest);
         testValve->setData(4, relayGlyphMap.test);
@@ -2975,7 +2898,7 @@ namespace WaterTest
         if (const uint16_t sensorId = configuredPressureSensorId(m_panelConfig, 7); sensorId < m_pressureSensorItems.size())
             m_pressureSensorItems[sensorId] = ps7;
 
-        auto *vBack1 = new ValveItem(labelVBack1, true, 100.3);
+        auto *vBack1 = new ElectricValveItem(labelVBack1, makeGlyphTheme(), true, 100.3);
         place(vBack1, xVBack1, yRow2 + row2AfterFlowMeterYOffset);
         vBack1->setData(3, valveIdBack);
         vBack1->setData(4, relayGlyphMap.v3);
@@ -2983,7 +2906,7 @@ namespace WaterTest
         if (valveIdBack < static_cast<int>(m_valveItems.size()))
             m_valveItems[static_cast<size_t>(valveIdBack)] = vBack1;
 
-        auto *vBackReg = new ValveItem(labelVReg2, false, 0.0, true, true);
+        auto *vBackReg = new RegulatingValveItem(labelVReg2, makeGlyphTheme(), false, 0.0);
         place(vBackReg, xVBackReg, yRow2 + row2AfterFlowMeterYOffset);
         vBackReg->setData(3, 9);
         vBackReg->setData(6, static_cast<int>(bottomRegValveId));
@@ -2996,7 +2919,7 @@ namespace WaterTest
         addDeferred(ps8);
         m_pressureSensorItems[8] = ps8;
 
-        auto *v5 = new ValveItem(QString::fromUtf8("电磁阀5"), true, 100.0);
+        auto *v5 = new ElectricValveItem(QString::fromUtf8("电磁阀5"), makeGlyphTheme(), true, 100.0);
         place(v5, xV5, yRow2 + row2AfterFlowMeterYOffset);
         v5->setData(3, 5);
         v5->setData(4, 5);
@@ -3017,11 +2940,11 @@ namespace WaterTest
         };
 
         alignSensorAnchorToPipeMid(ps4,
-                                   v1->mapToScene(ValveItem::outletPortLocal()),
-                                   v2->mapToScene(ValveItem::inletPortLocal()));
+                                   v1->mapToScene(ElectricValveItem::outletPortLocal()),
+                                   v2->mapToScene(ElectricValveItem::inletPortLocal()));
         alignSensorAnchorToPipeMid(ps5,
-                                   v2->mapToScene(ValveItem::outletPortLocal()),
-                                   vReg->mapToScene(ValveItem::inletPortLocal()));
+                                   v2->mapToScene(ElectricValveItem::outletPortLocal()),
+                                   vReg->mapToScene(RegulatingValveItem::inletPortLocal()));
 
         {
             // ps6 放在 p2 与电磁阀右侧接口之间的管道中点，避免随着管线长度变化漂移。
@@ -3033,7 +2956,7 @@ namespace WaterTest
             // p1       : 上拐点（先向右走到这里）
             // p2       : 下拐点（再沿竖线下落到这里）
             const QPointF fmRight = fm->mapToScene(flowMeterRightPortLocal);
-            const QPointF valveRightPort = testValve->mapToScene(ValveItem::outletPortLocal());
+            const QPointF valveRightPort = testValve->mapToScene(ElectricValveItem::outletPortLocal());
             const qreal elbowX = std::max(fmRight.x(), valveRightPort.x()) + fmRightPipeLen;
             const QPointF p1(elbowX, fmRight.y());
             const QPointF p2(elbowX, valveRightPort.y());
@@ -3041,30 +2964,30 @@ namespace WaterTest
         }
 
         alignSensorAnchorToPipeMid(ps7,
-                                   testValve->mapToScene(ValveItem::inletPortLocal()),
-                                   vBack1->mapToScene(ValveItem::outletPortLocal()));
+                                   testValve->mapToScene(ElectricValveItem::inletPortLocal()),
+                                   vBack1->mapToScene(ElectricValveItem::outletPortLocal()));
 
         alignSensorAnchorToPipeMid(ps8,
-                                   vBackReg->mapToScene(ValveItem::inletPortLocal()),
-                                   v5->mapToScene(ValveItem::outletPortLocal()));
+                                   vBackReg->mapToScene(RegulatingValveItem::inletPortLocal()),
+                                   v5->mapToScene(ElectricValveItem::outletPortLocal()));
 
         // 1号台关键图元按端口精确对齐，避免仅按图元中心对齐造成视觉误差。
-        alignItemPortX(vBack1, ValveItem::inletPortLocal(), vReg, ValveItem::inletPortLocal());
-        alignItemPortX(vBackReg, ValveItem::inletPortLocal(), v2, ValveItem::inletPortLocal());
-        alignItemPortX(v5, ValveItem::inletPortLocal(), v1, ValveItem::inletPortLocal());
+        alignItemPortX(vBack1, ElectricValveItem::inletPortLocal(), vReg, RegulatingValveItem::inletPortLocal());
+        alignItemPortX(vBackReg, RegulatingValveItem::inletPortLocal(), v2, ElectricValveItem::inletPortLocal());
+        alignItemPortX(v5, ElectricValveItem::inletPortLocal(), v1, ElectricValveItem::inletPortLocal());
         alignItemPortX(ps8, SensorItem::inletPortLocal(), ps4, SensorItem::inletPortLocal());
 
         // ==== 管道连接（四段主流程，按工艺流向编号）====
 
         // 管路 1：上排供压主线（单布局）
-        const QPointF end = v1->mapToScene(ValveItem::inletPortLocal());
+        const QPointF end = v1->mapToScene(ElectricValveItem::inletPortLocal());
         const QPointF start(end.x() - station1InletPipeLen, end.y());
         QPainterPath path(start);
         path.lineTo(end);
         addHmiPipeWithArrow(m_scene, path, end, start, 1);
         alignSensorAnchorToPipeMid(ps3, start, end);
-        connectPorts(m_scene, v1->mapToScene(ValveItem::outletPortLocal()), v2->mapToScene(ValveItem::inletPortLocal()), 2);
-        connectPorts(m_scene, v2->mapToScene(ValveItem::outletPortLocal()), vReg->mapToScene(ValveItem::inletPortLocal()), 3);
+        connectPorts(m_scene, v1->mapToScene(ElectricValveItem::outletPortLocal()), v2->mapToScene(ElectricValveItem::inletPortLocal()), 2);
+        connectPorts(m_scene, v2->mapToScene(ElectricValveItem::outletPortLocal()), vReg->mapToScene(RegulatingValveItem::inletPortLocal()), 3);
 
         // 管路 2：上排到下排的跨排过渡线
         // 路径：电动调压阀出口 ->（向右预留）->（垂直下行）-> 流量计入口侧。
@@ -3072,7 +2995,7 @@ namespace WaterTest
         //       走线采用“水平 -> 垂直 -> 水平”折线，确保跨排连接无斜线。
         //       其中 +50 为预留水平过渡段长度，用于避免与设备本体过近。
         {
-            const QPointF start = vReg->mapToScene(ValveItem::outletPortLocal());
+            const QPointF start = vReg->mapToScene(RegulatingValveItem::outletPortLocal());
             const QPointF end = fm->mapToScene(flowMeterLeftPortLocal);
             QPainterPath path(start);
             const QPointF p1(start.x() + fmTopTransitionPipeLen, start.y());
@@ -3099,7 +3022,7 @@ namespace WaterTest
         // 3. p1/p2 现在会画红点，方便你在界面里直接观察拐点是否如预期移动。
         {
             const QPointF start = fm->mapToScene(flowMeterRightPortLocal);
-            const QPointF end = testValve->mapToScene(ValveItem::outletPortLocal());
+            const QPointF end = testValve->mapToScene(ElectricValveItem::outletPortLocal());
             QPainterPath path(start);
             const qreal elbowX = std::max(start.x(), end.x()) + fmRightPipeLen;
             const QPointF p1(elbowX, start.y());
@@ -3117,15 +3040,15 @@ namespace WaterTest
                                       5);
 
         }
-        connectPorts(m_scene, testValve->mapToScene(ValveItem::inletPortLocal()), vBack1->mapToScene(ValveItem::outletPortLocal()), 6);
+        connectPorts(m_scene, testValve->mapToScene(ElectricValveItem::inletPortLocal()), vBack1->mapToScene(ElectricValveItem::outletPortLocal()), 6);
 
         // 管路 4：下排收口段
         // 1号台：回路电动阀（vBack1） -> 回路电动调压阀（vBackReg） -> 电磁阀5 -> 左侧去向（压力8为上置测点，不串接在主管道内）。
-        connectPorts(m_scene, vBack1->mapToScene(ValveItem::inletPortLocal()), vBackReg->mapToScene(ValveItem::outletPortLocal()), 7);
-        connectPorts(m_scene, vBackReg->mapToScene(ValveItem::inletPortLocal()), v5->mapToScene(ValveItem::outletPortLocal()), 8);
+        connectPorts(m_scene, vBack1->mapToScene(ElectricValveItem::inletPortLocal()), vBackReg->mapToScene(RegulatingValveItem::outletPortLocal()), 7);
+        connectPorts(m_scene, vBackReg->mapToScene(RegulatingValveItem::inletPortLocal()), v5->mapToScene(ElectricValveItem::outletPortLocal()), 8);
         // 电磁阀5左侧出口：直接向左引出到站外去向。
         {
-            const QPointF start = v5->mapToScene(ValveItem::inletPortLocal());
+            const QPointF start = v5->mapToScene(ElectricValveItem::inletPortLocal());
             const QPointF end(start.x() - station1InletPipeLen, start.y());
             QPainterPath path(start);
             path.lineTo(end);
@@ -3303,7 +3226,7 @@ namespace WaterTest
         auto updateRegulatingValveById = [&](uint16_t regId, double openingPercent) {
             if (regId >= m_regulatingValveItems.size())
                 return;
-            auto *valveItem = dynamic_cast<ValveItem *>(m_regulatingValveItems[regId]);
+            auto *valveItem = dynamic_cast<RegulatingValveItem *>(m_regulatingValveItems[regId]);
             if (!valveItem)
                 return;
             valveItem->setOpen(openingPercent > 0.1);
@@ -3387,18 +3310,44 @@ namespace WaterTest
             updateSensorItemById(static_cast<uint16_t>(sensorId), static_cast<double>(sensor.pressure), sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
         }
 
-        for (int valveId : {1, 2, 3, 4, 5})
-        {
-            if (static_cast<size_t>(valveId) >= m_valveItems.size())
-                continue;
-            auto *valveItem = dynamic_cast<ValveItem *>(m_valveItems[static_cast<size_t>(valveId)]);
-            if (!valveItem)
-                continue;
-            const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
-            const bool open = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
-            valveItem->setOpen(open);
-            valveItem->setDegree(static_cast<double>(valve.openingDegree));
-        }
+        // for (int valveId : {1, 2, 3, 4, 5})
+        // {
+        //     if (static_cast<size_t>(valveId) >= m_valveItems.size())
+        //         continue;
+        //     auto *valveItem = dynamic_cast<ElectricValveItem *>(m_valveItems[static_cast<size_t>(valveId)]);
+        //     if (!valveItem)
+        //         continue;
+        //     const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
+        //     const bool open = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
+        //     const size_t cacheIndex = static_cast<size_t>(valveId);
+        //     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+
+        //     if (!m_valveGlyphCacheInitialized[cacheIndex])
+        //     {
+        //         m_valveGlyphCacheInitialized[cacheIndex] = true;
+        //         m_valveGlyphDisplayedOpen[cacheIndex] = open;
+        //         m_valveGlyphPendingOpen[cacheIndex] = open;
+        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
+        //     }
+        //     else if (open == m_valveGlyphDisplayedOpen[cacheIndex])
+        //     {
+        //         m_valveGlyphPendingOpen[cacheIndex] = open;
+        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
+        //     }
+        //     else if (m_valveGlyphPendingOpen[cacheIndex] != open)
+        //     {
+        //         m_valveGlyphPendingOpen[cacheIndex] = open;
+        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
+        //     }
+        //     else if ((nowMs - m_valveGlyphPendingSinceMs[cacheIndex]) >= 1000)
+        //     {
+        //         m_valveGlyphDisplayedOpen[cacheIndex] = open;
+        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
+        //     }
+
+        //     valveItem->setOpen(m_valveGlyphDisplayedOpen[cacheIndex]);
+        //     valveItem->setDegree(static_cast<double>(valve.openingDegree));
+        // }
 
         const auto topRv = m_deviceManager->getRegulatingValve(1);
         updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));

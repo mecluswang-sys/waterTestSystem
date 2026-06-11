@@ -50,17 +50,17 @@ namespace WaterTest::GuiGlyph
                           : QColor(88, 105, 132, 24);
         const bool isRegulatingValve = regulatingStyle || name.contains(QString::fromUtf8("调压阀"));
 
-        if (isRegulatingValve && !plainRegulatingStyle)
-        {
-            const QRectF bodyRect(-46, -39, 94, 99);
-            p->setPen(Qt::NoPen);
-            p->setBrush(theme.shadow);
-            p->drawRoundedRect(bodyRect.translated(2, 3), 9, 9);
+        // if (isRegulatingValve && !plainRegulatingStyle)
+        // {
+        //     const QRectF bodyRect(-46, -39, 94, 99);
+        //     p->setPen(Qt::NoPen);
+        //     p->setBrush(theme.shadow);
+        //     p->drawRoundedRect(bodyRect.translated(2, 3), 9, 9);
 
-            p->setBrush(stateTint);
-            p->setPen(QPen(frameColor, 2));
-            p->drawRoundedRect(bodyRect, 9, 9);
-        }
+        //     p->setBrush(stateTint);
+        //     p->setPen(QPen(frameColor, 2));
+        //     p->drawRoundedRect(bodyRect, 9, 9);
+        // }
 
         if (isRegulatingValve)
         {

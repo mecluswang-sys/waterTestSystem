@@ -105,6 +105,8 @@ set(HEADERS
     include/gui/TestPanel.h
     include/gui/AutoTestPanel.h
     include/gui/Station1Panel.h
+    include/gui/ElectricValveItem.h
+    include/gui/RegulatingValveItem.h
     include/gui/TickedSlider.h
     examples/PumpWidget.h
 )

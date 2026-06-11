@@ -1,6 +1,7 @@
 param(
     [switch]$Rebuild,
-    [switch]$KillExisting
+    [switch]$KillExisting,
+    [switch]$CleanCache
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,10 +25,37 @@ function Write-Section([string]$title) {
     Write-Host "=== $title ===" -ForegroundColor Cyan
 }
 
+function Clear-CMakeCache {
+    Write-Section "Clear CMake Cache"
+
+    $cacheFile = Join-Path $workspaceRoot "build/CMakeCache.txt"
+    $cacheDir = Join-Path $workspaceRoot "build/CMakeFiles"
+
+    if (Test-Path $cacheFile) {
+        Remove-Item -Path $cacheFile -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed: build/CMakeCache.txt"
+    }
+    else {
+        Write-Host "Skip missing: build/CMakeCache.txt" -ForegroundColor Yellow
+    }
+
+    if (Test-Path $cacheDir) {
+        Remove-Item -Path $cacheDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed: build/CMakeFiles"
+    }
+    else {
+        Write-Host "Skip missing: build/CMakeFiles" -ForegroundColor Yellow
+    }
+}
+
 Push-Location $workspaceRoot
 
 try {
     Write-Host "WaterTestSystem Debug Launcher" -ForegroundColor Green
+
+    if ($CleanCache -or $Rebuild) {
+        Clear-CMakeCache
+    }
 
     if ($Rebuild) {
         Write-Section "Rebuild Debug"

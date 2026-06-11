@@ -98,6 +98,10 @@ namespace WaterTest
         std::array<QGraphicsItem *, 16> m_valveItems{};
         std::array<QGraphicsItem *, 3> m_regulatingValveItems{};
         QGraphicsItem *m_flowMeterItem = nullptr;
+        std::array<bool, 16> m_valveGlyphCacheInitialized{{false}};
+        std::array<bool, 16> m_valveGlyphDisplayedOpen{{false}};
+        std::array<bool, 16> m_valveGlyphPendingOpen{{false}};
+        std::array<qint64, 16> m_valveGlyphPendingSinceMs{{0}};
 
         // DQ 继电器按钮列表（与 kStation1Relays 同序）
         std::vector<QPushButton *> m_relayBtns;
