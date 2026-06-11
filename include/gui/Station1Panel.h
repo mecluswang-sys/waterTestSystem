@@ -80,7 +80,10 @@ namespace WaterTest
         // DQ 继电器控制
         void buildRelayPanel(QWidget *parent);
         void updateRelayButtons(bool force = false);
+        void controlAllRelayValves(bool open, const char *source = "ui");
         void onRelayBtnClicked(uint8_t index, const char *source = "unknown");
+        bool controlRegulatingValveState(uint16_t id, bool open, const char *source, bool scheduleReconcile = true);
+        bool controlRelayState(uint8_t index, bool on, const char *source, bool scheduleReconcile = true);
         void onStartButtonClicked(const char *source = "ui");
         void onStopButtonClicked(const char *source = "ui");
         bool controlStartStop(bool start, const char *source);

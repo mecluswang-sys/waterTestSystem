@@ -1,3 +1,8 @@
+/**
+ * @file ElectricValveItem.h
+ * @brief 电磁阀图元的独立封装，避免与调压阀图元混用。
+ */
+
 #pragma once
 
 #include "gui/HmiGlyphTheme.h"

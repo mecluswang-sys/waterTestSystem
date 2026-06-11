@@ -1,3 +1,8 @@
+/**
+ * @file RegulatingValveItem.h
+ * @brief 电动调压阀图元的独立封装，与电磁阀分开维护。
+ */
+
 #pragma once
 
 #include "gui/HmiGlyphTheme.h"

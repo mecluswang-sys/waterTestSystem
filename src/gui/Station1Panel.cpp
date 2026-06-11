@@ -1091,6 +1091,23 @@ namespace WaterTest
         connect(m_selfCheckBtn, &QPushButton::clicked, this, &Station1Panel::onSelfCheck);
         toolbarLayout->addWidget(m_selfCheckBtn);
 
+        // 仅在工具栏追加两个批量按钮，不改变中间工艺图区域的布局。
+        auto *openAllBtn = new QPushButton("全部打开", this);
+        openAllBtn->setMinimumHeight(34);
+        openAllBtn->setProperty("tone", "accent");
+        connect(openAllBtn, &QPushButton::clicked, this, [this]() {
+            controlAllRelayValves(true, "toolbar_all_open");
+        });
+        toolbarLayout->addWidget(openAllBtn);
+
+        auto *closeAllBtn = new QPushButton("全部关闭", this);
+        closeAllBtn->setMinimumHeight(34);
+        closeAllBtn->setProperty("tone", "bad");
+        connect(closeAllBtn, &QPushButton::clicked, this, [this]() {
+            controlAllRelayValves(false, "toolbar_all_close");
+        });
+        toolbarLayout->addWidget(closeAllBtn);
+
         layout->addLayout(toolbarLayout);
 
         m_view = new QGraphicsView(this);
@@ -1130,6 +1147,7 @@ namespace WaterTest
         m_view->setScene(m_scene);
         m_view->viewport()->installEventFilter(this);
         layout->addWidget(m_view, 1);
+
         layout->addWidget(m_stageOverviewGroup, 0);
 
         m_flowTimer = new QTimer(this);
@@ -1835,8 +1853,273 @@ namespace WaterTest
 
         for (int c = 0; c < 5; ++c)
             grid->setColumnStretch(c, 1);
-
         outerLayout->addWidget(group);
+    }
+
+    bool Station1Panel::controlRelayState(uint8_t index, bool on, const char *source, bool scheduleReconcile)
+    {
+        if (isM100RelayIndex(index))
+        {
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (m_lastM100ToggleMs[index] > 0 && (nowMs - m_lastM100ToggleMs[index]) < 700)
+            {
+                qWarning() << "[M100][Station1Panel] relay toggle ignored by M100 guard"
+                           << "index=" << index
+                           << "elapsedMs=" << (nowMs - m_lastM100ToggleMs[index]);
+                return false;
+            }
+            m_lastM100ToggleMs[index] = nowMs;
+        }
+
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
+        const RelayDef *def = findRelayDefByIndex(relayDefs, index);
+        const QString addr = def ? def->addr : QString("Q?");
+        const bool useRemote = (m_stationClient && strictRemoteMode);
+
+        qInfo() << "[M100][Station1Panel] relay state request"
+                << "src=" << source
+                << "index=" << index
+                << "addr=" << addr
+                << "target=" << on
+                << "strictRemoteMode=" << strictRemoteMode
+                << "hasStationClient=" << (m_stationClient != nullptr)
+                << "useRemote=" << useRemote;
+
+        if (def && def->type == "pump")
+        {
+            const QString sourceText = QString::fromUtf8(source ? source : "");
+            if (sourceText.startsWith("relay_panel_all_"))
+                return true;
+
+            const int byteOff = index / 8;
+            const int bit = index % 8;
+            QMessageBox::information(this,
+                                     "现场联调项",
+                                     QString("Q%1.%2 为泵控制位，需到现场联调，当前仅支持状态查看。")
+                                         .arg(byteOff)
+                                         .arg(bit));
+            return false;
+        }
+
+        bool ok = false;
+        if (useRemote)
+        {
+            if (!m_stationClient->isConnected())
+            {
+                qWarning() << "[M100][Station1Panel] remote path selected but StationClient disconnected";
+            }
+
+            ControlCommand cmd;
+            cmd.command_type = 0;
+            cmd.index = index;
+            cmd.action = on ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+            qInfo() << "[M100][Station1Panel] sendCommand result"
+                    << "ok=" << ok
+                    << "index=" << cmd.index
+                    << "action=" << cmd.action;
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setRelay(index, on);
+            qInfo() << "[M100][Station1Panel] local setRelay result"
+                    << "ok=" << ok
+                    << "index=" << index
+                    << "target=" << on;
+        }
+
+        if (!ok)
+        {
+            if (isM100RelayIndex(index))
+                m_expectM100Hold[index] = false;
+            qWarning() << "[M100][Station1Panel] relay toggle failed"
+                       << "index=" << index
+                       << "addr=" << addr
+                       << "target=" << on;
+            return false;
+        }
+
+        if (index < m_relayBtns.size() && m_relayBtns[index])
+        {
+            auto *btn = m_relayBtns[index];
+            if (def)
+                btn->setText(formatRelayBtnText(def->addr, def->label, on));
+            btn->setProperty("dqOn", on);
+            btn->style()->unpolish(btn);
+            btn->style()->polish(btn);
+            qInfo() << "[M100][Station1Panel] ui optimistic update"
+                    << "index=" << index
+                    << "addr=" << (def ? def->addr : QString("Q?"))
+                    << "dqOn=" << on;
+        }
+
+        if (relayNeedsGlyphUpdate(index))
+            setRelayValveGlyphState(m_scene, index, on);
+
+        if (useRemote)
+        {
+            if (isM100RelayIndex(index))
+                m_expectM100Hold[index] = false;
+        }
+        else if (scheduleReconcile)
+        {
+            if (isM100RelayIndex(index))
+            {
+                if (on)
+                {
+                    m_expectM100Hold[index] = true;
+                    m_expectM100SetMs[index] = QDateTime::currentMSecsSinceEpoch();
+                }
+                else
+                {
+                    m_expectM100Hold[index] = false;
+                }
+            }
+
+            QTimer::singleShot(250, this, [this]() { updateRelayButtons(); });
+        }
+
+        return true;
+    }
+
+    bool Station1Panel::controlRegulatingValveState(uint16_t id, bool open, const char *source, bool scheduleReconcile)
+    {
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        const bool useRemote = (m_stationClient && strictRemoteMode);
+        const float targetPercent = open ? 100.0f : 0.0f;
+
+        qInfo() << "[Valve][Station1Panel] regulating valve request"
+                << "src=" << source
+                << "id=" << id
+                << "targetPercent=" << targetPercent
+                << "strictRemoteMode=" << strictRemoteMode
+                << "hasStationClient=" << (m_stationClient != nullptr)
+                << "useRemote=" << useRemote;
+
+        bool ok = false;
+        if (useRemote)
+        {
+            if (!m_stationClient->isConnected())
+            {
+                qWarning() << "[Valve][Station1Panel] remote path selected but StationClient disconnected";
+            }
+
+            ControlCommand cmd;
+            cmd.command_type = 2;
+            cmd.index = static_cast<uint8_t>(id - 1);
+            cmd.action = open ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+            qInfo() << "[Valve][Station1Panel] sendCommand result"
+                    << "ok=" << ok
+                    << "index=" << cmd.index
+                    << "action=" << cmd.action;
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setValveOpeningPercent(id, targetPercent);
+            qInfo() << "[Valve][Station1Panel] local setValveOpeningPercent result"
+                    << "ok=" << ok
+                    << "id=" << id
+                    << "targetPercent=" << targetPercent;
+        }
+
+        if (!ok)
+            return false;
+
+        if (m_scene)
+        {
+            auto *valveItem = (id < m_regulatingValveItems.size()) ? dynamic_cast<RegulatingValveItem *>(m_regulatingValveItems[id]) : nullptr;
+            if (valveItem)
+            {
+                valveItem->setOpen(open);
+                valveItem->setDegree(targetPercent);
+            }
+        }
+
+        if (scheduleReconcile && !useRemote)
+            QTimer::singleShot(250, this, [this]() { updateSensorValues(); });
+
+        return true;
+    }
+
+    void Station1Panel::controlAllRelayValves(bool open, const char *source)
+    {
+        struct BatchStep
+        {
+            enum class Kind
+            {
+                Relay,
+                RegulatingValve
+            };
+
+            Kind kind;
+            uint16_t id;
+            QString name;
+        };
+
+        const std::vector<BatchStep> openSteps = {
+            {BatchStep::Kind::Relay, 0, QString::fromUtf8("电磁阀1")},
+            {BatchStep::Kind::Relay, 1, QString::fromUtf8("电磁阀2")},
+            {BatchStep::Kind::RegulatingValve, 1, QString::fromUtf8("电动调压阀1")},
+            {BatchStep::Kind::Relay, 2, QString::fromUtf8("待测电磁阀")},
+            {BatchStep::Kind::Relay, 3, QString::fromUtf8("电磁阀4")},
+            {BatchStep::Kind::RegulatingValve, 2, QString::fromUtf8("电动调压阀2")},
+            {BatchStep::Kind::Relay, 5, QString::fromUtf8("电磁阀5")},
+        };
+
+        std::vector<BatchStep> steps = open ? openSteps : std::vector<BatchStep>(openSteps.rbegin(), openSteps.rend());
+
+        auto state = std::make_shared<std::pair<size_t, bool>>(0, false);
+        auto runner = std::make_shared<std::function<void()>>();
+        *runner = [this, state, runner, steps = std::move(steps), open, source]() mutable {
+            if (state->first >= steps.size())
+            {
+                updateRelayButtons(true);
+                updateSensorValues(true);
+                if (state->second)
+                {
+                    QMessageBox::warning(this,
+                                         "操作失败",
+                                         open ? "部分阀门未能全部打开，请检查 PLC / 连接状态。"
+                                              : "部分阀门未能全部关闭，请检查 PLC / 连接状态。");
+                }
+                return;
+            }
+
+            const BatchStep &step = steps[state->first];
+            bool ok = false;
+            if (step.kind == BatchStep::Kind::Relay)
+            {
+                ok = controlRelayState(static_cast<uint8_t>(step.id), open, source, false);
+            }
+            else
+            {
+                ok = controlRegulatingValveState(step.id, open, source, false);
+            }
+
+            state->second = state->second || !ok;
+            ++state->first;
+
+            if (state->first < steps.size())
+            {
+                QTimer::singleShot(800, this, [runner]() { (*runner)(); });
+            }
+            else
+            {
+                updateRelayButtons(true);
+                updateSensorValues(true);
+                if (state->second)
+                {
+                    QMessageBox::warning(this,
+                                         "操作失败",
+                                         open ? "部分阀门未能全部打开，请检查 PLC / 连接状态。"
+                                              : "部分阀门未能全部关闭，请检查 PLC / 连接状态。");
+                }
+            }
+        };
+
+        (*runner)();
     }
 
     void Station1Panel::onSelfCheck()
@@ -2432,155 +2715,28 @@ namespace WaterTest
      */
     void Station1Panel::onRelayBtnClicked(uint8_t index, const char *source)
     {
-        if (isM100RelayIndex(index))
-        {
-            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-            if (m_lastM100ToggleMs[index] > 0 && (nowMs - m_lastM100ToggleMs[index]) < 700)
-            {
-                qWarning() << "[M100][Station1Panel] relay toggle ignored by M100 guard"
-                           << "index=" << index
-                           << "elapsedMs=" << (nowMs - m_lastM100ToggleMs[index]);
-                return;
-            }
-            m_lastM100ToggleMs[index] = nowMs;
-        }
-        else if (relayUsesM100_4(index))
+        if (relayUsesM100_4(index))
         {
             qInfo() << "[M100][Station1Panel] relay mapped to M100.4"
                     << "index=" << index;
         }
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
-        const RelayDef *def = findRelayDefByIndex(relayDefs, index);
-        const QString addr = def ? def->addr : QString("Q?");
-        const bool useRemote = (m_stationClient && strictRemoteMode);
-
-        qInfo() << "[M100][Station1Panel] relay click"
-            << "src=" << source
-            << "index=" << index
-            << "addr=" << addr
-            << "strictRemoteMode=" << strictRemoteMode
-            << "hasStationClient=" << (m_stationClient != nullptr)
-            << "useRemote=" << useRemote;
-
-        // 泵输出位暂不开放本地切换，仅做状态观察。
-        if (def && def->type == "pump")
-        {
-            const int byteOff = index / 8;
-            const int bit = index % 8;
-            QMessageBox::information(this,
-                                     "现场联调项",
-                                     QString("Q%1.%2 为泵控制位，需到现场联调，当前仅支持状态查看。")
-                                         .arg(byteOff)
-                                         .arg(bit));
-            return;
-        }
-
         bool current = false;
-        if (useRemote)
-        {
-            if (!m_stationClient->isConnected())
-            {
-                qWarning() << "[M100][Station1Panel] remote path selected but StationClient disconnected";
-            }
-            bool gotCurrent = false;
-            if (m_deviceManager)
-            {
-                gotCurrent = m_deviceManager->getRelayState(index, current);
-            }
-            if (!gotCurrent && index < m_relayBtns.size() && m_relayBtns[index])
-            {
-                current = m_relayBtns[index]->property("dqOn").toBool();
-            }
-        }
-        else
-        {
-            if (!m_deviceManager)
-                return;
+        if (m_deviceManager)
             m_deviceManager->getRelayState(index, current);
-        }
-        const bool target = !current;
 
         qInfo() << "[M100][Station1Panel] relay toggle prepare"
                 << "index=" << index
-                << "addr=" << addr
                 << "current=" << current
-                << "target=" << target;
+                << "target=" << (!current);
 
-        bool ok = false;
-        if (useRemote)
+        if (!controlRelayState(index, !current, source))
         {
-            ControlCommand cmd;
-            cmd.command_type = 0;
-            cmd.index = index;
-            cmd.action = target ? 1 : 0;
-            ok = m_stationClient->sendCommand(cmd);
-            qInfo() << "[M100][Station1Panel] sendCommand result"
-                    << "ok=" << ok
-                    << "index=" << cmd.index
-                    << "action=" << cmd.action;
-        }
-        else if (m_deviceManager)
-        {
-            ok = m_deviceManager->setRelay(index, target);
-            qInfo() << "[M100][Station1Panel] local setRelay result"
-                    << "ok=" << ok
-                    << "index=" << index
-                    << "target=" << target;
-        }
-
-        if (!ok)
-        {
-            if (isM100RelayIndex(index))
-                m_expectM100Hold[index] = false;
-            qWarning() << "[M100][Station1Panel] relay toggle failed"
-                       << "index=" << index
-                       << "addr=" << addr
-                       << "target=" << target;
+            const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
+            const RelayDef *def = findRelayDefByIndex(relayDefs, index);
+            const QString addr = def ? def->addr : QString("Q?");
             QMessageBox::warning(this, "操作失败",
                                  QString("切换 %1 失败，请检查 PLC/终端连接状态。").arg(addr));
-            return;
-        }
-
-        // 先做本地乐观刷新，避免同步回读阻塞导致的视觉延迟。
-        if (index < m_relayBtns.size() && m_relayBtns[index])
-        {
-            auto *btn = m_relayBtns[index];
-            if (def)
-                btn->setText(formatRelayBtnText(def->addr, def->label, target));
-            btn->setProperty("dqOn", target);
-            btn->style()->unpolish(btn);
-            btn->style()->polish(btn);
-            if (relayNeedsGlyphUpdate(index))
-                setRelayValveGlyphState(m_scene, index, target);
-            qInfo() << "[M100][Station1Panel] ui optimistic update"
-                    << "index=" << index
-                    << "addr=" << (def ? def->addr : QString("Q?"))
-                    << "dqOn=" << target;
-        }
-
-        if (useRemote)
-        {
-            if (isM100RelayIndex(index))
-                m_expectM100Hold[index] = false;
-        }
-        else
-        {
-            if (isM100RelayIndex(index))
-            {
-                if (target)
-                {
-                    m_expectM100Hold[index] = true;
-                    m_expectM100SetMs[index] = QDateTime::currentMSecsSinceEpoch();
-                }
-                else
-                {
-                    m_expectM100Hold[index] = false;
-                }
-            }
-            // 回读校准放到事件循环后执行，避免阻塞当前帧绘制。
-            QTimer::singleShot(250, this, [this]() { updateRelayButtons(); });
         }
     }
 
@@ -3274,7 +3430,7 @@ namespace WaterTest
                     pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
                 }
 
-                updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 2);
+                updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 1);
             }
 
             updateFlowMeterItem(static_cast<double>(net.flow_rate), QString("L/min"), false, 0, 0);
@@ -3307,47 +3463,8 @@ namespace WaterTest
 
             const int sensorId = static_cast<int>(configuredSensorId);
             const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
-            updateSensorItemById(static_cast<uint16_t>(sensorId), static_cast<double>(sensor.pressure), sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6 ? sensor.displayDecimals : 2);
+            updateSensorItemById(static_cast<uint16_t>(sensorId), static_cast<double>(sensor.pressure), 1);
         }
-
-        // for (int valveId : {1, 2, 3, 4, 5})
-        // {
-        //     if (static_cast<size_t>(valveId) >= m_valveItems.size())
-        //         continue;
-        //     auto *valveItem = dynamic_cast<ElectricValveItem *>(m_valveItems[static_cast<size_t>(valveId)]);
-        //     if (!valveItem)
-        //         continue;
-        //     const auto valve = m_deviceManager->getValve(static_cast<uint16_t>(valveId));
-        //     const bool open = (valve.status == ValveStatus::OPEN || valve.status == ValveStatus::OPENING);
-        //     const size_t cacheIndex = static_cast<size_t>(valveId);
-        //     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-
-        //     if (!m_valveGlyphCacheInitialized[cacheIndex])
-        //     {
-        //         m_valveGlyphCacheInitialized[cacheIndex] = true;
-        //         m_valveGlyphDisplayedOpen[cacheIndex] = open;
-        //         m_valveGlyphPendingOpen[cacheIndex] = open;
-        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
-        //     }
-        //     else if (open == m_valveGlyphDisplayedOpen[cacheIndex])
-        //     {
-        //         m_valveGlyphPendingOpen[cacheIndex] = open;
-        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
-        //     }
-        //     else if (m_valveGlyphPendingOpen[cacheIndex] != open)
-        //     {
-        //         m_valveGlyphPendingOpen[cacheIndex] = open;
-        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
-        //     }
-        //     else if ((nowMs - m_valveGlyphPendingSinceMs[cacheIndex]) >= 1000)
-        //     {
-        //         m_valveGlyphDisplayedOpen[cacheIndex] = open;
-        //         m_valveGlyphPendingSinceMs[cacheIndex] = nowMs;
-        //     }
-
-        //     valveItem->setOpen(m_valveGlyphDisplayedOpen[cacheIndex]);
-        //     valveItem->setDegree(static_cast<double>(valve.openingDegree));
-        // }
 
         const auto topRv = m_deviceManager->getRegulatingValve(1);
         updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));
