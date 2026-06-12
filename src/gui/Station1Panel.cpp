@@ -142,6 +142,19 @@ namespace WaterTest
             return std::vector<RelayDef>(kStation1Relays.begin(), kStation1Relays.end());
         }
 
+        static std::array<uint16_t, 2> pressureSensorsForRelayImpl(uint8_t relayIndex)
+        {
+            switch (relayIndex)
+            {
+            case 0: return {3, 4};
+            case 1: return {4, 5};
+            case 2: return {6, 7};
+            case 3: return {7, 8};
+            case 5: return {5, 8};
+            default: return {0, 0};
+            }
+        }
+
         /** @brief 按 index 在列表中查找继电器定义，未找到返回 nullptr。 */
         static const RelayDef *findRelayDefByIndex(const std::vector<RelayDef> &defs, uint8_t index)
         {
@@ -761,6 +774,15 @@ namespace WaterTest
                 update();
             }
 
+            void setAuxText(const QString &text, const QColor &color = QColor())
+            {
+                if (m_auxText == text && m_auxColor == color)
+                    return;
+                m_auxText = text;
+                m_auxColor = color;
+                update();
+            }
+
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
                 GuiGlyph::drawSensorGlyph(
@@ -773,7 +795,9 @@ namespace WaterTest
                     m_typeColor,
                     isSelected(),
                     true,
-                        makeGlyphTheme());
+                    makeGlyphTheme(),
+                    m_auxText,
+                    m_auxColor);
             }
 
         private:
@@ -782,6 +806,8 @@ namespace WaterTest
             int m_displayDecimals = 2;
             QString m_unit;
             QColor m_typeColor;
+            QString m_auxText;
+            QColor m_auxColor;
         };
 
         /**
@@ -1770,6 +1796,102 @@ namespace WaterTest
         }
     }
 
+    bool Station1Panel::readPressureValueForDisplay(uint16_t configuredSensorId, size_t fallbackIndex, double &pressureKpa) const
+    {
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+
+        if (m_stationClient && strictRemoteMode)
+        {
+            if (m_deviceManager)
+            {
+                const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
+                if (sensor.id != 0)
+                {
+                    pressureKpa = static_cast<double>(sensor.pressure);
+                    return true;
+                }
+            }
+
+            const SensorData net = m_stationClient->getLatestSensorData();
+            const int remotePressureIndex = std::clamp(resolveRemotePressureIndex(configuredSensorId, static_cast<int>(fallbackIndex)), 0, 3);
+            pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
+            return true;
+        }
+
+        if (!m_deviceManager)
+            return false;
+
+        const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
+        if (sensor.id == 0)
+            return false;
+
+        pressureKpa = static_cast<double>(sensor.pressure);
+        return true;
+    }
+
+    std::array<uint16_t, 2> Station1Panel::pressureSensorsForRelay(uint8_t relayIndex)
+    {
+        return pressureSensorsForRelayImpl(relayIndex);
+    }
+
+    QString Station1Panel::pressureCloseDeltaText(uint8_t relayIndex, uint16_t sensorId, double currentPressureKpa, int decimals, QColor *color) const
+    {
+        if (relayIndex >= m_pressureCloseBaselineValid.size())
+            return QString();
+
+        const auto sensors = pressureSensorsForRelay(relayIndex);
+        int slot = -1;
+        if (sensorId == sensors[0])
+            slot = 0;
+        else if (sensorId == sensors[1])
+            slot = 1;
+
+        if (slot < 0 || !m_pressureCloseBaselineValid[relayIndex][static_cast<size_t>(slot)])
+            return QString();
+
+        const double delta = currentPressureKpa - m_pressureCloseBaseline[relayIndex][static_cast<size_t>(slot)];
+        if (color)
+            *color = (delta >= 0.0) ? QColor("#2f9f57") : QColor("#cf5a46");
+
+        const QString arrow = (delta >= 0.0) ? QString::fromUtf8("↑") : QString::fromUtf8("↓");
+        return QString::fromUtf8("%1 %2 kPa").arg(arrow, QString::number(std::abs(delta), 'f', decimals));
+    }
+
+    void Station1Panel::capturePressureCloseBaseline(uint8_t relayIndex)
+    {
+        if (relayIndex >= m_pressureCloseBaseline.size())
+            return;
+
+        const auto sensors = pressureSensorsForRelay(relayIndex);
+        for (size_t slot = 0; slot < sensors.size(); ++slot)
+        {
+            const uint16_t configuredSensorId = sensors[slot];
+            if (configuredSensorId == 0 || configuredSensorId >= m_pressureCloseBaseline.size())
+                continue;
+
+            double pressureKpa = 0.0;
+            if (!readPressureValueForDisplay(configuredSensorId, slot, pressureKpa))
+                continue;
+
+            m_pressureCloseBaseline[relayIndex][slot] = pressureKpa;
+            m_pressureCloseBaselineValid[relayIndex][slot] = true;
+        }
+    }
+
+    void Station1Panel::clearPressureCloseBaseline(uint8_t relayIndex)
+    {
+        if (relayIndex >= m_pressureCloseBaseline.size())
+            return;
+        m_pressureCloseBaseline[relayIndex].fill(0.0);
+        m_pressureCloseBaselineValid[relayIndex].fill(false);
+    }
+
+    void Station1Panel::clearAllPressureCloseBaselines()
+    {
+        for (size_t i = 0; i < m_pressureCloseBaseline.size(); ++i)
+            clearPressureCloseBaseline(static_cast<uint8_t>(i));
+    }
+
     /**
      * @brief 在给定容器 Widget 内构建"继电器输出控制 (DQ)"面板。
      *
@@ -1939,6 +2061,11 @@ namespace WaterTest
                        << "target=" << on;
             return false;
         }
+
+        if (on)
+            clearPressureCloseBaseline(index);
+        else
+            capturePressureCloseBaseline(index);
 
         if (index < m_relayBtns.size() && m_relayBtns[index])
         {
@@ -3368,8 +3495,7 @@ namespace WaterTest
         if (!m_scene)
             return;
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        auto updateSensorItemById = [&](uint16_t sensorId, double pressureKpa, int decimals) {
+        auto updateSensorItemById = [&](uint16_t sensorId, double pressureKpa, int decimals, const QString &auxText = QString(), const QColor &auxColor = QColor()) {
             if (sensorId >= m_pressureSensorItems.size())
                 return;
             auto *sensorItem = dynamic_cast<SensorItem *>(m_pressureSensorItems[sensorId]);
@@ -3377,6 +3503,20 @@ namespace WaterTest
                 return;
             sensorItem->setValue(pressureKpa);
             sensorItem->setDisplayDecimals(decimals);
+            sensorItem->setAuxText(auxText, auxColor);
+        };
+
+        auto relayForPressureSensor = [](uint16_t sensorId) -> int {
+            switch (sensorId)
+            {
+            case 3: return 0;
+            case 4: return 1;
+            case 5: return 1;
+            case 6: return 2;
+            case 7: return 3;
+            case 8: return 5;
+            default: return -1;
+            }
         };
 
         auto updateRegulatingValveById = [&](uint16_t regId, double openingPercent) {
@@ -3399,10 +3539,9 @@ namespace WaterTest
             flowItem->setAlarmDetail(emptyPipeAlarm, excitationAlarm);
         };
 
-        if (m_stationClient && strictRemoteMode)
+        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
         {
             const SensorData net = m_stationClient->getLatestSensorData();
-
             const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
             for (size_t idx = 0; idx < visiblePsNumbers.size(); ++idx)
             {
@@ -3413,24 +3552,15 @@ namespace WaterTest
 
                 const int sensorId = static_cast<int>(configuredSensorId);
                 double pressureKpa = 0.0;
-                bool hasMappedLocalPressure = false;
-                if (m_deviceManager)
-                {
-                    const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
-                    if (sensor.id != 0)
-                    {
-                        pressureKpa = static_cast<double>(sensor.pressure);
-                        hasMappedLocalPressure = true;
-                    }
-                }
+                if (!readPressureValueForDisplay(configuredSensorId, idx, pressureKpa))
+                    continue;
 
-                if (!hasMappedLocalPressure)
-                {
-                    const int remotePressureIndex = std::clamp(resolveRemotePressureIndex(configuredSensorId, static_cast<int>(idx)), 0, 3);
-                    pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
-                }
-
-                updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 1);
+                QColor deltaColor;
+                const int relayIndex = relayForPressureSensor(configuredSensorId);
+                const QString deltaText = (relayIndex >= 0)
+                    ? pressureCloseDeltaText(static_cast<uint8_t>(relayIndex), configuredSensorId, pressureKpa, 1, &deltaColor)
+                    : QString();
+                updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 1, deltaText, deltaColor);
             }
 
             updateFlowMeterItem(static_cast<double>(net.flow_rate), QString("L/min"), false, 0, 0);
@@ -3455,15 +3585,24 @@ namespace WaterTest
             return;
 
         const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);
-        for (int psNumber : visiblePsNumbers)
+        for (size_t idx = 0; idx < visiblePsNumbers.size(); ++idx)
         {
+            const int psNumber = visiblePsNumbers[idx];
             const uint16_t configuredSensorId = configuredPressureSensorId(m_panelConfig, psNumber);
             if (configuredSensorId == 0)
                 continue;
 
             const int sensorId = static_cast<int>(configuredSensorId);
-            const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
-            updateSensorItemById(static_cast<uint16_t>(sensorId), static_cast<double>(sensor.pressure), 1);
+            double pressureKpa = 0.0;
+            if (!readPressureValueForDisplay(configuredSensorId, idx, pressureKpa))
+                continue;
+
+            QColor deltaColor;
+            const int relayIndex = relayForPressureSensor(configuredSensorId);
+            const QString deltaText = (relayIndex >= 0)
+                ? pressureCloseDeltaText(static_cast<uint8_t>(relayIndex), configuredSensorId, pressureKpa, 1, &deltaColor)
+                : QString();
+            updateSensorItemById(static_cast<uint16_t>(sensorId), pressureKpa, 1, deltaText, deltaColor);
         }
 
         const auto topRv = m_deviceManager->getRegulatingValve(1);

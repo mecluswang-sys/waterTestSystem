@@ -75,7 +75,9 @@ namespace WaterTest::GuiGlyph
         const QColor &typeColor,
         bool selected,
         bool drawPorts,
-        const HmiGlyphTheme &theme)
+        const HmiGlyphTheme &theme,
+        const QString &auxText = QString(),
+        const QColor &auxColor = QColor())
     {
         if (!p)
             return;
@@ -139,10 +141,12 @@ namespace WaterTest::GuiGlyph
         // p->setPen(QPen(theme.ink, 1));
         // p->drawEllipse(gaugeCenter, 2.8, 2.8);
 
-        // 数显底板：把数值从背景里“托”出来，突出数字而不是机械指针。
+        // 数显底板：把主数值和变化值一起托出来，形成一个统一的信息块。
         p->setPen(Qt::NoPen);
         p->setBrush(QColor(14, 20, 28, 180));
-        p->drawRoundedRect(QRectF(-43.0, -16.0, 86.0, 24.0), 4.0, 4.0);
+        const qreal valueBoxTop = -16.0;
+        const qreal valueBoxHeight = 34.0;
+        p->drawRoundedRect(QRectF(-50.0, valueBoxTop, 100.0, valueBoxHeight), 4.0, 4.0);
 
         // 顶部名称：显示传感器名称及单位，例如“压力4 (kPa)”。
         p->setPen(theme.text);
@@ -161,16 +165,18 @@ namespace WaterTest::GuiGlyph
         valFont.setFamily("Consolas");
         p->setFont(valFont);
         p->setPen(QColor(245, 248, 255));
-        p->drawText(QRectF(-43.0, -16.0, 86.0, 24.0), Qt::AlignCenter, QString::number(value, 'f', displayDecimals));
+        const QRectF valueTextRect(-48.0, -14.0, 96.0, 14.0);
+        p->drawText(valueTextRect, Qt::AlignCenter, QString::number(value, 'f', displayDecimals));
 
-        // 单位文本：和主数值分开显示，避免数字显得拥挤。
-        QFont unitFont = p->font();
-        unitFont.setPointSize(7);
-        unitFont.setBold(false);
-        unitFont.setFamily("Consolas");
-        p->setFont(unitFont);
-        p->setPen(theme.textDim);
-        p->drawText(QRectF(-43.0, 8, 86.0, 10), Qt::AlignCenter, unit);
+        // 第二排：变化值独立显示，避免和主数值挤在同一行。
+        const QString auxDisplayText = auxText.isEmpty() ? QString::fromUtf8("↑ -- kPa") : auxText;
+        p->setPen(auxColor.isValid() ? auxColor : theme.cyan);
+        QFont auxFont = p->font();
+        auxFont.setPointSize(8);
+        auxFont.setBold(true);
+        auxFont.setFamily("Consolas");
+        p->setFont(auxFont);
+        p->drawText(QRectF(-48.0, 2.0, 96.0, 12.0), Qt::AlignCenter, auxDisplayText);
 
         // 底部接口线和接口点：用于和管道连接，视觉上对应传感器锚点。
         p->setPen(QPen(theme.border, 1.4, Qt::DashLine, Qt::RoundCap));

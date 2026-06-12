@@ -18,6 +18,7 @@ class QHideEvent;
 class QTimer;
 class QPushButton;
 class QFrame;
+class QColor;
 class QGraphicsItem;
 class QGraphicsPathItem;
 
@@ -76,6 +77,12 @@ namespace WaterTest
         void updatePipeFlowVisibility();
         void updatePipeFlowAnimation();
         void updateSensorValues(bool force = false);
+        bool readPressureValueForDisplay(uint16_t configuredSensorId, size_t fallbackIndex, double &pressureKpa) const;
+        QString pressureCloseDeltaText(uint8_t relayIndex, uint16_t sensorId, double currentPressureKpa, int decimals, QColor *color = nullptr) const;
+        void capturePressureCloseBaseline(uint8_t relayIndex);
+        void clearPressureCloseBaseline(uint8_t relayIndex);
+        void clearAllPressureCloseBaselines();
+        static std::array<uint16_t, 2> pressureSensorsForRelay(uint8_t relayIndex);
 
         // DQ 继电器控制
         void buildRelayPanel(QWidget *parent);
@@ -141,6 +148,8 @@ namespace WaterTest
         // M100.0 ~ M100.3 置位后若被 PLC 快速复位，用于触发可视化提示
         std::array<bool, 4> m_expectM100Hold{{false, false, false, false}};
         std::array<qint64, 4> m_expectM100SetMs{{0, 0, 0, 0}};
+        std::array<std::array<double, 2>, 16> m_pressureCloseBaseline{{}};
+        std::array<std::array<bool, 2>, 16> m_pressureCloseBaselineValid{{}};
 
         // 图元点击防抖，避免单次物理点击触发多次 selectionChanged
         int m_lastRelayGlyphIndex = -1;
