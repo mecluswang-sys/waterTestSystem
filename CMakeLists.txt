@@ -70,14 +70,12 @@ set(SOURCES
     src/gui/MonitorPanel.cpp
     src/gui/ConfigDialog.cpp
     src/gui/PreparationPanel.cpp
-    src/gui/TestPanel.cpp
-    src/gui/AutoTestPanel.cpp
     src/gui/Station1Panel.cpp
     src/gui/TickedSlider.cpp
     examples/PumpWidget.cpp
 )
 
-# Snap7可用时使用真实PLC实现，否则回退到stub实现
+# Snap7可用时使用真实PLC实现，否则回退到stub实现      src/gui/AutoTestPanel.cpp
 if(SNAP7_AVAILABLE)
     list(APPEND SOURCES src/S7PLCClient.cpp)
 else()
@@ -102,8 +100,6 @@ set(HEADERS
     include/gui/MonitorPanel.h
     include/gui/ConfigDialog.h
     include/gui/PreparationPanel.h
-    include/gui/TestPanel.h
-    include/gui/AutoTestPanel.h
     include/gui/Station1Panel.h
     include/gui/ElectricValveItem.h
     include/gui/RegulatingValveItem.h

@@ -78,6 +78,7 @@
 #include <QDebug>
 #include <QDateTime>
 #include <QEvent>
+#include <QThread>
 #include <QEventLoop>
 #include <QMouseEvent>
 #include <QtMath>
@@ -2566,19 +2567,21 @@ namespace WaterTest
             canDoLeakTest = true;
         }
 
-        // ===== 步骤3 & 4：压力观察 + 泄漏结论 =====
+        // ===== 步骤3 & 4：高压泄漏测试（前后压力对比） =====
         if (canDoLeakTest) {
-            transitionTo(SelfCheckFlowState::STEP3_OBSERVE, QString::fromUtf8("进入步骤3压力观察"));
-            bool prepOk = controlRelay(1, false) && controlRelay(0, true);
+            transitionTo(SelfCheckFlowState::STEP3_OBSERVE, QString::fromUtf8("进入步骤3高压泄漏测试"));
+
+            // 先关闭待测阀（电磁阀3），让待测区前后两段进入可观测状态。
+            bool prepOk = controlRelay(2, false);
             if (!prepOk) {
-                setStep(IDX_STEP3, STEP_FAIL, QString::fromUtf8("前置阀门切换失败，已中止"));
+                setStep(IDX_STEP3, STEP_FAIL, QString::fromUtf8("待测阀关闭失败，已中止"));
                 setStep(IDX_STEP4, STEP_FAIL, QString::fromUtf8("前置失败，未形成结论"));
-                transitionTo(SelfCheckFlowState::FAULT_STOP, QString::fromUtf8("步骤3前置失败"));
+                transitionTo(SelfCheckFlowState::FAULT_STOP, QString::fromUtf8("待测阀关闭失败"));
             } else {
                 bool pumpStartedBySelfCheck = false;
                 bool skipLeakResult = false;
                 if (!pumpManualForLeakTest) {
-                    setStep(IDX_STEP3, RUNNING, QString::fromUtf8("正在启动气泵建压…"));
+                    setStep(IDX_STEP3, RUNNING, QString::fromUtf8("正在启动气泵并升压…"));
                     if (!controlPump(0, true)) {
                         setStep(IDX_STEP3, STEP_FAIL, QString::fromUtf8("气泵启动失败，无法建压"));
                         setStep(IDX_STEP4, STEP_FAIL, QString::fromUtf8("建压失败，未形成结论"));
@@ -2588,11 +2591,30 @@ namespace WaterTest
                     }
                 }
                 if (!skipLeakResult) {
-                    setStep(IDX_STEP3, RUNNING, QString::fromUtf8("等待建压 %1 ms…").arg(leakBuildWaitMs));
-                    waitMs(leakBuildWaitMs);
-                    m_deviceManager->updateAllDevices();
-                    const auto p4Build = m_deviceManager->getPressureSensor(4);
-                    const auto p5Build = m_deviceManager->getPressureSensor(5);
+                    setStep(IDX_STEP3, RUNNING, QString::fromUtf8("等待待测阀前压力达到 %1 kPa…").arg(fmtPressure(leakBuildMinKpa, 1)));
+
+                    auto readPressurePair = [&]() -> std::pair<PressureSensor, PressureSensor> {
+                        m_deviceManager->updateAllDevices();
+                        return {m_deviceManager->getPressureSensor(4), m_deviceManager->getPressureSensor(5)};
+                    };
+
+                    PressureSensor p4Build;
+                    PressureSensor p5Build;
+                    {
+                        const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + leakBuildWaitMs;
+                        while (true) {
+                            const auto pair = readPressurePair();
+                            p4Build = pair.first;
+                            p5Build = pair.second;
+                            if (p4Build.pressure >= leakBuildMinKpa)
+                                break;
+                            if (QDateTime::currentMSecsSinceEpoch() >= deadlineMs)
+                                break;
+                            QCoreApplication::processEvents();
+                            QThread::msleep(100);
+                        }
+                    }
+
                     const bool buildOk = (p4Build.pressure >= leakBuildMinKpa);
                     if (pumpStartedBySelfCheck)
                         (void)controlPump(0, false);
@@ -2604,12 +2626,15 @@ namespace WaterTest
                         transitionTo(SelfCheckFlowState::FAULT_STOP, QString::fromUtf8("步骤3建压不足"));
                     } else {
                         setStep(IDX_STEP3, RUNNING,
-                                QString::fromUtf8("PS4=%1 kPa，保压 %2 ms 中…")
+                                QString::fromUtf8("PS4达到 %1 kPa，依次关闭电磁阀1/2/4 并保压 %2 ms…")
                                     .arg(fmtPressure(p4Build.pressure, 1)).arg(leakHoldWaitMs));
+                        (void)controlRelay(0, false);
+                        (void)controlRelay(1, false);
+                        (void)controlRelay(3, false);
                         waitMs(leakHoldWaitMs);
-                        m_deviceManager->updateAllDevices();
-                        const auto p4Hold = m_deviceManager->getPressureSensor(4);
-                        const auto p5Hold = m_deviceManager->getPressureSensor(5);
+                        const auto pHoldPair = readPressurePair();
+                        const auto p4Hold = pHoldPair.first;
+                        const auto p5Hold = pHoldPair.second;
                         const float p4Delta = p4Build.pressure - p4Hold.pressure;
                         const float p4AbsDelta = std::abs(p4Delta);
                         const QString p4Direction = (p4Delta >= 0) ? QString::fromUtf8("升") : QString::fromUtf8("降");
@@ -2628,16 +2653,21 @@ namespace WaterTest
                                     .arg(fmtPressure(p5AbsDelta, 2)));
                         setStep(IDX_STEP4, RUNNING, QString::fromUtf8("正在判定…"));
                         transitionTo(SelfCheckFlowState::STEP4_CONCLUSION, QString::fromUtf8("进入步骤4泄漏结论"));
-                        const bool leakOk = (p4AbsDelta <= leakP4DropMaxKpa) && (p5AbsDelta <= leakP5RiseMaxKpa);
+                        const bool p4DropExceeds = (p4Delta >= leakP4DropMaxKpa);
+                        const bool p5RiseExceeds = (p5Delta >= leakP5RiseMaxKpa);
+                        const bool externalLeak = p4DropExceeds && !p5RiseExceeds;
+                        const bool internalLeak = p5RiseExceeds && (p4Delta > 0.0f);
+                        const bool leakOk = !externalLeak && !internalLeak;
                         setStep(IDX_STEP4, leakOk ? STEP_OK : STEP_FAIL,
                                 leakOk
-                                    ? QString::fromUtf8("密封正常（PS4变化 %1 kPa \u2264 %2，PS5变化 %3 kPa \u2264 %4）")
-                                        .arg(fmtPressure(p4AbsDelta, 2)).arg(fmtPressure(leakP4DropMaxKpa, 2))
-                                        .arg(fmtPressure(p5AbsDelta, 2)).arg(fmtPressure(leakP5RiseMaxKpa, 2))
-                                    : QString::fromUtf8("疑似泄漏（PS4变化 %1 kPa 阈值 %2，PS5变化 %3 kPa 阈值 %4）")
-                                        .arg(fmtPressure(p4AbsDelta, 2)).arg(fmtPressure(leakP4DropMaxKpa, 2))
-                                        .arg(fmtPressure(p5AbsDelta, 2)).arg(fmtPressure(leakP5RiseMaxKpa, 2)));
-                        if (!leakOk)
+                                    ? QString::fromUtf8("密封正常（PS4下降 %1 kPa，PS5上升 %2 kPa）")
+                                        .arg(fmtPressure(p4Delta, 2)).arg(fmtPressure(p5Delta, 2))
+                                    : externalLeak
+                                        ? QString::fromUtf8("外泄漏：PS4下降 %1 kPa > 阈值 %2 kPa，PS5无明显上升")
+                                            .arg(fmtPressure(p4Delta, 2)).arg(fmtPressure(leakP4DropMaxKpa, 2))
+                                        : QString::fromUtf8("内泄漏：PS5上升 %1 kPa > 阈值 %2 kPa，且 PS4 同步下降")
+                                            .arg(fmtPressure(p5Delta, 2)).arg(fmtPressure(leakP5RiseMaxKpa, 2)));
+                        if (externalLeak || internalLeak)
                             transitionTo(SelfCheckFlowState::FAULT_STOP, QString::fromUtf8("泄漏判定失败"));
                     }
                 }

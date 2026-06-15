@@ -21,10 +21,7 @@ namespace WaterTest
     class StationClient;
     class MonitorPanel;
     class PreparationPanel;
-    class TestPanel;
-    class AutoTestPanel;
     class Station1Panel;
-
     // Forward declarations for Terminal GUI widgets
     class DashboardWidget;
     class PLCConnectionWidget;
@@ -113,10 +110,7 @@ namespace WaterTest
         // Station mode panels (existing)
         PreparationPanel *m_preparationPanel;
         MonitorPanel *m_monitorPanel;
-        TestPanel *m_testPanel;
-        AutoTestPanel *m_autoTestPanel;
         Station1Panel *m_station1Panel;
-
         QPushButton *m_connectBtn;
         QPushButton *m_disconnectBtn;
         QLabel *m_connectionStatusLabel;

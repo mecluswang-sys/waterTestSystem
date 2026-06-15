@@ -6,8 +6,6 @@
 #include "gui/MainWindow.h"
 #include "gui/MonitorPanel.h"
 #include "gui/PreparationPanel.h"
-#include "gui/TestPanel.h"
-#include "gui/AutoTestPanel.h"
 #include "gui/Station1Panel.h"
 #include "gui/ConfigDialog.h"
 #include "DeviceManager.h"
@@ -67,8 +65,6 @@ namespace WaterTest
           m_tabWidget(nullptr),
           m_preparationPanel(nullptr),
           m_monitorPanel(nullptr),
-          m_testPanel(nullptr),
-          m_autoTestPanel(nullptr),
           m_station1Panel(nullptr),
           m_connectBtn(nullptr),
           m_disconnectBtn(nullptr),
@@ -131,11 +127,6 @@ namespace WaterTest
             m_preparationPanel->stopUpdate();
         if (m_monitorPanel)
             m_monitorPanel->stopUpdate();
-        if (m_testPanel)
-            m_testPanel->stopUpdate();
-        if (m_autoTestPanel)
-            m_autoTestPanel->stopUpdate();
-
         // 最后停采集线程
         if (m_deviceManager)
         {
@@ -213,24 +204,14 @@ namespace WaterTest
                     });
             connect(m_stationClient.get(), &StationClient::dataUpdated,
                     this, &MainWindow::onDataReceived);
-
-            if (m_testPanel)
+            if (m_station1Panel)
             {
-                m_testPanel->setStationClient(m_stationClient);
+                m_station1Panel->setStationClient(m_stationClient);
             }
             if (m_preparationPanel)
             {
                 m_preparationPanel->setStationClient(m_stationClient);
             }
-            if (m_station1Panel)
-            {
-                m_station1Panel->setStationClient(m_stationClient);
-            }
-            if (m_autoTestPanel)
-            {
-                m_autoTestPanel->setStationClient(m_stationClient);
-            }
-
             if (strictRemoteMode)
             {
                 m_autoConnectEnabled = false;
@@ -352,38 +333,9 @@ namespace WaterTest
         m_monitorPanel = new MonitorPanel(m_deviceManager, this);
         m_tabWidget->addTab(m_monitorPanel, "② 实时监控");
 
-        // Tab 3: 测试区
-        m_testPanel = new TestPanel(m_deviceManager, this);
-        m_tabWidget->addTab(m_testPanel, "③ 测试区");
-
-        // Tab 4: 自动测试配置
-        m_autoTestPanel = new AutoTestPanel(m_deviceManager, this);
-        m_tabWidget->addTab(m_autoTestPanel, "④ 自动测试配置");
-
-        // Tab 5: 1号操作台（流程图）
-        // 说明：该页面包含高频图元/动画刷新；默认关闭以提升启动稳定性。
-        // 如需启用，可在 config/system.conf 中设置：ui.enable_station1_panel = true
-        {
-            auto &config = ConfigManager::getInstance();
-            const bool enableStation1Panel = config.getBool("ui.enable_station1_panel", false);
-            if (enableStation1Panel)
-            {
-                m_station1Panel = new Station1Panel(m_deviceManager, this);
-                m_tabWidget->addTab(m_station1Panel, "⑤ 1号操作台");
-            }
-            else
-            {
-                auto *disabled = new QWidget(this);
-                auto *disabledLayout = new QVBoxLayout(disabled);
-                auto *msg = new QLabel("1号操作台页面已关闭（可在 config/system.conf 设置 ui.enable_station1_panel = true 启用）", disabled);
-                msg->setWordWrap(true);
-                msg->setAlignment(Qt::AlignCenter);
-                disabledLayout->addStretch();
-                disabledLayout->addWidget(msg);
-                disabledLayout->addStretch();
-                m_tabWidget->addTab(disabled, "⑤ 1号操作台");
-            }
-        }
+        // Tab 3: 1号操作台
+        m_station1Panel = new Station1Panel(m_deviceManager, this);
+        m_tabWidget->addTab(m_station1Panel, "③ 1号操作台");
 
         mainLayout->addWidget(m_tabWidget);
         setCentralWidget(centralWidget);
@@ -719,9 +671,6 @@ namespace WaterTest
         const bool skipDataCollection = config.getBool("diag.skip_data_collection_on_connect", false);
         const bool skipPanelUpdates = config.getBool("diag.skip_panel_updates_on_connect", false);
         const bool skipPlcConnect = config.getBool("diag.skip_plc_connect_on_connect", (skipDataCollection && skipPanelUpdates));
-        const bool enablePreparationPanelUpdate = config.getBool("ui.enable_preparation_live_update", false);
-        const bool enableAutoTestPanelUpdate = config.getBool("ui.enable_auto_test_live_update", false);
-
         if (skipPlcConnect)
         {
             m_diagVirtualConnected = true;
@@ -841,11 +790,8 @@ namespace WaterTest
                 m_monitorPanel->startUpdate();
 
             // 为提升连接稳定性，复杂页面默认不启动高频定时刷新；按需通过配置逐步打开�?
-            if (enablePreparationPanelUpdate && m_preparationPanel)
-                m_preparationPanel->startUpdate();
-            // 测试区实时刷新在代码层强制关闭，避免与站1控制链路冲突。
-            if (enableAutoTestPanelUpdate && m_autoTestPanel)
-                m_autoTestPanel->startUpdate();
+            if (m_station1Panel)
+                m_station1Panel->syncVisualStateOnce();
         }
 
         m_isConnected = true;
@@ -889,10 +835,8 @@ namespace WaterTest
                 m_preparationPanel->stopUpdate();
             if (m_monitorPanel)
                 m_monitorPanel->stopUpdate();
-            if (m_testPanel)
-                m_testPanel->stopUpdate();
-            if (m_autoTestPanel)
-                m_autoTestPanel->stopUpdate();
+            if (m_station1Panel)
+                m_station1Panel->syncVisualStateOnce();
             if (m_deviceManager)
             {
                 m_deviceManager->stopDataCollection();
