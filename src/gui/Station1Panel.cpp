@@ -8,11 +8,10 @@
  * 场景中每个设备节点都是自定义 QGraphicsItem 子类（ElectricValveItem / RegulatingValveItem / SensorItem / FlowMeterItem 等），
  * 由 buildScene() 一次性构建，之后通过三条定时器周期刷新数据与动画。
  *
- * 数据来源（由 config 键 station.strict_remote_mode 切换）
- * -------------------------------------------------------
- * - 远程模式（strict_remote_mode=true）：从 StationClient 通过 TCP 拉取 SensorData 结构体，
- *   同时优先尝试从本地 DeviceManager 直接读压力传感器（无 4 路上限限制）。
- * - 本地模式（strict_remote_mode=false）：完全依赖 DeviceManager 直接访问 S7-1200 PLC。
+ * 数据来源
+ * --------
+ * - 当 StationClient 已连接时，优先走主控远程链路。
+ * - 当 StationClient 未连接时，回落到本地 DeviceManager 直连 PLC。
  *
  * 三条定时器
  * ----------
@@ -1200,8 +1199,6 @@ namespace WaterTest
             if (!m_scene)
                 return;
 
-            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-
             const auto selected = m_scene->selectedItems();
             if (selected.isEmpty())
                 return;
@@ -1411,8 +1408,7 @@ namespace WaterTest
                 });
 
                 connect(applyBtn, &QPushButton::clicked, &dialog, [&, regulatingValveId]() {
-                    const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-                    if (m_stationClient && strictMode)
+                    if (m_stationClient && m_stationClient->isConnected())
                     {
                         QMessageBox::information(this,
                                                  "暂不支持",
@@ -1471,9 +1467,8 @@ namespace WaterTest
             mainLayout->addLayout(buttons);
 
             connect(openBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
-                const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
                 bool ok = false;
-                if (m_stationClient && strictMode)
+                if (m_stationClient && m_stationClient->isConnected())
                 {
                     ControlCommand cmd;
                     cmd.command_type = 2;
@@ -1494,9 +1489,8 @@ namespace WaterTest
                 dialog.accept();
             });
             connect(closeBtn, &QPushButton::clicked, &dialog, [&, valveId]() {
-                const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
                 bool ok = false;
-                if (m_stationClient && strictMode)
+                if (m_stationClient && m_stationClient->isConnected())
                 {
                     ControlCommand cmd;
                     cmd.command_type = 2;
@@ -1770,6 +1764,60 @@ namespace WaterTest
         }
     }
 
+    void Station1Panel::setStageOverviewState(int stageIndex, const QString &title, const QString &detail, bool ok)
+    {
+        if (stageIndex < 0 || stageIndex >= static_cast<int>(m_stageNameLabels.size()))
+            return;
+
+        setActiveStageIndex(stageIndex);
+
+        auto *nameLabel = m_stageNameLabels[static_cast<size_t>(stageIndex)];
+        if (nameLabel)
+        {
+            const QString headerColor = ok ? QStringLiteral("#2ea84f") : QStringLiteral("#c24b45");
+            nameLabel->setText(title.isEmpty() ? nameLabel->text() : title);
+            nameLabel->setStyleSheet(QString(
+                                         "QLabel#stageName {"
+                                         " color: #f7fbff;"
+                                         " font-weight: 700;"
+                                         " font-size: 12px;"
+                                         " background: %1;"
+                                         " border-radius: 8px;"
+                                         " padding-left: 10px;"
+                                         " }")
+                                         .arg(headerColor));
+        }
+
+        auto *valueLabel = m_stageValueLabels[static_cast<size_t>(stageIndex)][0];
+        if (valueLabel)
+            valueLabel->setText(detail);
+    }
+
+    void Station1Panel::appendStageOverviewIssue(int stageIndex, const QString &issueText)
+    {
+        if (stageIndex < 0 || stageIndex >= static_cast<int>(m_stageNameLabels.size()))
+            return;
+
+        auto *valueLabel = m_stageValueLabels[static_cast<size_t>(stageIndex)][2];
+        if (!valueLabel)
+            return;
+
+        const QString current = valueLabel->text().trimmed();
+        if (current.isEmpty() || current == "--")
+            valueLabel->setText(issueText);
+        else
+            valueLabel->setText(current + QStringLiteral("\n") + issueText);
+
+        valueLabel->setStyleSheet(QString(
+                                      "QLabel {"
+                                      " color: #c24b45;"
+                                      " font-size: 11px;"
+                                      " font-weight: 700;"
+                                      " background-color: #fcfdff;"
+                                      " }")
+                                      );
+    }
+
     void Station1Panel::setRealtimeUpdatesEnabled(bool enabled)
     {
         if (m_flowTimer)
@@ -1799,9 +1847,10 @@ namespace WaterTest
 
     bool Station1Panel::readPressureValueForDisplay(uint16_t configuredSensorId, size_t fallbackIndex, double &pressureKpa) const
     {
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+            return false;
 
-        if (m_stationClient && strictRemoteMode)
+        if (m_stationClient && m_stationClient->isConnected())
         {
             if (m_deviceManager)
             {
@@ -1981,6 +2030,15 @@ namespace WaterTest
 
     bool Station1Panel::controlRelayState(uint8_t index, bool on, const char *source, bool scheduleReconcile)
     {
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+        {
+            qWarning() << "[M100][Station1Panel] relay request rejected because PLC is disconnected"
+                       << "src=" << source
+                       << "index=" << index
+                       << "target=" << on;
+            return false;
+        }
+
         if (isM100RelayIndex(index))
         {
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1994,18 +2052,16 @@ namespace WaterTest
             m_lastM100ToggleMs[index] = nowMs;
         }
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
         const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
         const RelayDef *def = findRelayDefByIndex(relayDefs, index);
         const QString addr = def ? def->addr : QString("Q?");
-        const bool useRemote = (m_stationClient && strictRemoteMode);
+        const bool useRemote = (m_stationClient && m_stationClient->isConnected());
 
         qInfo() << "[M100][Station1Panel] relay state request"
                 << "src=" << source
                 << "index=" << index
                 << "addr=" << addr
                 << "target=" << on
-                << "strictRemoteMode=" << strictRemoteMode
                 << "hasStationClient=" << (m_stationClient != nullptr)
                 << "useRemote=" << useRemote;
 
@@ -2113,15 +2169,22 @@ namespace WaterTest
 
     bool Station1Panel::controlRegulatingValveState(uint16_t id, bool open, const char *source, bool scheduleReconcile)
     {
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        const bool useRemote = (m_stationClient && strictRemoteMode);
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+        {
+            qWarning() << "[Valve][Station1Panel] regulating valve request rejected because PLC is disconnected"
+                       << "src=" << source
+                       << "id=" << id
+                       << "target=" << open;
+            return false;
+        }
+
+        const bool useRemote = (m_stationClient && m_stationClient->isConnected());
         const float targetPercent = open ? 100.0f : 0.0f;
 
         qInfo() << "[Valve][Station1Panel] regulating valve request"
                 << "src=" << source
                 << "id=" << id
                 << "targetPercent=" << targetPercent
-                << "strictRemoteMode=" << strictRemoteMode
                 << "hasStationClient=" << (m_stationClient != nullptr)
                 << "useRemote=" << useRemote;
 
@@ -2248,6 +2311,402 @@ namespace WaterTest
         };
 
         (*runner)();
+    }
+
+    namespace
+    {
+        struct AutoLeakTestConfig
+        {
+            QString name;
+            int buildWaitMs;
+            int holdWaitMs;
+            float minBuildKpa;
+            float p4DropMaxKpa;
+            float p5RiseMaxKpa;
+            bool closeTestValveBeforeBuild;
+        };
+
+        static bool runRegulatingValveOpenAction(DeviceManager *deviceManager,
+                                                 StationClient *stationClient,
+                                                 uint16_t valveId,
+                                                 const char *source,
+                                                 int timeoutMs,
+                                                 double targetOpeningPercent = 100.0)
+        {
+            if (!deviceManager || !deviceManager->isPlcConnected())
+                return false;
+
+            const bool useRemote = (stationClient && stationClient->isConnected());
+
+            bool ok = false;
+            if (useRemote)
+            {
+                ControlCommand cmd;
+                cmd.command_type = 2;
+                cmd.index = static_cast<uint8_t>(valveId - 1);
+                cmd.action = 1;
+                ok = stationClient->sendCommand(cmd);
+            }
+            else
+            {
+                ok = deviceManager->setValveOpeningPercent(valveId, static_cast<float>(targetOpeningPercent));
+            }
+
+            if (!ok)
+                return false;
+
+            const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + timeoutMs;
+            while (QDateTime::currentMSecsSinceEpoch() <= deadlineMs)
+            {
+                deviceManager->updateAllDevices();
+                const auto valve = deviceManager->getRegulatingValve(valveId);
+                if (valve.id != 0 && valve.deviceStatus == DeviceStatus::ONLINE && valve.openingPercent >= 95.0f)
+                {
+                    qInfo() << "[Valve][Station1Panel][AutoOpen] confirmed"
+                            << "src=" << source
+                            << "id=" << valveId
+                            << "openingPercent=" << valve.openingPercent;
+                    return true;
+                }
+
+                QCoreApplication::processEvents();
+                QThread::msleep(100);
+            }
+
+            const auto valve = deviceManager->getRegulatingValve(valveId);
+            qWarning() << "[Valve][Station1Panel][AutoOpen] confirm timeout"
+                       << "src=" << source
+                       << "id=" << valveId
+                       << "openingPercent=" << valve.openingPercent
+                       << "deviceStatus=" << static_cast<int>(valve.deviceStatus);
+            return false;
+        }
+
+        static bool runHighPressureOpenSequence(DeviceManager *deviceManager,
+                                                StationClient *stationClient,
+                                                const char *source)
+        {
+            if (!deviceManager || !deviceManager->isPlcConnected())
+                return false;
+
+            // 统一封装阀门控制：主控在线就走远程，否则走本地 DeviceManager。
+            auto controlRelay = [deviceManager, stationClient](uint8_t index, bool on) -> bool {
+                constexpr int kRelayActionGapMs = 180;
+                if (stationClient && stationClient->isConnected()) {
+                    ControlCommand cmd;
+                    cmd.command_type = 0;
+                    cmd.index = index;
+                    cmd.action = on ? 1 : 0;
+                    const bool ok = stationClient->sendCommand(cmd);
+                    if (ok)
+                        QThread::msleep(kRelayActionGapMs);
+                    return ok;
+                }
+                const bool ok = deviceManager->setRelay(index, on);
+                if (ok)
+                    QThread::msleep(kRelayActionGapMs);
+                return ok;
+            };
+            // 等待指定毫秒数，保持当前线程的事件循环可继续处理界面刷新。
+            auto waitMs = [](int delayMs) {
+                QEventLoop waitLoop;
+                QTimer::singleShot(delayMs, &waitLoop, &QEventLoop::quit);
+                waitLoop.exec();
+            };
+            // 读取待测阀前后压力：PS4 对应前段，PS5 对应后段。
+            auto readPressurePair = [deviceManager]() -> std::pair<PressureSensor, PressureSensor> {
+                deviceManager->updateAllDevices();
+                return {deviceManager->getPressureSensor(4), deviceManager->getPressureSensor(5)};
+            };
+
+            // 高压开阀的关键参数：建压超时、保压等待、目标压力和后端排空阈值。
+            const int buildTimeoutMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_build_timeout_ms", 12000);
+            const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_hold_wait_ms", 2000);
+            const float targetBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_target_kpa", 1000.0f);
+            const float p5DrainKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_p5_drain_kpa", 5.0f);
+            // 先全开，再等待一段时间后关闭待测阀3，贴合工艺流程中的“先充液、再分离”。
+            const int preCloseWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_preclose_wait_ms", 3000);
+
+            qInfo() << "[Valve][Station1Panel][HighPressureOpen] start" << "src=" << source;
+
+            // 第一步：先把与高压建压有关的全部电磁阀打开，形成可充液通路。
+            if (!controlRelay(0, true) || !controlRelay(1, true) || !controlRelay(3, true) || !controlRelay(5, true))
+                return false;
+
+            // 第二步：保持 3 秒，等待管路内流体稳定到位。
+            waitMs(preCloseWaitMs);
+
+            // 第三步：关闭待测阀 3，把待测区与主通路切开，进入后续建压/保压观察阶段。
+            if (!controlRelay(2, false))
+                return false;
+
+            // 第四步：轮询压力，直到前端压力达到目标值且后端压力满足排空要求，才认为高压开阀步骤完成。
+            const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + buildTimeoutMs;
+            PressureSensor p4Build;
+            PressureSensor p5Build;
+            while (true)
+            {
+                const auto pair = readPressurePair();
+                p4Build = pair.first;
+                p5Build = pair.second;
+                qInfo() << "[Valve][Station1Panel][HighPressureOpen] building"
+                        << "p4=" << p4Build.pressure
+                        << "p5=" << p5Build.pressure;
+
+                if (p4Build.pressure >= targetBuildKpa && p5Build.pressure <= p5DrainKpa)
+                    break;
+                if (QDateTime::currentMSecsSinceEpoch() >= deadlineMs)
+                {
+                    qWarning() << "[Valve][Station1Panel][HighPressureOpen] build timeout"
+                               << "p4=" << p4Build.pressure
+                               << "p5=" << p5Build.pressure;
+                    return false;
+                }
+                QCoreApplication::processEvents();
+                QThread::msleep(100);
+            }
+
+            (void)controlRelay(0, false);
+            (void)controlRelay(1, false);
+            (void)controlRelay(3, false);
+                // 第五步：关闭前段相关阀门后保压一段时间，获取最终稳定读数。
+            waitMs(holdWaitMs);
+
+            const auto pHoldPair = readPressurePair();
+            qInfo() << "[Valve][Station1Panel][HighPressureOpen] hold"
+                    << "p4=" << pHoldPair.first.pressure
+                    << "p5=" << pHoldPair.second.pressure;
+            return true;
+        }
+
+        static bool runStation1AutoLeakTest(DeviceManager *deviceManager,
+                                            StationClient *stationClient,
+                                            const AutoLeakTestConfig &config)
+        {
+            if (!deviceManager || !deviceManager->isPlcConnected())
+                return false;
+
+            auto controlRelay = [deviceManager, stationClient](uint8_t index, bool on) -> bool {
+                if (stationClient && stationClient->isConnected()) {
+                    ControlCommand cmd;
+                    cmd.command_type = 0;
+                    cmd.index = index;
+                    cmd.action = on ? 1 : 0;
+                    return stationClient->sendCommand(cmd);
+                }
+                return deviceManager->setRelay(index, on);
+            };
+            auto controlPump = [deviceManager, stationClient](uint8_t index, bool on) -> bool {
+                if (stationClient && stationClient->isConnected()) {
+                    ControlCommand cmd;
+                    cmd.command_type = 1;
+                    cmd.index = index;
+                    cmd.action = on ? 1 : 0;
+                    return stationClient->sendCommand(cmd);
+                }
+                return deviceManager->controlPump(static_cast<uint16_t>(index + 1), on);
+            };
+            auto waitMs = [](int delayMs) {
+                QEventLoop waitLoop;
+                QTimer::singleShot(delayMs, &waitLoop, &QEventLoop::quit);
+                waitLoop.exec();
+            };
+            auto readPressurePair = [deviceManager]() -> std::pair<PressureSensor, PressureSensor> {
+                deviceManager->updateAllDevices();
+                return {deviceManager->getPressureSensor(4), deviceManager->getPressureSensor(5)};
+            };
+
+            const auto pairBefore = readPressurePair();
+            const auto p4Before = pairBefore.first;
+            const auto p5Before = pairBefore.second;
+
+            bool pumpStartedBySelfCheck = false;
+            if (config.closeTestValveBeforeBuild && !controlRelay(2, false))
+                return false;
+
+            if (!controlPump(0, true))
+                return false;
+            pumpStartedBySelfCheck = true;
+
+            const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + config.buildWaitMs;
+            PressureSensor p4Build = p4Before;
+            PressureSensor p5Build = p5Before;
+            while (true)
+            {
+                const auto pair = readPressurePair();
+                p4Build = pair.first;
+                p5Build = pair.second;
+                if (p4Build.pressure >= config.minBuildKpa)
+                    break;
+                if (QDateTime::currentMSecsSinceEpoch() >= deadlineMs)
+                    break;
+                QCoreApplication::processEvents();
+                QThread::msleep(100);
+            }
+
+            if (pumpStartedBySelfCheck)
+                (void)controlPump(0, false);
+
+            if (p4Build.pressure < config.minBuildKpa)
+                return false;
+
+            (void)controlRelay(0, false);
+            (void)controlRelay(1, false);
+            (void)controlRelay(3, false);
+            waitMs(config.holdWaitMs);
+
+            const auto pHoldPair = readPressurePair();
+            const auto p4Hold = pHoldPair.first;
+            const auto p5Hold = pHoldPair.second;
+            const float p4Delta = p4Build.pressure - p4Hold.pressure;
+            const float p5Delta = p5Hold.pressure - p5Build.pressure;
+            const bool externalLeak = (p4Delta >= config.p4DropMaxKpa) && !(p5Delta >= config.p5RiseMaxKpa);
+            const bool internalLeak = (p5Delta >= config.p5RiseMaxKpa) && (p4Delta > 0.0f);
+
+            qInfo() << "[Station1Panel][AutoLeakTest]" << config.name
+                    << "p4Before=" << p4Before.pressure
+                    << "p5Before=" << p5Before.pressure
+                    << "p4Build=" << p4Build.pressure
+                    << "p5Build=" << p5Build.pressure
+                    << "p4Hold=" << p4Hold.pressure
+                    << "p5Hold=" << p5Hold.pressure
+                    << "p4Delta=" << p4Delta
+                    << "p5Delta=" << p5Delta
+                    << "externalLeak=" << externalLeak
+                    << "internalLeak=" << internalLeak;
+
+            return !(externalLeak || internalLeak);
+        }
+    }
+
+    bool Station1Panel::autoLowPressureOpenValve()
+    {
+        // 低压开阀仍沿用单阀开度确认流程。
+        setStageOverviewState(0, QString::fromUtf8("低压开阀"), QString::fromUtf8("执行中…"), true);
+        const bool ok = runRegulatingValveOpenAction(m_deviceManager.get(),
+                                            m_stationClient.get(),
+                                            1,
+                                            "autoLowPressureOpenValve",
+                                            ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_open_timeout_ms", 2500));
+        setStageOverviewState(0, QString::fromUtf8("低压开阀"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+        if (!ok)
+            appendStageOverviewIssue(0, QString::fromUtf8("低压开阀失败，请检查 PLC 和调压阀状态"));
+        return ok;
+    }
+
+    bool Station1Panel::autoHighPressureOpenValve()
+    {
+        // 高压开阀使用工艺步骤化流程：先全开、延时、关待测阀，再做压力确认。
+        setStageOverviewState(1, QString::fromUtf8("高压开阀"), QString::fromUtf8("执行中…"), true);
+        const bool ok = runHighPressureOpenSequence(m_deviceManager.get(),
+                                           m_stationClient.get(),
+                                           "autoHighPressureOpenValve");
+        setStageOverviewState(1, QString::fromUtf8("高压开阀"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+        if (!ok)
+            appendStageOverviewIssue(1, QString::fromUtf8("高压开阀失败，请检查压力建立和待测阀3状态"));
+        return ok;
+    }
+
+    bool Station1Panel::autoLowPressureInternalLeak()
+    {
+        // 低压内泄露复用统一的前后压差判定逻辑，仅替换阈值与建压等待参数。
+        const int buildWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_leak_build_wait_ms", 3000);
+        const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_leak_hold_ms", 3500);
+        const float minBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_leak_min_kpa", 30.0f);
+        const float p4DropMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_leak_p4_drop_kpa", 6.0f);
+        const float p5RiseMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_leak_p5_rise_kpa", 3.0f);
+
+        setStageOverviewState(2,
+                              QString::fromUtf8("低压内泄露"),
+                              QString::fromUtf8("执行中… 建压等待 %1 ms，保压 %2 ms，目标 %3 kPa")
+                                  .arg(buildWaitMs)
+                                  .arg(holdWaitMs)
+                                  .arg(QString::number(minBuildKpa, 'f', 1)),
+                              true);
+        const bool ok = runStation1AutoLeakTest(m_deviceManager.get(),
+                                       m_stationClient.get(),
+                                       {QString::fromUtf8("低压内泄露"),
+                                        buildWaitMs,
+                                        holdWaitMs,
+                                        minBuildKpa,
+                                        p4DropMaxKpa,
+                                        p5RiseMaxKpa,
+                                        true});
+        setStageOverviewState(2, QString::fromUtf8("低压内泄露"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+        if (!ok)
+            appendStageOverviewIssue(2,
+                                     QString::fromUtf8("低压内泄露判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                         .arg(QString::number(p4DropMaxKpa, 'f', 1))
+                                         .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
+        return ok;
+    }
+
+    bool Station1Panel::autoHighPressureInternalLeak()
+    {
+        // 高压内泄露：提高目标建压与压差阈值，仍沿用统一的泄漏判定框架。
+        const int buildWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_leak_build_wait_ms", 3500);
+        const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_leak_hold_ms", 3500);
+        const float minBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_min_kpa", 50.0f);
+        const float p4DropMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_p4_drop_kpa", 8.0f);
+        const float p5RiseMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_p5_rise_kpa", 5.0f);
+
+        setStageOverviewState(3,
+                              QString::fromUtf8("高压内泄露"),
+                              QString::fromUtf8("执行中… 建压等待 %1 ms，保压 %2 ms，目标 %3 kPa")
+                                  .arg(buildWaitMs)
+                                  .arg(holdWaitMs)
+                                  .arg(QString::number(minBuildKpa, 'f', 1)),
+                              true);
+        const bool ok = runStation1AutoLeakTest(m_deviceManager.get(),
+                                       m_stationClient.get(),
+                                       {QString::fromUtf8("高压内泄露"),
+                                        buildWaitMs,
+                                        holdWaitMs,
+                                        minBuildKpa,
+                                        p4DropMaxKpa,
+                                        p5RiseMaxKpa,
+                                        true});
+        setStageOverviewState(3, QString::fromUtf8("高压内泄露"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+        if (!ok)
+            appendStageOverviewIssue(3,
+                                     QString::fromUtf8("高压内泄露判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                         .arg(QString::number(p4DropMaxKpa, 'f', 1))
+                                         .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
+        return ok;
+    }
+
+    bool Station1Panel::autoHighPressureExternalLeak()
+    {
+        // 高压外泄漏：与高压内泄露共用流程，但后端上升阈值更严格，用于区分外泄漏。
+        const int buildWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_external_leak_build_wait_ms", 3500);
+        const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_external_leak_hold_ms", 3500);
+        const float minBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_min_kpa", 50.0f);
+        const float p4DropMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_p4_drop_kpa", 8.0f);
+        const float p5RiseMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_p5_rise_kpa", 1.0f);
+
+        setStageOverviewState(4,
+                              QString::fromUtf8("高压外泄漏"),
+                              QString::fromUtf8("执行中… 建压等待 %1 ms，保压 %2 ms，目标 %3 kPa")
+                                  .arg(buildWaitMs)
+                                  .arg(holdWaitMs)
+                                  .arg(QString::number(minBuildKpa, 'f', 1)),
+                              true);
+        const bool ok = runStation1AutoLeakTest(m_deviceManager.get(),
+                                       m_stationClient.get(),
+                                       {QString::fromUtf8("高压外泄漏"),
+                                        buildWaitMs,
+                                        holdWaitMs,
+                                        minBuildKpa,
+                                        p4DropMaxKpa,
+                                        p5RiseMaxKpa,
+                                        true});
+        setStageOverviewState(4, QString::fromUtf8("高压外泄漏"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+        if (!ok)
+            appendStageOverviewIssue(4,
+                                     QString::fromUtf8("高压外泄漏判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                         .arg(QString::number(p4DropMaxKpa, 'f', 1))
+                                         .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
+        return ok;
     }
 
     void Station1Panel::onSelfCheck()
@@ -2470,19 +2929,25 @@ namespace WaterTest
                        : QString::fromUtf8("离线或未配置"));
         }
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
         auto controlRelay = [&](uint8_t index, bool on) -> bool {
-            if (m_stationClient && strictRemoteMode) {
+            constexpr int kRelayActionGapMs = 180;
+            if (m_stationClient && m_stationClient->isConnected()) {
                 ControlCommand cmd;
                 cmd.command_type = 0;
                 cmd.index = index;
                 cmd.action = on ? 1 : 0;
-                return m_stationClient->sendCommand(cmd);
+                const bool ok = m_stationClient->sendCommand(cmd);
+                if (ok)
+                    QThread::msleep(kRelayActionGapMs);
+                return ok;
             }
-            return m_deviceManager->setRelay(index, on);
+            const bool ok = m_deviceManager->setRelay(index, on);
+            if (ok)
+                QThread::msleep(kRelayActionGapMs);
+            return ok;
         };
         auto controlPump = [&](uint8_t index, bool on) -> bool {
-            if (m_stationClient && strictRemoteMode) {
+            if (m_stationClient && m_stationClient->isConnected()) {
                 ControlCommand cmd;
                 cmd.command_type = 1;
                 cmd.index = index;
@@ -2792,8 +3257,7 @@ namespace WaterTest
         if (!force && !isVisible())
             return;
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        const bool skipRelayButtonPaint = (m_stationClient && strictRemoteMode);
+        const bool skipRelayButtonPaint = (m_stationClient && m_stationClient->isConnected());
 
         if (!m_deviceManager)
             return;
@@ -2899,48 +3363,73 @@ namespace WaterTest
 
     bool Station1Panel::controlStartStop(bool start, const char *source)
     {
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        const bool useRemote = (m_stationClient && strictRemoteMode);
-
-        const int remotePumpIndex = ConfigManager::getInstance().getInt("station1.start_stop.remote_pump_index", 0);
-        const int localPumpId = ConfigManager::getInstance().getInt("station1.start_stop.local_pump_id", 1);
-
-        bool ok = false;
-        if (useRemote)
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
         {
-            if (!m_stationClient->isConnected())
-            {
-                qWarning() << "[Station1Panel] start/stop remote rejected: station client disconnected"
-                           << "source=" << source << "start=" << start;
-                ok = false;
-            }
-            else
-            {
-                ControlCommand cmd;
-                cmd.command_type = 1; // pump
-                cmd.index = static_cast<uint8_t>(std::max(0, remotePumpIndex));
-                cmd.action = start ? 1 : 0;
-                ok = m_stationClient->sendCommand(cmd);
-            }
-        }
-        else if (m_deviceManager)
-        {
-            ok = m_deviceManager->controlPump(static_cast<uint16_t>(std::max(1, localPumpId)), start);
+            qWarning() << "[StartStop][Station1Panel] request rejected because PLC is disconnected"
+                       << "src=" << source
+                       << "start=" << start;
+            return false;
         }
 
-        if (!ok)
-        {
-            QMessageBox::warning(this,
-                                 "操作失败",
-                                 start ? "开始指令下发失败，请检查 PLC/终端连接状态。"
-                                       : "停止指令下发失败，请检查 PLC/终端连接状态。");
-        }
-        return ok;
+        Q_UNUSED(start);
+        Q_UNUSED(source);
+
+        // 泵启停当前暂停，不下发任何控制命令。
+        // 这条路径保留接口，等后续重新接回泵控制逻辑时再恢复。
+        return true;
     }
 
     void Station1Panel::onStartButtonClicked(const char *source)
     {
         qInfo() << "[Station1Panel] start requested" << "source=" << source;
+
+        const QString sourceText = QString::fromUtf8(source ? source : "");
+        if (sourceText == "ui")
+        {
+            if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+            {
+                QMessageBox::warning(this, "操作失败", "PLC 未连接，无法执行开始流程。请先连接 PLC。");
+                return;
+            }
+
+            const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 5> actions{{
+                {"低压开阀", &Station1Panel::autoLowPressureOpenValve},
+                {"高压开阀", &Station1Panel::autoHighPressureOpenValve},
+                {"低压内泄露", &Station1Panel::autoLowPressureInternalLeak},
+                {"高压内泄露", &Station1Panel::autoHighPressureInternalLeak},
+                {"高压外泄漏", &Station1Panel::autoHighPressureExternalLeak},
+            }};
+
+            for (int i = 0; i < static_cast<int>(actions.size()); ++i)
+            {
+                const auto &[name, action] = actions[static_cast<size_t>(i)];
+                setStageOverviewState(i,
+                                      QString::fromUtf8(name),
+                                      QString::fromUtf8("等待执行"),
+                                      true);
+            }
+
+            for (int i = 0; i < static_cast<int>(actions.size()); ++i)
+            {
+                const auto &[name, action] = actions[static_cast<size_t>(i)];
+                qInfo() << "[Station1Panel] start auto action begin" << name;
+                setActiveStageIndex(i);
+                setStageOverviewState(i,
+                                      QString::fromUtf8(name),
+                                      QString::fromUtf8("执行中…"),
+                                      true);
+                const bool ok = (this->*action)();
+                if (!ok)
+                {
+                    QMessageBox::warning(this, "操作失败", QString("%1 执行失败，请检查 PLC 和设备状态。").arg(QString::fromUtf8(name)));
+                    return;
+                }
+            }
+
+            QMessageBox::information(this, "完成", "开始流程已执行完成。");
+            return;
+        }
+
         (void)controlStartStop(true, source);
     }
 
@@ -3569,7 +4058,7 @@ namespace WaterTest
             flowItem->setAlarmDetail(emptyPipeAlarm, excitationAlarm);
         };
 
-        if (m_stationClient && ConfigManager::getInstance().getBool("station.strict_remote_mode", true))
+        if (m_stationClient && m_stationClient->isConnected())
         {
             const SensorData net = m_stationClient->getLatestSensorData();
             const auto visiblePsNumbers = visiblePressureSensorNumbers(m_panelConfig.stationNumber);

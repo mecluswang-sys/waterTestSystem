@@ -53,6 +53,13 @@ namespace WaterTest
         // 连接成功后立即同步一次图元状态（不依赖页面是否可见）
         void syncVisualStateOnce();
 
+        // 自动化操作入口
+        bool autoLowPressureOpenValve();
+        bool autoHighPressureOpenValve();
+        bool autoLowPressureInternalLeak();
+        bool autoHighPressureInternalLeak();
+        bool autoHighPressureExternalLeak();
+
     protected:
         void resizeEvent(QResizeEvent *event) override;
         void showEvent(QShowEvent *event) override;
@@ -71,6 +78,8 @@ namespace WaterTest
         void setupUI();
         void setupStageOverview(QWidget *parent);
         void setActiveStageIndex(int stageIndex);
+        void setStageOverviewState(int stageIndex, const QString &title, const QString &detail, bool ok = true);
+        void appendStageOverviewIssue(int stageIndex, const QString &issueText);
         void buildScene();
         void applyAutoFit();
         void setRealtimeUpdatesEnabled(bool enabled);
@@ -158,6 +167,7 @@ namespace WaterTest
         std::array<qint64, 4> m_lastM100ToggleMs{{0, 0, 0, 0}};
         bool m_lastStartPhysicalPressed = false;
         bool m_lastStopPhysicalPressed = false;
+        int m_startAutoActionIndex = 0;
     };
 
 } // namespace WaterTest
