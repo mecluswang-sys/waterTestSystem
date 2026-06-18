@@ -30,6 +30,13 @@ function Clear-CMakeCache {
 
     $cacheFile = Join-Path $workspaceRoot "build/CMakeCache.txt"
     $cacheDir = Join-Path $workspaceRoot "build/CMakeFiles"
+    $generatedDirs = @(
+        (Join-Path $workspaceRoot "build/.cmake"),
+        (Join-Path $workspaceRoot "build/x64"),
+        (Join-Path $workspaceRoot "build/bin/Debug"),
+        (Join-Path $workspaceRoot "build/bin/Release"),
+        (Join-Path $workspaceRoot "build/WaterTestSystem_autogen")
+    )
 
     if (Test-Path $cacheFile) {
         Remove-Item -Path $cacheFile -Force -ErrorAction SilentlyContinue
@@ -46,6 +53,13 @@ function Clear-CMakeCache {
     else {
         Write-Host "Skip missing: build/CMakeFiles" -ForegroundColor Yellow
     }
+
+    foreach ($dir in $generatedDirs) {
+        if (Test-Path $dir) {
+            Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Removed: $($dir.Replace($workspaceRoot + '\\', ''))"
+        }
+    }
 }
 
 Push-Location $workspaceRoot
@@ -55,6 +69,10 @@ try {
 
     if ($CleanCache -or $Rebuild) {
         Clear-CMakeCache
+        if ($CleanCache -and -not $Rebuild) {
+            Write-Host "Cache cleanup finished." -ForegroundColor Green
+            exit 0
+        }
     }
 
     if ($Rebuild) {

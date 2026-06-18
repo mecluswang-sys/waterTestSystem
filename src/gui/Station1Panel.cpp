@@ -2384,10 +2384,15 @@ namespace WaterTest
 
         static bool runHighPressureOpenSequence(DeviceManager *deviceManager,
                                                 StationClient *stationClient,
-                                                const char *source)
+                                                const char *source,
+                                                QString *failureReason = nullptr)
         {
             if (!deviceManager || !deviceManager->isPlcConnected())
+            {
+                if (failureReason)
+                    *failureReason = QString::fromUtf8("PLC 未连接或设备管理器不可用");
                 return false;
+            }
 
             // 统一封装阀门控制：主控在线就走远程，否则走本地 DeviceManager。
             auto controlRelay = [deviceManager, stationClient](uint8_t index, bool on) -> bool {
@@ -2413,53 +2418,157 @@ namespace WaterTest
                 QTimer::singleShot(delayMs, &waitLoop, &QEventLoop::quit);
                 waitLoop.exec();
             };
-            // 读取待测阀前后压力：PS4 对应前段，PS5 对应后段。
-            auto readPressurePair = [deviceManager]() -> std::pair<PressureSensor, PressureSensor> {
+            // 读取待测阀前后压力：PS6 对应前段，PS7 对应后段。
+            // 与界面读数保持一致：优先本地映射读取，远程模式下本地缺失则回退到网络快照。
+            auto readPressurePair = [deviceManager, stationClient]() -> std::pair<PressureSensor, PressureSensor> {
+                const uint16_t localId6 = resolveLocalPressureSensorId(6);
+                const uint16_t localId7 = resolveLocalPressureSensorId(7);
+
                 deviceManager->updateAllDevices();
-                return {deviceManager->getPressureSensor(4), deviceManager->getPressureSensor(5)};
+                PressureSensor p6 = deviceManager->getPressureSensor(localId6);
+                PressureSensor p7 = deviceManager->getPressureSensor(localId7);
+
+                if (p6.id != 0 && p7.id != 0)
+                    return {p6, p7};
+
+                if (stationClient && stationClient->isConnected())
+                {
+                    const SensorData net = stationClient->getLatestSensorData();
+                    const int idx6 = std::clamp(resolveRemotePressureIndex(6, 2), 0, 3);
+                    const int idx7 = std::clamp(resolveRemotePressureIndex(7, 3), 0, 3);
+
+                    if (p6.id == 0)
+                    {
+                        p6.id = 6;
+                        p6.status = DeviceStatus::ONLINE;
+                        p6.pressure = static_cast<float>(net.pressure[idx6]);
+                    }
+                    if (p7.id == 0)
+                    {
+                        p7.id = 7;
+                        p7.status = DeviceStatus::ONLINE;
+                        p7.pressure = static_cast<float>(net.pressure[idx7]);
+                    }
+                }
+
+                return {p6, p7};
             };
 
             // 高压开阀的关键参数：建压超时、保压等待、目标压力和后端排空阈值。
+            const int regValveId = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_regulating_valve_id", 2);
+            const float regTargetOpening = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_target_opening", 100.0f);
+            const int regOpenTimeoutMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_reg_open_timeout_ms", 2500);
             const int buildTimeoutMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_build_timeout_ms", 12000);
             const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_hold_wait_ms", 2000);
-            const float targetBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_target_kpa", 1000.0f);
-            const float p5DrainKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_p5_drain_kpa", 5.0f);
+            const float targetBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_open_target_kpa", 300.0f);
+            const auto &cfg = ConfigManager::getInstance();
+            const float p7DrainKpa = [&cfg]() {
+                const float newKeyValue = cfg.getFloat("selfcheck.station1.high_pressure_open_p7_drain_kpa", std::numeric_limits<float>::quiet_NaN());
+                if (!std::isnan(newKeyValue))
+                    return newKeyValue;
+                return cfg.getFloat("selfcheck.station1.high_pressure_open_p5_drain_kpa", 30.0f);
+            }();
             // 先全开，再等待一段时间后关闭待测阀3，贴合工艺流程中的“先充液、再分离”。
             const int preCloseWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_open_preclose_wait_ms", 3000);
 
             qInfo() << "[Valve][Station1Panel][HighPressureOpen] start" << "src=" << source;
 
-            // 第一步：先把与高压建压有关的全部电磁阀打开，形成可充液通路。
-            if (!controlRelay(0, true) || !controlRelay(1, true) || !controlRelay(3, true) || !controlRelay(5, true))
+            // 第一步：先把调压阀开度设到 100%，保证高压建压通道可用。
+            qInfo() << "[Valve][Station1Panel][HighPressureOpen] step=1 open regulating valve"
+                    << "id=" << regValveId
+                    << "targetOpening=" << regTargetOpening;
+            if (!runRegulatingValveOpenAction(deviceManager,
+                                              stationClient,
+                                              static_cast<uint16_t>(std::max(1, regValveId)),
+                                              "autoHighPressureOpenValve.reg",
+                                              regOpenTimeoutMs,
+                                              regTargetOpening))
+            {
+                qWarning() << "[Valve][Station1Panel][HighPressureOpen] step=1 failed to set regulating valve";
+                if (failureReason)
+                    *failureReason = QString::fromUtf8("电动调压阀开度设定失败：目标 %1%，阀 ID=%2")
+                                         .arg(QString::number(regTargetOpening, 'f', 1))
+                                         .arg(regValveId);
                 return false;
+            }
 
-            // 第二步：保持 3 秒，等待管路内流体稳定到位。
+            // 第二步：把与高压建压有关的全部电磁阀打开，形成可充液通路。
+            qInfo() << "[Valve][Station1Panel][HighPressureOpen] step=2 open relays"
+                    << "r0=ON" << "r1=ON" << "r3=ON" << "r5=ON";
+            if (!controlRelay(0, true) || !controlRelay(1, true) || !controlRelay(3, true) || !controlRelay(5, true))
+            {
+                qWarning() << "[Valve][Station1Panel][HighPressureOpen] step=2 failed to open pre-relays";
+                if (failureReason)
+                    *failureReason = QString::fromUtf8("前置阀门打开失败：电磁阀1/2/4/5 之一未响应");
+                return false;
+            }
+
+            // 第三步：保持 3 秒，等待管路内流体稳定到位。
             waitMs(preCloseWaitMs);
 
-            // 第三步：关闭待测阀 3，把待测区与主通路切开，进入后续建压/保压观察阶段。
+            // 第四步：关闭待测阀 3，把待测区与主通路切开，进入后续建压/保压观察阶段。
+            qInfo() << "[Valve][Station1Panel][HighPressureOpen] step=4 close test valve" << "r2=OFF";
             if (!controlRelay(2, false))
+            {
+                qWarning() << "[Valve][Station1Panel][HighPressureOpen] step=4 failed to close test valve";
+                if (failureReason)
+                    *failureReason = QString::fromUtf8("待测阀3 关闭失败：电磁阀3 未响应关闭命令");
                 return false;
+            }
 
-            // 第四步：轮询压力，直到前端压力达到目标值且后端压力满足排空要求，才认为高压开阀步骤完成。
+            // 第五步：轮询压力，直到前端压力达到目标值且后端压力满足排空要求，才认为高压开阀步骤完成。
             const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + buildTimeoutMs;
-            PressureSensor p4Build;
-            PressureSensor p5Build;
+            PressureSensor p6Build;
+            PressureSensor p7Build;
             while (true)
             {
                 const auto pair = readPressurePair();
-                p4Build = pair.first;
-                p5Build = pair.second;
+                p6Build = pair.first;
+                p7Build = pair.second;
+                const bool p6Ready = (p6Build.pressure >= targetBuildKpa);
+                const bool p7Ready = (p7Build.pressure <= p7DrainKpa);
                 qInfo() << "[Valve][Station1Panel][HighPressureOpen] building"
-                        << "p4=" << p4Build.pressure
-                        << "p5=" << p5Build.pressure;
+                        << "p6=" << p6Build.pressure
+                        << "p7=" << p7Build.pressure
+                        << "targetP6>=" << targetBuildKpa
+                        << "drainP7<=" << p7DrainKpa
+                        << "p6Ready=" << p6Ready
+                        << "p7Ready=" << p7Ready;
 
-                if (p4Build.pressure >= targetBuildKpa && p5Build.pressure <= p5DrainKpa)
+                if (p6Ready && p7Ready)
                     break;
                 if (QDateTime::currentMSecsSinceEpoch() >= deadlineMs)
                 {
                     qWarning() << "[Valve][Station1Panel][HighPressureOpen] build timeout"
-                               << "p4=" << p4Build.pressure
-                               << "p5=" << p5Build.pressure;
+                               << "p6=" << p6Build.pressure
+                               << "p7=" << p7Build.pressure
+                               << "targetP6>=" << targetBuildKpa
+                               << "drainP7<=" << p7DrainKpa
+                               << "p6Ready=" << p6Ready
+                               << "p7Ready=" << p7Ready;
+                    if (failureReason)
+                    {
+                        if (!p6Ready && !p7Ready)
+                        {
+                            *failureReason = QString::fromUtf8("建压超时：PS6=%1 kPa 未达到目标 %2 kPa，PS7=%3 kPa 未低于阈值 %4 kPa")
+                                                 .arg(QString::number(p6Build.pressure, 'f', 1))
+                                                 .arg(QString::number(targetBuildKpa, 'f', 1))
+                                                 .arg(QString::number(p7Build.pressure, 'f', 1))
+                                                 .arg(QString::number(p7DrainKpa, 'f', 1));
+                        }
+                        else if (!p6Ready)
+                        {
+                            *failureReason = QString::fromUtf8("建压超时：PS6=%1 kPa 未达到目标 %2 kPa")
+                                                 .arg(QString::number(p6Build.pressure, 'f', 1))
+                                                 .arg(QString::number(targetBuildKpa, 'f', 1));
+                        }
+                        else
+                        {
+                            *failureReason = QString::fromUtf8("建压超时：PS7=%1 kPa 未低于阈值 %2 kPa")
+                                                 .arg(QString::number(p7Build.pressure, 'f', 1))
+                                                 .arg(QString::number(p7DrainKpa, 'f', 1));
+                        }
+                    }
                     return false;
                 }
                 QCoreApplication::processEvents();
@@ -2472,10 +2581,10 @@ namespace WaterTest
                 // 第五步：关闭前段相关阀门后保压一段时间，获取最终稳定读数。
             waitMs(holdWaitMs);
 
-            const auto pHoldPair = readPressurePair();
+                const auto pHoldPair = readPressurePair();
             qInfo() << "[Valve][Station1Panel][HighPressureOpen] hold"
-                    << "p4=" << pHoldPair.first.pressure
-                    << "p5=" << pHoldPair.second.pressure;
+                    << "p6=" << pHoldPair.first.pressure
+                    << "p7=" << pHoldPair.second.pressure;
             return true;
         }
 
@@ -2581,16 +2690,127 @@ namespace WaterTest
 
     bool Station1Panel::autoLowPressureOpenValve()
     {
-        // 低压开阀仍沿用单阀开度确认流程。
+        // 低压开阀流程：调压阀1到 12% -> 等 1s -> 开电磁阀1 -> 等 2s -> 开待测阀3 -> 记录 PS6/PS7 变化。
         setStageOverviewState(0, QString::fromUtf8("低压开阀"), QString::fromUtf8("执行中…"), true);
-        const bool ok = runRegulatingValveOpenAction(m_deviceManager.get(),
-                                            m_stationClient.get(),
-                                            1,
-                                            "autoLowPressureOpenValve",
-                                            ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_open_timeout_ms", 2500));
+
+        const int regSettleMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_open_reg_settle_ms", 8000);
+        const int preOpenWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_open_preopen_wait_ms", 5000);
+        const int monitorWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_open_monitor_wait_ms", 2000);
+        const float targetOpening = ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_open_target_opening", 10.0f);
+
+        auto setStage0Value = [this](int row, const QString &text) {
+            if (row < 0 || row >= 3)
+                return;
+            auto *label = m_stageValueLabels[0][static_cast<size_t>(row)];
+            if (!label)
+                return;
+            label->setText(text);
+        };
+
+        auto waitMs = [](int delayMs) {
+            QEventLoop waitLoop;
+            QTimer::singleShot(delayMs, &waitLoop, &QEventLoop::quit);
+            waitLoop.exec();
+        };
+
+        auto readPressureByPsNumber = [this](int psNumber, double &pressureKpa) -> bool {
+            const uint16_t configuredSensorId = configuredPressureSensorId(m_panelConfig, psNumber);
+            if (configuredSensorId == 0)
+                return false;
+            const size_t fallbackIndex = static_cast<size_t>(std::max(0, psNumber - 3));
+            return readPressureValueForDisplay(configuredSensorId, fallbackIndex, pressureKpa);
+        };
+
+        bool ok = true;
+        QString failureReason;
+
+        // 第一步：调压阀1开度设置到 12%。
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+        {
+            ok = false;
+            failureReason = QString::fromUtf8("PLC 未连接，无法执行低压开阀流程");
+        }
+        else if (!m_deviceManager->setValveOpeningPercent(1, targetOpening))
+        {
+            ok = false;
+            failureReason = QString::fromUtf8("电动调压阀1开度设定失败（目标 %1%）").arg(QString::number(targetOpening, 'f', 1));
+        }
+
+        if (ok)
+        {
+            setStage0Value(0, QString::fromUtf8("%1 s").arg(QString::number(static_cast<double>(regSettleMs) / 1000.0, 'f', 1)));
+            waitMs(regSettleMs);
+        }
+
+        // 第二步：打开电磁阀1，等待 2 秒。
+        if (ok && !controlRelayState(0, true, "autoLowPressureOpenValve", false))
+        {
+            ok = false;
+            failureReason = QString::fromUtf8("电磁阀1 打开失败");
+        }
+        if (ok)
+        {
+            setStage0Value(1, QString::fromUtf8("%1 s").arg(QString::number(static_cast<double>(preOpenWaitMs) / 1000.0, 'f', 1)));
+            waitMs(preOpenWaitMs);
+        }
+
+        // 第三步：打开待测阀，记录 PS6/PS7 压力变化。
+        double p6Before = 0.0;
+        double p7Before = 0.0;
+        double p6After = 0.0;
+        double p7After = 0.0;
+
+        if (ok)
+        {
+            if (!readPressureByPsNumber(6, p6Before) || !readPressureByPsNumber(7, p7Before))
+            {
+                ok = false;
+                failureReason = QString::fromUtf8("读取 PS6/PS7 初始压力失败");
+            }
+        }
+
+        if (ok && !controlRelayState(2, true, "autoLowPressureOpenValve", false))
+        {
+            ok = false;
+            failureReason = QString::fromUtf8("待测阀3 打开失败");
+        }
+
+        if (ok)
+        {
+            waitMs(monitorWaitMs);
+            if (!readPressureByPsNumber(6, p6After) || !readPressureByPsNumber(7, p7After))
+            {
+                ok = false;
+                failureReason = QString::fromUtf8("读取 PS6/PS7 变化压力失败");
+            }
+        }
+
+        if (ok && !controlRelayState(2, false, "autoLowPressureOpenValve", false))
+        {
+            ok = false;
+            failureReason = QString::fromUtf8("待测阀3 关闭失败");
+        }
+
+        if (ok)
+        {
+            const double p6Delta = p6After - p6Before;
+            const double p7Delta = p7After - p7Before;
+            setStage0Value(2,
+                           QString::fromUtf8("PS6 %1→%2 (Δ%3) ; PS7 %4→%5 (Δ%6) kPa")
+                               .arg(QString::number(p6Before, 'f', 1))
+                               .arg(QString::number(p6After, 'f', 1))
+                               .arg(QString::number(p6Delta, 'f', 1))
+                               .arg(QString::number(p7Before, 'f', 1))
+                               .arg(QString::number(p7After, 'f', 1))
+                               .arg(QString::number(p7Delta, 'f', 1)));
+        }
+
         setStageOverviewState(0, QString::fromUtf8("低压开阀"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
         if (!ok)
-            appendStageOverviewIssue(0, QString::fromUtf8("低压开阀失败，请检查 PLC 和调压阀状态"));
+            appendStageOverviewIssue(0,
+                                     failureReason.isEmpty()
+                                         ? QString::fromUtf8("低压开阀失败，请检查 PLC 和调压阀状态")
+                                         : QString::fromUtf8("低压开阀失败：%1").arg(failureReason));
         return ok;
     }
 
@@ -2598,18 +2818,27 @@ namespace WaterTest
     {
         // 高压开阀使用工艺步骤化流程：先全开、延时、关待测阀，再做压力确认。
         setStageOverviewState(1, QString::fromUtf8("高压开阀"), QString::fromUtf8("执行中…"), true);
+        QString failureReason;
         const bool ok = runHighPressureOpenSequence(m_deviceManager.get(),
                                            m_stationClient.get(),
-                                           "autoHighPressureOpenValve");
+                                           "autoHighPressureOpenValve",
+                                           &failureReason);
         setStageOverviewState(1, QString::fromUtf8("高压开阀"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
         if (!ok)
-            appendStageOverviewIssue(1, QString::fromUtf8("高压开阀失败，请检查压力建立和待测阀3状态"));
+            appendStageOverviewIssue(1,
+                                     failureReason.isEmpty()
+                                         ? QString::fromUtf8("高压开阀失败，请检查压力建立和待测阀3状态")
+                                         : QString::fromUtf8("高压开阀失败：%1").arg(failureReason));
         return ok;
     }
 
     bool Station1Panel::autoLowPressureInternalLeak()
     {
-        // 低压内泄露复用统一的前后压差判定逻辑，仅替换阈值与建压等待参数。
+        // 低压内泄露：先设置调压阀开度，再复用统一的前后压差判定逻辑。
+        const int regOpenTimeoutMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_leak_reg_open_timeout_ms", 2500);
+        const float targetOpening = ConfigManager::getInstance().getFloat(
+            "selfcheck.station1.low_pressure_leak_target_opening",
+            ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_open_target_opening", 10.0f));
         const int buildWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_leak_build_wait_ms", 3000);
         const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.low_pressure_leak_hold_ms", 3500);
         const float minBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.low_pressure_leak_min_kpa", 30.0f);
@@ -2623,19 +2852,28 @@ namespace WaterTest
                                   .arg(holdWaitMs)
                                   .arg(QString::number(minBuildKpa, 'f', 1)),
                               true);
-        const bool ok = runStation1AutoLeakTest(m_deviceManager.get(),
-                                       m_stationClient.get(),
-                                       {QString::fromUtf8("低压内泄露"),
-                                        buildWaitMs,
-                                        holdWaitMs,
-                                        minBuildKpa,
-                                        p4DropMaxKpa,
-                                        p5RiseMaxKpa,
-                                        true});
+        bool ok = runRegulatingValveOpenAction(m_deviceManager.get(),
+                                               m_stationClient.get(),
+                                               1,
+                                               "autoLowPressureInternalLeak.reg",
+                                               regOpenTimeoutMs,
+                                               targetOpening);
+        if (ok)
+        {
+            ok = runStation1AutoLeakTest(m_deviceManager.get(),
+                                         m_stationClient.get(),
+                                         {QString::fromUtf8("低压内泄露"),
+                                          buildWaitMs,
+                                          holdWaitMs,
+                                          minBuildKpa,
+                                          p4DropMaxKpa,
+                                          p5RiseMaxKpa,
+                                          true});
+        }
         setStageOverviewState(2, QString::fromUtf8("低压内泄露"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
         if (!ok)
             appendStageOverviewIssue(2,
-                                     QString::fromUtf8("低压内泄露判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                     QString::fromUtf8("低压内泄露失败，请检查调压阀开度及 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
                                          .arg(QString::number(p4DropMaxKpa, 'f', 1))
                                          .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
         return ok;
@@ -3392,13 +3630,18 @@ namespace WaterTest
                 return;
             }
 
-            const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 5> actions{{
+            const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 4> actions{{
                 {"低压开阀", &Station1Panel::autoLowPressureOpenValve},
                 {"高压开阀", &Station1Panel::autoHighPressureOpenValve},
-                {"低压内泄露", &Station1Panel::autoLowPressureInternalLeak},
+                // {"低压内泄露", &Station1Panel::autoLowPressureInternalLeak},
                 {"高压内泄露", &Station1Panel::autoHighPressureInternalLeak},
                 {"高压外泄漏", &Station1Panel::autoHighPressureExternalLeak},
             }};
+
+            setStageOverviewState(2,
+                                  QString::fromUtf8("低压内泄露"),
+                                  QString::fromUtf8("已跳过"),
+                                  true);
 
             for (int i = 0; i < static_cast<int>(actions.size()); ++i)
             {
@@ -3421,7 +3664,7 @@ namespace WaterTest
                 const bool ok = (this->*action)();
                 if (!ok)
                 {
-                    QMessageBox::warning(this, "操作失败", QString("%1 执行失败，请检查 PLC 和设备状态。").arg(QString::fromUtf8(name)));
+                    qWarning() << "[Station1Panel] auto action failed" << name;
                     return;
                 }
             }
