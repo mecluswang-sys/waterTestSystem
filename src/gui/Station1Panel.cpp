@@ -2324,6 +2324,8 @@ namespace WaterTest
             float p4DropMaxKpa;
             float p5RiseMaxKpa;
             bool closeTestValveBeforeBuild;
+            int upstreamPressureSensorNumber = 4;
+            int downstreamPressureSensorNumber = 5;
         };
 
         static bool runRegulatingValveOpenAction(DeviceManager *deviceManager,
@@ -2620,9 +2622,42 @@ namespace WaterTest
                 QTimer::singleShot(delayMs, &waitLoop, &QEventLoop::quit);
                 waitLoop.exec();
             };
-            auto readPressurePair = [deviceManager]() -> std::pair<PressureSensor, PressureSensor> {
+            auto readPressurePair = [deviceManager, stationClient, &config]() -> std::pair<PressureSensor, PressureSensor> {
+                const int upstreamPsNumber = std::max(1, config.upstreamPressureSensorNumber);
+                const int downstreamPsNumber = std::max(1, config.downstreamPressureSensorNumber);
+                const uint16_t upstreamLocalId = resolveLocalPressureSensorId(upstreamPsNumber);
+                const uint16_t downstreamLocalId = resolveLocalPressureSensorId(downstreamPsNumber);
+
                 deviceManager->updateAllDevices();
-                return {deviceManager->getPressureSensor(4), deviceManager->getPressureSensor(5)};
+                PressureSensor upstream = deviceManager->getPressureSensor(upstreamLocalId);
+                PressureSensor downstream = deviceManager->getPressureSensor(downstreamLocalId);
+
+                if (upstream.id != 0 && downstream.id != 0)
+                    return {upstream, downstream};
+
+                if (stationClient && stationClient->isConnected())
+                {
+                    const SensorData net = stationClient->getLatestSensorData();
+                    const int upstreamFallback = std::max(0, upstreamPsNumber - 4);
+                    const int downstreamFallback = std::max(0, downstreamPsNumber - 4);
+                    const int upstreamIndex = std::clamp(resolveRemotePressureIndex(upstreamPsNumber, upstreamFallback), 0, 3);
+                    const int downstreamIndex = std::clamp(resolveRemotePressureIndex(downstreamPsNumber, downstreamFallback), 0, 3);
+
+                    if (upstream.id == 0)
+                    {
+                        upstream.id = static_cast<uint16_t>(upstreamPsNumber);
+                        upstream.status = DeviceStatus::ONLINE;
+                        upstream.pressure = static_cast<float>(net.pressure[upstreamIndex]);
+                    }
+                    if (downstream.id == 0)
+                    {
+                        downstream.id = static_cast<uint16_t>(downstreamPsNumber);
+                        downstream.status = DeviceStatus::ONLINE;
+                        downstream.pressure = static_cast<float>(net.pressure[downstreamIndex]);
+                    }
+                }
+
+                return {upstream, downstream};
             };
 
             const auto pairBefore = readPressurePair();
@@ -2672,13 +2707,15 @@ namespace WaterTest
             const bool externalLeak = (p4Delta >= config.p4DropMaxKpa) && !(p5Delta >= config.p5RiseMaxKpa);
             const bool internalLeak = (p5Delta >= config.p5RiseMaxKpa) && (p4Delta > 0.0f);
 
-            qInfo() << "[Station1Panel][AutoLeakTest]" << config.name
-                    << "p4Before=" << p4Before.pressure
-                    << "p5Before=" << p5Before.pressure
-                    << "p4Build=" << p4Build.pressure
-                    << "p5Build=" << p5Build.pressure
-                    << "p4Hold=" << p4Hold.pressure
-                    << "p5Hold=" << p5Hold.pressure
+                const QString upstreamTag = QString::fromUtf8("PS%1").arg(std::max(1, config.upstreamPressureSensorNumber));
+                const QString downstreamTag = QString::fromUtf8("PS%1").arg(std::max(1, config.downstreamPressureSensorNumber));
+                qInfo() << "[Station1Panel][AutoLeakTest]" << config.name
+                    << (upstreamTag + "Before=") << p4Before.pressure
+                    << (downstreamTag + "Before=") << p5Before.pressure
+                    << (upstreamTag + "Build=") << p4Build.pressure
+                    << (downstreamTag + "Build=") << p5Build.pressure
+                    << (upstreamTag + "Hold=") << p4Hold.pressure
+                    << (downstreamTag + "Hold=") << p5Hold.pressure
                     << "p4Delta=" << p4Delta
                     << "p5Delta=" << p5Delta
                     << "externalLeak=" << externalLeak
@@ -2903,11 +2940,13 @@ namespace WaterTest
                                         minBuildKpa,
                                         p4DropMaxKpa,
                                         p5RiseMaxKpa,
-                                        true});
+                                        true,
+                                        6,
+                                        7});
         setStageOverviewState(3, QString::fromUtf8("高压内泄露"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
         if (!ok)
             appendStageOverviewIssue(3,
-                                     QString::fromUtf8("高压内泄露判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                     QString::fromUtf8("高压内泄露判定失败，请检查 PS6/PS7 压力变化，阈值：PS6 降幅 %1 kPa，PS7 升幅 %2 kPa")
                                          .arg(QString::number(p4DropMaxKpa, 'f', 1))
                                          .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
         return ok;
@@ -2937,11 +2976,13 @@ namespace WaterTest
                                         minBuildKpa,
                                         p4DropMaxKpa,
                                         p5RiseMaxKpa,
-                                        true});
+                                        true,
+                                        6,
+                                        7});
         setStageOverviewState(4, QString::fromUtf8("高压外泄漏"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
         if (!ok)
             appendStageOverviewIssue(4,
-                                     QString::fromUtf8("高压外泄漏判定失败，请检查 PS4/PS5 压力变化，阈值：PS4 降幅 %1 kPa，PS5 升幅 %2 kPa")
+                                     QString::fromUtf8("高压外泄漏判定失败，请检查 PS6/PS7 压力变化，阈值：PS6 降幅 %1 kPa，PS7 升幅 %2 kPa")
                                          .arg(QString::number(p4DropMaxKpa, 'f', 1))
                                          .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
         return ok;

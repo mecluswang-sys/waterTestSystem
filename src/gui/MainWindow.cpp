@@ -23,6 +23,8 @@
 #include <QProgressBar>
 #include <QApplication>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QDialog>
 #include <QFormLayout>
 #include <QDialogButtonBox>
@@ -1069,7 +1071,28 @@ namespace WaterTest
     void MainWindow::onConfig()
     {
         auto &config = ConfigManager::getInstance();
-        config.loadConfig("config/system.conf");
+        QString configPath;
+        const QStringList candidatePaths = {
+            QStringLiteral("config/system.conf"),
+            QDir::current().absoluteFilePath(QStringLiteral("config/system.conf")),
+            QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("config/system.conf")),
+            QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../config/system.conf"))
+        };
+
+        for (const QString &candidate : candidatePaths)
+        {
+            if (QFileInfo::exists(candidate))
+            {
+                configPath = QDir::cleanPath(candidate);
+                break;
+            }
+        }
+        if (configPath.isEmpty())
+        {
+            configPath = QDir::cleanPath(candidatePaths.first());
+        }
+
+        config.loadConfig(configPath.toStdString());
 
         QDialog dialog(this);
         dialog.setWindowTitle("测试参数设置");
@@ -1130,13 +1153,10 @@ namespace WaterTest
 
         auto *titleLabel = new QLabel("测试参数配置", &dialog);
         titleLabel->setStyleSheet("font-size: 18px; font-weight: 700; color: #dbeafe; background: transparent;");
-        auto *hintLabel = new QLabel("用于设置当前批次的目标压力、电压、阀门策略与分控台。", &dialog);
+        auto *hintLabel = new QLabel("用于设置当前批次的电磁阀规格与分控台。", &dialog);
         hintLabel->setProperty("role", "hint");
         mainLayout->addWidget(titleLabel);
         mainLayout->addWidget(hintLabel);
-
-        auto *targetGroup = new QGroupBox("目标参数", &dialog);
-        auto *targetForm = new QFormLayout(targetGroup);
 
         auto makeInputWithUnit = [&](QWidget *input, const QString &unitText) {
             auto *rowWidget = new QWidget(&dialog);
@@ -1151,39 +1171,174 @@ namespace WaterTest
             return rowWidget;
         };
 
-        auto *targetPressure = new QDoubleSpinBox(&dialog);
-        targetPressure->setRange(0.0, 20.0);
-        targetPressure->setDecimals(2);
-        targetPressure->setSingleStep(0.05);
-        targetPressure->setRange(0.0, 1000.0);
-        targetPressure->setValue(config.getFloat("station.test.target_pressure_kpa", 100.0f));
-        targetForm->addRow("测试压力:", makeInputWithUnit(targetPressure, "kPa"));
+        auto *specGroup = new QGroupBox("电磁阀规格", &dialog);
+        auto *specForm = new QFormLayout(specGroup);
 
-        auto *targetVoltage = new QDoubleSpinBox(&dialog);
-        targetVoltage->setRange(0.0, 500.0);
-        targetVoltage->setDecimals(1);
-        targetVoltage->setSingleStep(0.5);
-        targetVoltage->setValue(config.getFloat("station.test.target_voltage_v", 24.0f));
-        targetForm->addRow("测试电压:", makeInputWithUnit(targetVoltage, "V"));
+        auto addCodeComboItems = [](QComboBox *combo, const QList<QPair<QString, QString>> &options) {
+            for (const auto &option : options)
+            {
+                combo->addItem(option.second, option.first);
+            }
+        };
 
-        mainLayout->addWidget(targetGroup);
+        auto selectComboByCode = [](QComboBox *combo, const std::string &code) {
+            const QString key = QString::fromStdString(code).trimmed().toUpper();
+            int idx = combo->findData(key);
+            if (idx < 0)
+            {
+                idx = combo->findData(QString::fromStdString(code).trimmed());
+            }
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+        };
 
-        auto *strategyGroup = new QGroupBox("执行策略", &dialog);
-        auto *strategyForm = new QFormLayout(strategyGroup);
+        auto *solenoidType = new QComboBox(&dialog);
+        addCodeComboItems(solenoidType, {
+                                          {"ZS", "ZS"},
+                                          {"SLA", "SLA"},
+                                          {"SLG", "SLG"},
+                                          {"SLE", "SLE"},
+                                          {"SLV", "SLV"},
+                                      });
+        selectComboByCode(solenoidType, config.getString("station.test.solenoid_type", "ZS"));
+        specForm->addRow("电磁阀种类:", solenoidType);
 
-        auto *valveMode = new QComboBox(&dialog);
-        valveMode->addItem("常开 (NO)", "NO");
-        valveMode->addItem("常闭 (NC)", "NC");
-        const QString mode = QString::fromStdString(config.getString("station.test.valve_mode", "NO")).toUpper();
-        valveMode->setCurrentIndex(mode == "NC" ? 1 : 0);
-        strategyForm->addRow("阀门类型:", valveMode);
+        auto *controlMode = new QComboBox(&dialog);
+        addCodeComboItems(controlMode, {
+                                        {"1", "常闭"},
+                                        {"2", "常开"},
+                                    });
+        selectComboByCode(controlMode, config.getString("station.test.control_mode", "1"));
+        specForm->addRow("控制方式:", controlMode);
 
-        auto *openCount = new QSpinBox(&dialog);
-        openCount->setRange(1, 1000000);
-        openCount->setValue(config.getInt("station.test.open_count", 10));
-        strategyForm->addRow("开阀次数:", makeInputWithUnit(openCount, "次"));
+        auto *coilConfig = new QComboBox(&dialog);
+        addCodeComboItems(coilConfig, {
+                                       {"D", "D"},
+                                       {"A", "A"},
+                                       {"N", "N"},
+                                       {"U", "U"},
+                                       {"W", "W"},
+                                       {"X", "X"},
+                                       {"S", "S"},
+                                       {"M", "M"},
+                                   });
+        selectComboByCode(coilConfig, config.getString("station.test.coil_config", "D"));
+        specForm->addRow("线圈配置形式:", coilConfig);
 
-        mainLayout->addWidget(strategyGroup);
+        auto *coilClass = new QComboBox(&dialog);
+        addCodeComboItems(coilClass, {
+                                      {"F", "F级"},
+                                      {"H", "H级"},
+                                  });
+        selectComboByCode(coilClass, config.getString("station.test.coil_class", "F"));
+        specForm->addRow("线圈等级:", coilClass);
+
+        auto *voltage = new QComboBox(&dialog);
+        addCodeComboItems(voltage, {
+                                    {"02", "AC220V"},
+                                    {"01", "AC110V"},
+                                    {"03", "AC36V"},
+                                    {"04", "AC48V"},
+                                    {"05", "AC24V"},
+                                    {"06", "AC12V"},
+                                    {"07", "24-220V AC/DC通用"},
+                                    {"08", "AV380V"},
+                                    {"09", "脉冲电压DC9-20V"},
+                                    {"12", "DC12V"},
+                                    {"13", "DC24V"},
+                                    {"14", "DC110V"},
+                                    {"15", "DC220V"},
+                                    {"16", "DC36V"},
+                                    {"17", "DC48V"},
+                                    {"18", "DC6V"},
+                                    {"19", "DC5V"},
+                                });
+        selectComboByCode(voltage, config.getString("station.test.voltage_code", "02"));
+        specForm->addRow("电压:", voltage);
+
+        auto *sealMaterial = new QComboBox(&dialog);
+        addCodeComboItems(sealMaterial, {
+                                         {"N", "NBR丁晴橡胶"},
+                                         {"V", "VITON氟橡胶"},
+                                         {"E", "EPDM三元乙丙橡胶"},
+                                         {"T", "Teflon聚四氟乙烯"},
+                                         {"G", "硅橡胶"},
+                                         {"R", "HNBR"},
+                                         {"K", "PEEK"},
+                                         {"P", "PU聚氨酯"},
+                                     });
+        selectComboByCode(sealMaterial, config.getString("station.test.seal_material", "N"));
+        specForm->addRow("密封材料:", sealMaterial);
+
+        auto *bodyMaterialType = new QComboBox(&dialog);
+        addCodeComboItems(bodyMaterialType, {
+                                             {"1", "锻铜"},
+                                             {"2", "铸铜"},
+                                             {"3", "SS316不锈钢"},
+                                             {"4", "SS304不锈钢"},
+                                             {"5", "不锈钢"},
+                                             {"6", "铸铁"},
+                                             {"7", "塑料"},
+                                             {"8", "铝"},
+                                         });
+        selectComboByCode(bodyMaterialType, config.getString("station.test.body_material_type", "1"));
+        specForm->addRow("阀体材料类型:", bodyMaterialType);
+
+        auto *connectionType = new QComboBox(&dialog);
+        addCodeComboItems(connectionType, {
+                                           {"A", "1/8\""},
+                                           {"B", "1/4\""},
+                                           {"C", "3/8\""},
+                                           {"D", "1/2\""},
+                                           {"E", "3/4\""},
+                                           {"G", "1\""},
+                                           {"H", "1 1/4\""},
+                                           {"J", "1 1/2\""},
+                                           {"K", "2\""},
+                                           {"L", "2 1/2\""},
+                                           {"M", "3\""},
+                                           {"N", "4\""},
+                                           {"F", "法兰连接"},
+                                       });
+        selectComboByCode(connectionType, config.getString("station.test.connection_type", "A"));
+        specForm->addRow("连接方式:", connectionType);
+
+        auto *flowDiameter = new QComboBox(&dialog);
+        addCodeComboItems(flowDiameter, {
+                                        {"01", "1.0"},
+                                        {"02", "2.0"},
+                                        {"03", "3.0"},
+                                        {"04", "4.0"},
+                                        {"05", "5.0"},
+                                        {"06", "6.0"},
+                                        {"08", "8.0"},
+                                        {"09", "9.0"},
+                                        {"10", "10.0"},
+                                        {"13", "13.0"},
+                                        {"15", "15.0"},
+                                        {"16", "16.0"},
+                                        {"20", "20.0"},
+                                        {"25", "25.0"},
+                                        {"32", "32.0"},
+                                    });
+        selectComboByCode(flowDiameter, config.getString("station.test.flow_diameter_mm_code", "01"));
+        specForm->addRow("流量通经(mm):", flowDiameter);
+
+        auto *optionalFeature = new QComboBox(&dialog);
+        optionalFeature->addItem("无", "");
+        addCodeComboItems(optionalFeature, {
+                                           {"M", "配手动操作器"},
+                                           {"L", "带指示灯"},
+                                           {"K", "安装支架"},
+                                           {"N", "美标NPT连接"},
+                                           {"P", "PT螺纹连接器"},
+                                           {"R", "RC螺纹连接器"},
+                                           {"T", "电子定时器"},
+                                           {"Y", "带信号反馈"},
+                                       });
+        selectComboByCode(optionalFeature, config.getString("station.test.optional_feature", ""));
+        specForm->addRow("其它选配:", optionalFeature);
+
+        mainLayout->addWidget(specGroup);
 
         auto *stationGroup = new QGroupBox("分控台", &dialog);
         auto *stationForm = new QFormLayout(stationGroup);
@@ -1207,20 +1362,46 @@ namespace WaterTest
         stationForm->addRow("参数预览:", previewLabel);
 
         auto updatePreview = [&]() {
+            const QString optionalCode = optionalFeature->currentData().toString();
+            const QString modelCode = QString("%1%2%3%4%5%6%7%8%9%10")
+                                          .arg(solenoidType->currentData().toString())
+                                          .arg(controlMode->currentData().toString())
+                                          .arg(coilConfig->currentData().toString())
+                                          .arg(coilClass->currentData().toString())
+                                          .arg(voltage->currentData().toString())
+                                          .arg(sealMaterial->currentData().toString())
+                                          .arg(bodyMaterialType->currentData().toString())
+                                          .arg(connectionType->currentData().toString())
+                                          .arg(flowDiameter->currentData().toString())
+                                          .arg(optionalCode.isEmpty() ? QString() : QString("-") + optionalCode);
+
             previewLabel->setText(
-                QString("Pressure: %1 kPa\nVoltage : %2 V\nValve   : %3\nCycles  : %4\nStation : %5")
-                    .arg(targetPressure->value(), 0, 'f', 2)
-                    .arg(targetVoltage->value(), 0, 'f', 1)
-                    .arg(valveMode->currentText())
-                    .arg(openCount->value())
-                    .arg(subStation->currentText()));
+                QString("Station : %1\nSpec    : %2-%3-%4-%5-%6-%7-%8-%9-%10%11\n型号     : %12")
+                    .arg(subStation->currentText())
+                    .arg(solenoidType->currentText())
+                    .arg(controlMode->currentText())
+                    .arg(coilConfig->currentText())
+                    .arg(coilClass->currentText())
+                    .arg(voltage->currentText())
+                    .arg(sealMaterial->currentText())
+                    .arg(bodyMaterialType->currentText())
+                    .arg(connectionType->currentText())
+                    .arg(flowDiameter->currentText())
+                    .arg(optionalCode.isEmpty() ? QString() : QString("-") + optionalFeature->currentText())
+                    .arg(modelCode));
         };
 
-        connect(targetPressure, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog, [updatePreview](double) { updatePreview(); });
-        connect(targetVoltage, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog, [updatePreview](double) { updatePreview(); });
-        connect(openCount, QOverload<int>::of(&QSpinBox::valueChanged), &dialog, [updatePreview](int) { updatePreview(); });
-        connect(valveMode, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
         connect(subStation, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(solenoidType, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(controlMode, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(coilConfig, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(coilClass, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(voltage, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(sealMaterial, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(bodyMaterialType, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(connectionType, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(flowDiameter, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
+        connect(optionalFeature, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, [updatePreview](int) { updatePreview(); });
 
         updatePreview();
         mainLayout->addWidget(stationGroup);
@@ -1231,11 +1412,17 @@ namespace WaterTest
         buttons->button(QDialogButtonBox::Cancel)->setText("取消");
 
         connect(resetBtn, &QPushButton::clicked, &dialog, [=]() {
-            targetPressure->setValue(100.0);
-            targetVoltage->setValue(24.0);
-            valveMode->setCurrentIndex(0);
-            openCount->setValue(10);
             subStation->setCurrentIndex(0);
+            solenoidType->setCurrentIndex(0);
+            controlMode->setCurrentIndex(0);
+            coilConfig->setCurrentIndex(0);
+            coilClass->setCurrentIndex(0);
+            voltage->setCurrentIndex(0);
+            sealMaterial->setCurrentIndex(0);
+            bodyMaterialType->setCurrentIndex(0);
+            connectionType->setCurrentIndex(0);
+            flowDiameter->setCurrentIndex(0);
+            optionalFeature->setCurrentIndex(0);
         });
 
         connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -1244,19 +1431,31 @@ namespace WaterTest
 
         if (dialog.exec() == QDialog::Accepted)
         {
-            config.setFloat("station.test.target_pressure_kpa", static_cast<float>(targetPressure->value()));
-            config.setFloat("station.test.target_voltage_v", static_cast<float>(targetVoltage->value()));
-            config.setString("station.test.valve_mode", valveMode->currentData().toString().toStdString());
-            config.setInt("station.test.open_count", openCount->value());
             config.setInt("station.test.sub_station_id", subStation->currentData().toInt());
+            config.setString("station.test.solenoid_type", solenoidType->currentData().toString().toStdString());
+            config.setString("station.test.control_mode", controlMode->currentData().toString().toStdString());
+            config.setString("station.test.coil_config", coilConfig->currentData().toString().toStdString());
+            config.setString("station.test.coil_class", coilClass->currentData().toString().toStdString());
+            config.setString("station.test.voltage_code", voltage->currentData().toString().toStdString());
+            config.setString("station.test.seal_material", sealMaterial->currentData().toString().toStdString());
+            config.setString("station.test.body_material_type", bodyMaterialType->currentData().toString().toStdString());
+            config.setString("station.test.connection_type", connectionType->currentData().toString().toStdString());
+            config.setString("station.test.flow_diameter_mm_code", flowDiameter->currentData().toString().toStdString());
+            config.setString("station.test.optional_feature", optionalFeature->currentData().toString().toStdString());
 
-            if (config.saveConfig("config/system.conf"))
+            QFileInfo cfgInfo(configPath);
+            QDir().mkpath(cfgInfo.absolutePath());
+
+            if (config.saveConfig(configPath.toStdString()))
             {
                 statusBar()->showMessage("测试参数已保存", 3000);
             }
             else
             {
-                QMessageBox::warning(this, "保存失败", "无法写入 config/system.conf，请检查文件权限。");
+                QMessageBox::warning(this,
+                                     "保存失败",
+                                     QString("无法写入配置文件：%1\n请检查文件权限。")
+                                         .arg(QDir::toNativeSeparators(configPath)));
             }
         }
     }
