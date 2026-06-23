@@ -152,7 +152,7 @@ namespace WaterTest
             std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}},
             std::array<QLabel *, 3>{{nullptr, nullptr, nullptr}}
         }};
-        int m_activeStageIndex = 0;
+        int m_activeStageIndex = -1;
 
         // M100.0 ~ M100.3 置位后若被 PLC 快速复位，用于触发可视化提示
         std::array<bool, 4> m_expectM100Hold{{false, false, false, false}};
@@ -167,7 +167,7 @@ namespace WaterTest
         std::array<qint64, 4> m_lastM100ToggleMs{{0, 0, 0, 0}};
         bool m_lastStartPhysicalPressed = false;
         bool m_lastStopPhysicalPressed = false;
-        int m_startAutoActionIndex = 0;
+        bool m_autoSequenceRunning = false;
     };
 
 } // namespace WaterTest
