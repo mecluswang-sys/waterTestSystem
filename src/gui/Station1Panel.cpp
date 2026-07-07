@@ -2485,7 +2485,7 @@ namespace WaterTest
             if (!runRegulatingValveOpenAction(deviceManager,
                                               stationClient,
                                               static_cast<uint16_t>(std::max(1, regValveId)),
-                                              "autoHighPressureOpenValve.reg",
+                                              "autoLowPressureInternalLeakStage.reg",
                                               regOpenTimeoutMs,
                                               regTargetOpening))
             {
@@ -2891,7 +2891,7 @@ namespace WaterTest
         return ok;
     }
 
-    bool Station1Panel::autoHighPressureOpenValve()
+    bool Station1Panel::autoLowPressureInternalLeakStage()
     {
         // 低压内泄漏测试流程：调压阀1到 8% -> 等待稳定 -> 关闭电磁阀1 -> 100ms后关闭待测阀 -> 100ms后关闭电磁阀2 -> 2秒后关闭电磁阀4 -> 监控10秒 -> 判断PS6<PS4-10kPa
         setStageOverviewState(1, QString::fromUtf8("低压内泄漏"), QString::fromUtf8("执行中…"), true);
@@ -2958,7 +2958,7 @@ namespace WaterTest
         }
 
         // 步骤3：关闭电磁阀1（继电器 index=0）。
-        if (ok && !controlRelayState(0, false, "autoLowPressureInternalLeak", false))
+        if (ok && !controlRelayState(0, false, "autoHighPressureLeakStage", false))
         {
             ok = false;
             failureReason = QString::fromUtf8("电磁阀1 关闭失败");
@@ -2968,7 +2968,7 @@ namespace WaterTest
         if (ok)
         {
             waitMs(postRegDelay100Ms);
-            if (!controlRelayState(2, false, "autoLowPressureInternalLeak", false))
+            if (!controlRelayState(2, false, "autoHighPressureLeakStage", false))
             {
                 ok = false;
                 failureReason = QString::fromUtf8("待测阀 关闭失败");
@@ -2979,7 +2979,7 @@ namespace WaterTest
         if (ok)
         {
             waitMs(postValveDelay100Ms);
-            if (!controlRelayState(1, false, "autoLowPressureInternalLeak", false))
+            if (!controlRelayState(1, false, "autoHighPressureLeakStage", false))
             {
                 ok = false;
                 failureReason = QString::fromUtf8("电磁阀2 关闭失败");
@@ -2990,7 +2990,7 @@ namespace WaterTest
         if (ok)
         {
             waitMs(endPressureDrainWaitMs);
-            if (!controlRelayState(3, false, "autoLowPressureInternalLeak", false))
+            if (!controlRelayState(3, false, "autoHighPressureLeakStage", false))
             {
                 ok = false;
                 failureReason = QString::fromUtf8("电磁阀4 关闭失败");
@@ -3058,7 +3058,7 @@ namespace WaterTest
         return ok;
     }
 
-    bool Station1Panel::autoLowPressureInternalLeak()
+    bool Station1Panel::autoHighPressureLeakStage()
     {
         // 第3阶段：高压泄露测试（同时判定高压外泄漏与高压内泄漏）。
         setStageOverviewState(2, QString::fromUtf8("高压泄露"), QString::fromUtf8("执行中…"), true);
@@ -3070,7 +3070,8 @@ namespace WaterTest
         const int openV4HoldMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_leak_stage_open_v4_hold_ms", 3000);
         const int p7MonitorMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_leak_stage_p7_monitor_ms", 3000);
         const int sampleIntervalMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_leak_stage_sample_ms", 100);
-        const float ps6DropThresholdKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_stage_ps6_drop_kpa", 10.0f);
+        // 这里暂时先调整到150kPa
+        const float ps6DropThresholdKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_stage_ps6_drop_kpa", 150.0f);
         const float ps7RiseThresholdKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_leak_stage_ps7_rise_kpa", 10.0f);
 
         auto setStage2Value = [this](int row, const QString &text) {
@@ -3146,11 +3147,11 @@ namespace WaterTest
             waitMs(regOpenSettleMs);
         }
 
-        // 2) 关闭电磁阀4，延迟5秒。
-        if (ok && !controlRelayState(3, false, "autoHighPressureLeakStage", false))
+        // 2) 关闭待测阀（电磁阀3），延迟5秒。
+        if (ok && !controlRelayState(2, false, "autoHighPressureLeakStage", false))
         {
             ok = false;
-            failureReason = QString::fromUtf8("步骤2失败：电磁阀4 关闭失败");
+            failureReason = QString::fromUtf8("步骤2失败：待测阀 关闭失败");
         }
         if (ok)
             waitMs(closeV4WaitMs);
@@ -3190,10 +3191,12 @@ namespace WaterTest
             ok = false;
             failureReason = QString::fromUtf8("步骤4失败：电动调压阀1 置0%失败");
         }
-        if (ok && !controlRelayState(2, false, "autoHighPressureLeakStage", false))
+        
+        // 4) 关闭电磁阀4，延迟1秒。建立空压区域
+        if (ok && !controlRelayState(3, false, "autoHighPressureLeakStage", false))
         {
             ok = false;
-            failureReason = QString::fromUtf8("步骤4失败：待测阀 关闭失败");
+            failureReason = QString::fromUtf8("步骤4失败：电磁阀4 关闭失败");
         }
 
         // 步骤4动作完成后，延迟 1 秒再记录 PS6/PS4 起始值。
@@ -3342,7 +3345,7 @@ namespace WaterTest
         return ok;
     }
 
-    bool Station1Panel::autoHighPressureInternalLeak()
+    bool Station1Panel::autoFlowTestStage()
     {
         // 第4阶段：流量测试前置。预开电磁阀1/2/3/4，调压阀1设到34%，稳定8秒。
         setStageOverviewState(3, QString::fromUtf8("流量测试"), QString::fromUtf8("执行中…"), true);
@@ -4201,9 +4204,9 @@ namespace WaterTest
 
             const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 4> actions{{
                 {"开阀测试", &Station1Panel::autoLowPressureOpenValve},
-                {"低压内泄漏", &Station1Panel::autoHighPressureOpenValve},
-                {"高压泄露", &Station1Panel::autoLowPressureInternalLeak},
-                {"流量测试", &Station1Panel::autoHighPressureInternalLeak},
+                {"低压内泄漏", &Station1Panel::autoLowPressureInternalLeakStage},
+                {"高压泄露", &Station1Panel::autoHighPressureLeakStage},
+                {"流量测试", &Station1Panel::autoFlowTestStage},
             }};
 
             m_autoSequenceRunning = true;

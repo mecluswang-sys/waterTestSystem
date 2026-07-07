@@ -55,9 +55,9 @@ namespace WaterTest
 
         // 自动化操作入口
         bool autoLowPressureOpenValve();
-        bool autoHighPressureOpenValve();
-        bool autoLowPressureInternalLeak();
-        bool autoHighPressureInternalLeak();
+        bool autoLowPressureInternalLeakStage();
+        bool autoHighPressureLeakStage();
+        bool autoFlowTestStage();
         bool autoHighPressureExternalLeak();
 
     protected:
