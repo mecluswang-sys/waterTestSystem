@@ -154,6 +154,50 @@ namespace WaterTest
          */
         std::vector<FrequencyPump> getAllPumps() const;
 
+        // ======== 直流电源（KEYSIGHT E3634A / RS232）相关 ========
+        /**
+         * @brief 设置 E3634A 输出开关
+         * @param on true=开启输出, false=关闭输出
+         * @return 是否成功
+         */
+        bool setDcPowerOutput(bool on);
+
+        /**
+         * @brief 设置 E3634A 电压/电流设定值
+         * @param voltageV 电压设定值(V)
+         * @param currentA 电流限值(A)
+         * @return 是否成功
+         */
+        bool setDcPowerSetpoint(float voltageV, float currentA);
+
+        /**
+         * @brief 读取 E3634A 实测电压/电流
+         * @param voltageV 输出实测电压(V)
+         * @param currentA 输出实测电流(A)
+         * @return 是否成功
+         */
+        bool readDcPowerMeasurements(float &voltageV, float &currentA);
+
+        /**
+         * @brief 读取 E3634A 设备识别字符串(*IDN?)
+         * @param idn 输出设备识别字符串
+         * @return 是否成功
+         */
+        bool getDcPowerIdentity(std::string &idn);
+
+        /**
+         * @brief 读取 E3634A 当前错误队列（SYST:ERR?）
+         * @param errorText 输出错误文本
+         * @return 是否成功
+         */
+        bool readDcPowerErrorCode(std::string &errorText);
+
+        /**
+         * @brief 获取最近一次 E3634A 操作错误（软件侧）
+         * @return 错误文本，空表示无错误
+         */
+        std::string getDcPowerLastError() const;
+
         // ======== 电动调压阀相关 ========
         /**
          * @brief 开环模式：直接设定阀门开度，写入 AO (端子10-11, 4-20mA)
@@ -343,6 +387,7 @@ namespace WaterTest
         bool m_running;
         std::shared_ptr<std::thread> m_collectionThread;
         mutable std::mutex m_dataMutex;
+        std::string m_dcPowerLastError;
 
         // 私有方法
         void collectionThreadFunc(int intervalMs);
@@ -355,6 +400,7 @@ namespace WaterTest
         bool readSystemStatus();
         void checkAlarms();
         void addAlarm(AlarmLevel level, const std::string &message, const std::string &source);
+        void setDcPowerLastError(const std::string &errorText);
 
         // PLC数据地址定义（需要根据实际PLC程序调整）
         static constexpr int DB_PRESSURE_SENSORS = 1; // 压力传感器DB块

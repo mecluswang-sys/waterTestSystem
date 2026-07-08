@@ -62,6 +62,10 @@ namespace WaterTest
         void onRelay1Toggled(bool on);
         void onRelay2Toggled(bool on);
         void onRelay3Toggled(bool on);
+        void onDcPowerApplySetpoint();
+        void onDcPowerOutputToggled();
+        void onDcPowerReadback();
+        void onDcPowerShowErrorHistory();
 
     private:
         void setupUI();
@@ -73,6 +77,8 @@ namespace WaterTest
         void updateReliefValveStatus();
         void buildHmiScene();
         void updateActionBarOverlayGeometry();
+        void refreshDcPowerTelemetry(bool showPopupOnError);
+        void appendDcPowerErrorHistory(const QString &errorText);
 
         // 设备管理器
         std::shared_ptr<DeviceManager> m_deviceManager;
@@ -120,6 +126,18 @@ namespace WaterTest
         QPushButton *m_reliefValveBtn;      // 作为“长按开启泄压阀”按钮（危险）
         QPushButton *m_reliefValveCloseBtn; // 关闭泄压阀
         QPushButton *m_emergencyStopBtn;    // 作为“长按紧急停止”按钮（危险）
+        QDoubleSpinBox *m_dcPowerVoltageSpinBox;
+        QDoubleSpinBox *m_dcPowerCurrentSpinBox;
+        QPushButton *m_dcPowerApplyBtn;
+        QPushButton *m_dcPowerOutputBtn;
+        QPushButton *m_dcPowerReadBtn;
+        QPushButton *m_dcPowerErrorHistoryBtn;
+        QLabel *m_dcPowerStatusLabel;
+        QLabel *m_dcPowerMeasureLabel;
+        QLabel *m_dcPowerErrorLabel;
+        bool m_dcPowerOutputOn;
+        int m_dcPowerAutoRefreshTick;
+        QList<QString> m_dcPowerErrorHistory;
 
         // 继电器（准备区当前不显示，但保留接口兼容）
         QCheckBox *m_relay1Check;

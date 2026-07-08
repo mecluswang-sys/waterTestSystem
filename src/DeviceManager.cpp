@@ -15,6 +15,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <cctype>
 #include <QtSerialPort/QSerialPort>
 #include <QByteArray>
 #include <QDebug>
@@ -56,6 +57,206 @@ namespace WaterTest
                 oss << std::setw(2) << static_cast<int>(static_cast<uint8_t>(data[i]));
             }
             return oss.str();
+        }
+
+        std::string trimAscii(const std::string &value)
+        {
+            size_t begin = 0;
+            size_t end = value.size();
+            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0)
+            {
+                ++begin;
+            }
+            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0)
+            {
+                --end;
+            }
+            return value.substr(begin, end - begin);
+        }
+
+        std::string toUpperAscii(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char ch)
+                           { return static_cast<char>(std::toupper(ch)); });
+            return value;
+        }
+
+        void appendDcPowerDebugLog(const std::string &message)
+        {
+            std::error_code ec;
+            std::filesystem::create_directories("deploy/logs", ec);
+            std::ofstream logFile("deploy/logs/e3634a_rs232.log", std::ios::app);
+            if (!logFile.is_open())
+            {
+                return;
+            }
+
+            const auto now = std::chrono::system_clock::now();
+            const std::time_t t = std::chrono::system_clock::to_time_t(now);
+            std::tm tmStruct{};
+#ifdef _WIN32
+            localtime_s(&tmStruct, &t);
+#else
+            localtime_r(&t, &tmStruct);
+#endif
+            logFile << std::put_time(&tmStruct, "%Y-%m-%d %H:%M:%S")
+                    << " " << message << "\n";
+        }
+
+        bool configureE3634ASerialPort(QSerialPort &port,
+                                       std::string *errText = nullptr)
+        {
+            auto &cfg = ConfigManager::getInstance();
+            const bool enabled = cfg.getBool("e3634a.enabled", false);
+            if (!enabled)
+            {
+                if (errText)
+                {
+                    *errText = "disabled";
+                }
+                return false;
+            }
+
+            const std::string portName = cfg.getString("e3634a.rs232.port", "COM3");
+            const int baud = cfg.getInt("e3634a.rs232.baud", 9600);
+            const int dataBits = cfg.getInt("e3634a.rs232.data_bits", 8);
+            const std::string parity = cfg.getString("e3634a.rs232.parity", "N");
+            const int stopBits = cfg.getInt("e3634a.rs232.stop_bits", 1);
+
+            port.setPortName(QString::fromStdString(portName));
+            port.setBaudRate(baud);
+            port.setDataBits(dataBits == 7 ? QSerialPort::Data7 : QSerialPort::Data8);
+
+            if (parity == "E" || parity == "e")
+            {
+                port.setParity(QSerialPort::EvenParity);
+            }
+            else if (parity == "O" || parity == "o")
+            {
+                port.setParity(QSerialPort::OddParity);
+            }
+            else
+            {
+                port.setParity(QSerialPort::NoParity);
+            }
+
+            port.setStopBits(stopBits == 2 ? QSerialPort::TwoStop : QSerialPort::OneStop);
+            port.setFlowControl(QSerialPort::NoFlowControl);
+
+            if (!port.open(QIODevice::ReadWrite))
+            {
+                if (errText)
+                {
+                    *errText = port.errorString().toStdString();
+                }
+                return false;
+            }
+
+            port.clear(QSerialPort::AllDirections);
+            if (errText)
+            {
+                *errText = "ok";
+            }
+            return true;
+        }
+
+        bool writeScpiLine(QSerialPort &port,
+                           const std::string &command,
+                           int writeTimeoutMs,
+                           std::string *errText = nullptr)
+        {
+            const QByteArray payload = QByteArray::fromStdString(command + "\n");
+            const qint64 written = port.write(payload);
+            if (written != payload.size())
+            {
+                if (errText)
+                {
+                    *errText = "write_failed";
+                }
+                return false;
+            }
+
+            if (!port.waitForBytesWritten(writeTimeoutMs))
+            {
+                if (errText)
+                {
+                    *errText = "write_timeout";
+                }
+                return false;
+            }
+
+            if (errText)
+            {
+                *errText = "ok";
+            }
+            return true;
+        }
+
+        bool queryScpiLine(QSerialPort &port,
+                           const std::string &query,
+                           std::string &response,
+                           int writeTimeoutMs,
+                           int readTimeoutMs,
+                           std::string *errText = nullptr)
+        {
+            response.clear();
+            std::string writeErr;
+            if (!writeScpiLine(port, query, writeTimeoutMs, &writeErr))
+            {
+                if (errText)
+                {
+                    *errText = writeErr;
+                }
+                return false;
+            }
+
+            QByteArray rx;
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(readTimeoutMs);
+            while (std::chrono::steady_clock::now() < deadline)
+            {
+                if (port.waitForReadyRead(80))
+                {
+                    rx += port.readAll();
+                    if (rx.contains('\n') || rx.contains('\r'))
+                    {
+                        const std::string parsed = trimAscii(rx.toStdString());
+                        if (!parsed.empty())
+                        {
+                            response = parsed;
+                            if (errText)
+                            {
+                                *errText = "ok";
+                            }
+                            return true;
+                        }
+
+                        // Some instruments may emit extra CR/LF between replies.
+                        // Keep waiting for the first non-empty line within timeout.
+                        rx.clear();
+                    }
+                }
+            }
+
+            if (!rx.isEmpty())
+            {
+                const std::string parsed = trimAscii(rx.toStdString());
+                if (!parsed.empty())
+                {
+                    response = parsed;
+                    if (errText)
+                    {
+                        *errText = "ok";
+                    }
+                    return true;
+                }
+            }
+
+            if (errText)
+            {
+                *errText = "read_timeout_or_empty";
+            }
+            return false;
         }
 
         bool modbusReadHoldingRegisters(QSerialPort &port,
@@ -384,6 +585,18 @@ namespace WaterTest
     std::string DeviceManager::getPlcLastError() const
     {
         return m_plcClient ? m_plcClient->getLastError() : std::string();
+    }
+
+    void DeviceManager::setDcPowerLastError(const std::string &errorText)
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        m_dcPowerLastError = errorText;
+    }
+
+    std::string DeviceManager::getDcPowerLastError() const
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        return m_dcPowerLastError;
     }
 
     DeviceManager::DeviceManager()
@@ -748,6 +961,233 @@ namespace WaterTest
         auto result = m_plcClient->writeReal(DB_PUMPS, offset, frequency);
 
         return result == S7PLCClient::Result::SUCCESS;
+    }
+
+    bool DeviceManager::setDcPowerOutput(bool on)
+    {
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            appendDcPowerDebugLog("[E3634A] open_failed err=\"" + err + "\"");
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const std::string cmd = std::string("OUTP ") + (on ? "ON" : "OFF");
+
+        std::string stepErr;
+        if (!writeScpiLine(port, "SYST:REM", writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=SYST:REM err=" + stepErr);
+            setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+
+        if (!writeScpiLine(port, cmd, writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=" + cmd + " err=" + stepErr);
+            setDcPowerLastError("cmd_failed " + cmd + ": " + stepErr);
+            return false;
+        }
+
+        appendDcPowerDebugLog("[E3634A] output=" + std::string(on ? "ON" : "OFF"));
+        setDcPowerLastError(std::string());
+        return true;
+    }
+
+    bool DeviceManager::setDcPowerSetpoint(float voltageV, float currentA)
+    {
+        auto &cfg = ConfigManager::getInstance();
+        const float maxVoltage = cfg.getFloat("e3634a.limit.max_voltage", 50.0f);
+        const float maxCurrent = cfg.getFloat("e3634a.limit.max_current", 7.0f);
+        if (voltageV < 0.0f || currentA < 0.0f || voltageV > maxVoltage || currentA > maxCurrent)
+        {
+            std::ostringstream oss;
+            oss << "[E3634A] setpoint_out_of_range"
+                << " voltage=" << voltageV
+                << " current=" << currentA
+                << " maxVoltage=" << maxVoltage
+                << " maxCurrent=" << maxCurrent;
+            appendDcPowerDebugLog(oss.str());
+            setDcPowerLastError(oss.str());
+            return false;
+        }
+
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            appendDcPowerDebugLog("[E3634A] open_failed err=\"" + err + "\"");
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+
+        std::ostringstream voltCmd;
+        voltCmd << std::fixed << std::setprecision(3) << "VOLT " << voltageV;
+        std::ostringstream currCmd;
+        currCmd << std::fixed << std::setprecision(3) << "CURR " << currentA;
+
+        std::string stepErr;
+        if (!writeScpiLine(port, "SYST:REM", writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=SYST:REM err=" + stepErr);
+            setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+        if (!writeScpiLine(port, voltCmd.str(), writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=" + voltCmd.str() + " err=" + stepErr);
+            setDcPowerLastError("cmd_failed " + voltCmd.str() + ": " + stepErr);
+            return false;
+        }
+        if (!writeScpiLine(port, currCmd.str(), writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=" + currCmd.str() + " err=" + stepErr);
+            setDcPowerLastError("cmd_failed " + currCmd.str() + ": " + stepErr);
+            return false;
+        }
+
+        std::ostringstream log;
+        log << "[E3634A] setpoint_ok voltage=" << voltageV << " current=" << currentA;
+        appendDcPowerDebugLog(log.str());
+        setDcPowerLastError(std::string());
+        return true;
+    }
+
+    bool DeviceManager::readDcPowerMeasurements(float &voltageV, float &currentA)
+    {
+        voltageV = 0.0f;
+        currentA = 0.0f;
+
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            appendDcPowerDebugLog("[E3634A] open_failed err=\"" + err + "\"");
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
+
+        std::string vResp;
+        std::string iResp;
+        std::string queryErr;
+
+        std::string stepErr;
+        if (!writeScpiLine(port, "SYST:REM", writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=SYST:REM err=" + stepErr);
+            setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+
+        if (!queryScpiLine(port, "MEAS:VOLT?", vResp, writeTimeoutMs, readTimeoutMs, &queryErr))
+        {
+            appendDcPowerDebugLog("[E3634A] query_failed cmd=MEAS:VOLT? err=" + queryErr);
+            setDcPowerLastError("query_failed MEAS:VOLT?: " + queryErr);
+            return false;
+        }
+        if (!queryScpiLine(port, "MEAS:CURR?", iResp, writeTimeoutMs, readTimeoutMs, &queryErr))
+        {
+            appendDcPowerDebugLog("[E3634A] query_failed cmd=MEAS:CURR? err=" + queryErr);
+            setDcPowerLastError("query_failed MEAS:CURR?: " + queryErr);
+            return false;
+        }
+
+        try
+        {
+            voltageV = std::stof(vResp);
+            currentA = std::stof(iResp);
+        }
+        catch (...)
+        {
+            appendDcPowerDebugLog("[E3634A] parse_failed vResp=\"" + vResp + "\" iResp=\"" + iResp + "\"");
+            setDcPowerLastError("parse_failed vResp=\"" + vResp + "\" iResp=\"" + iResp + "\"");
+            return false;
+        }
+
+        std::ostringstream log;
+        log << "[E3634A] meas_ok voltage=" << voltageV << " current=" << currentA;
+        appendDcPowerDebugLog(log.str());
+        setDcPowerLastError(std::string());
+        return true;
+    }
+
+    bool DeviceManager::getDcPowerIdentity(std::string &idn)
+    {
+        idn.clear();
+
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            appendDcPowerDebugLog("[E3634A] open_failed err=\"" + err + "\"");
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
+
+        std::string queryErr;
+        if (!queryScpiLine(port, "*IDN?", idn, writeTimeoutMs, readTimeoutMs, &queryErr))
+        {
+            appendDcPowerDebugLog("[E3634A] query_failed cmd=*IDN? err=" + queryErr);
+            setDcPowerLastError("query_failed *IDN?: " + queryErr);
+            return false;
+        }
+
+        idn = trimAscii(idn);
+        appendDcPowerDebugLog("[E3634A] idn=\"" + toUpperAscii(idn) + "\"");
+        setDcPowerLastError(std::string());
+        return true;
+    }
+
+    bool DeviceManager::readDcPowerErrorCode(std::string &errorText)
+    {
+        errorText.clear();
+
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
+
+        std::string stepErr;
+        if (!writeScpiLine(port, "SYST:REM", writeTimeoutMs, &stepErr))
+        {
+            setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+
+        std::string queryErr;
+        if (!queryScpiLine(port, "SYST:ERR?", errorText, writeTimeoutMs, readTimeoutMs, &queryErr))
+        {
+            setDcPowerLastError("query_failed SYST:ERR?: " + queryErr);
+            return false;
+        }
+
+        errorText = trimAscii(errorText);
+        if (!errorText.empty() && errorText.rfind("+0", 0) != 0)
+        {
+            setDcPowerLastError(errorText);
+        }
+        return true;
     }
 
     FrequencyPump DeviceManager::getPump(uint16_t id) const

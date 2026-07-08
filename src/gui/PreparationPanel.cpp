@@ -1465,6 +1465,17 @@ namespace WaterTest
           m_reliefValveBtn(nullptr),
           m_reliefValveCloseBtn(nullptr),
           m_emergencyStopBtn(nullptr),
+          m_dcPowerVoltageSpinBox(nullptr),
+          m_dcPowerCurrentSpinBox(nullptr),
+          m_dcPowerApplyBtn(nullptr),
+          m_dcPowerOutputBtn(nullptr),
+          m_dcPowerReadBtn(nullptr),
+          m_dcPowerErrorHistoryBtn(nullptr),
+          m_dcPowerStatusLabel(nullptr),
+          m_dcPowerMeasureLabel(nullptr),
+          m_dcPowerErrorLabel(nullptr),
+          m_dcPowerOutputOn(false),
+          m_dcPowerAutoRefreshTick(0),
           m_relay1Check(nullptr),
           m_relay2Check(nullptr),
           m_relay3Check(nullptr),
@@ -1744,8 +1755,8 @@ namespace WaterTest
         m_actionBarOverlay->setAttribute(Qt::WA_TranslucentBackground, true);
 
         auto *actionLayout = new QHBoxLayout(m_actionBarOverlay);
-        actionLayout->setContentsMargins(30, 10, 12, 50);
-        actionLayout->setSpacing(10);
+        actionLayout->setContentsMargins(16, 6, 8, 30);
+        actionLayout->setSpacing(6);
 
         m_selfCheckBtn = new QPushButton("系统自检", m_actionBarOverlay);
         m_selfCheckBtn->setProperty("tone", "info");
@@ -1764,6 +1775,60 @@ namespace WaterTest
         m_stopFillingBtn->setProperty("size", "lg");
         m_stopFillingBtn->setEnabled(false);
 
+        m_dcPowerVoltageSpinBox = new QDoubleSpinBox(m_actionBarOverlay);
+        m_dcPowerVoltageSpinBox->setRange(0.0, 50.0);
+        m_dcPowerVoltageSpinBox->setDecimals(2);
+        m_dcPowerVoltageSpinBox->setSuffix(" V");
+        m_dcPowerVoltageSpinBox->setValue(24.0);
+        m_dcPowerVoltageSpinBox->setSingleStep(0.1);
+        m_dcPowerVoltageSpinBox->setToolTip("E3634A 电压设定值");
+
+        m_dcPowerCurrentSpinBox = new QDoubleSpinBox(m_actionBarOverlay);
+        m_dcPowerCurrentSpinBox->setRange(0.0, 7.0);
+        m_dcPowerCurrentSpinBox->setDecimals(3);
+        m_dcPowerCurrentSpinBox->setSuffix(" A");
+        m_dcPowerCurrentSpinBox->setValue(1.000);
+        m_dcPowerCurrentSpinBox->setSingleStep(0.05);
+        m_dcPowerCurrentSpinBox->setToolTip("E3634A 电流限值");
+
+        m_dcPowerApplyBtn = new QPushButton("设定", m_actionBarOverlay);
+        m_dcPowerApplyBtn->setProperty("tone", "info");
+        m_dcPowerApplyBtn->setProperty("size", "lg");
+        m_dcPowerApplyBtn->setFixedWidth(66);
+
+        m_dcPowerOutputBtn = new QPushButton("输出:关", m_actionBarOverlay);
+        m_dcPowerOutputBtn->setProperty("tone", "warn");
+        m_dcPowerOutputBtn->setProperty("size", "lg");
+        m_dcPowerOutputBtn->setFixedWidth(86);
+
+        m_dcPowerReadBtn = new QPushButton("", m_actionBarOverlay);
+        m_dcPowerReadBtn->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+        m_dcPowerReadBtn->setToolTip("电源回读");
+        m_dcPowerReadBtn->setProperty("tone", "neutral");
+        m_dcPowerReadBtn->setProperty("size", "lg");
+        m_dcPowerReadBtn->setFixedWidth(36);
+        m_dcPowerReadBtn->setVisible(false);
+
+        m_dcPowerErrorHistoryBtn = new QPushButton("", m_actionBarOverlay);
+        m_dcPowerErrorHistoryBtn->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+        m_dcPowerErrorHistoryBtn->setToolTip("错误历史");
+        m_dcPowerErrorHistoryBtn->setProperty("tone", "neutral");
+        m_dcPowerErrorHistoryBtn->setProperty("size", "lg");
+        m_dcPowerErrorHistoryBtn->setFixedWidth(36);
+
+        m_dcPowerStatusLabel = new QLabel("电源:未读", m_actionBarOverlay);
+        m_dcPowerStatusLabel->setMinimumWidth(86);
+        m_dcPowerStatusLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        m_dcPowerStatusLabel->setVisible(false);
+
+        m_dcPowerMeasureLabel = new QLabel("实测: -- V / -- A", m_actionBarOverlay);
+        m_dcPowerMeasureLabel->setMinimumWidth(150);
+        m_dcPowerMeasureLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+
+        m_dcPowerErrorLabel = new QLabel("错误: --", m_actionBarOverlay);
+        m_dcPowerErrorLabel->setMinimumWidth(170);
+        m_dcPowerErrorLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+
         // 动态属性（tone/size）有时需要显式 polish 才能立即触发 QSS 重算
         auto repolish = [](QWidget *w)
         {
@@ -1780,16 +1845,32 @@ namespace WaterTest
         repolish(m_startFillingBtn);
         repolish(m_drainBtn);
         repolish(m_stopFillingBtn);
+        repolish(m_dcPowerApplyBtn);
+        repolish(m_dcPowerOutputBtn);
+        repolish(m_dcPowerReadBtn);
+        repolish(m_dcPowerErrorHistoryBtn);
 
         connect(m_selfCheckBtn, &QPushButton::clicked, this, &PreparationPanel::onSelfCheck);
         connect(m_startFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStartFilling);
         connect(m_drainBtn, &QPushButton::clicked, this, &PreparationPanel::onDrainWater);
         connect(m_stopFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStopAll);
+        connect(m_dcPowerApplyBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerApplySetpoint);
+        connect(m_dcPowerOutputBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerOutputToggled);
+        connect(m_dcPowerReadBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerReadback);
+        connect(m_dcPowerErrorHistoryBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerShowErrorHistory);
 
         actionLayout->addWidget(m_selfCheckBtn);
         actionLayout->addWidget(m_startFillingBtn);
         actionLayout->addWidget(m_drainBtn);
         actionLayout->addWidget(m_stopFillingBtn);
+        actionLayout->addSpacing(12);
+        actionLayout->addWidget(m_dcPowerVoltageSpinBox);
+        actionLayout->addWidget(m_dcPowerCurrentSpinBox);
+        actionLayout->addWidget(m_dcPowerApplyBtn);
+        actionLayout->addWidget(m_dcPowerOutputBtn);
+        actionLayout->addWidget(m_dcPowerErrorHistoryBtn);
+        actionLayout->addWidget(m_dcPowerMeasureLabel);
+        actionLayout->addWidget(m_dcPowerErrorLabel);
         actionLayout->addStretch(1);
 
         updateActionBarOverlayGeometry();
@@ -2399,6 +2480,9 @@ namespace WaterTest
         updateRelayStates();
         updateReliefValveStatus();
 
+        ++m_dcPowerAutoRefreshTick;
+        refreshDcPowerTelemetry(false);
+
         // 如果正在加水，增加计时
         if (m_isFilling)
         {
@@ -2940,6 +3024,248 @@ namespace WaterTest
             m_relay3Check->blockSignals(true);
             m_relay3Check->setChecked(!on);
             m_relay3Check->blockSignals(false);
+        }
+    }
+
+    void PreparationPanel::onDcPowerApplySetpoint()
+    {
+        const float voltage = m_dcPowerVoltageSpinBox ? static_cast<float>(m_dcPowerVoltageSpinBox->value()) : 0.0f;
+        const float current = m_dcPowerCurrentSpinBox ? static_cast<float>(m_dcPowerCurrentSpinBox->value()) : 0.0f;
+
+        bool ok = false;
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 4;
+            cmd.value1 = voltage;
+            cmd.value2 = current;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setDcPowerSetpoint(voltage, current);
+        }
+
+        if (!ok)
+        {
+            QMessageBox::warning(this, "E3634A", "电压/电流设定失败");
+            return;
+        }
+
+        if (m_dcPowerStatusLabel)
+        {
+            m_dcPowerStatusLabel->setText(QString("设定 %1V/%2A")
+                                              .arg(voltage, 0, 'f', 2)
+                                              .arg(current, 0, 'f', 3));
+        }
+    }
+
+    void PreparationPanel::onDcPowerOutputToggled()
+    {
+        const bool targetOn = !m_dcPowerOutputOn;
+
+        bool ok = false;
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            ControlCommand cmd;
+            cmd.command_type = 3;
+            cmd.action = targetOn ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->setDcPowerOutput(targetOn);
+        }
+
+        if (!ok)
+        {
+            QMessageBox::warning(this, "E3634A", targetOn ? "开启输出失败" : "关闭输出失败");
+            return;
+        }
+
+        m_dcPowerOutputOn = targetOn;
+        if (m_dcPowerOutputBtn)
+        {
+            m_dcPowerOutputBtn->setText(QString("输出:%1").arg(m_dcPowerOutputOn ? "开" : "关"));
+            m_dcPowerOutputBtn->setProperty("tone", m_dcPowerOutputOn ? "good" : "warn");
+            if (auto *s = m_dcPowerOutputBtn->style())
+            {
+                s->unpolish(m_dcPowerOutputBtn);
+                s->polish(m_dcPowerOutputBtn);
+            }
+            m_dcPowerOutputBtn->update();
+        }
+        if (m_dcPowerStatusLabel)
+        {
+            m_dcPowerStatusLabel->setText(QString("输出已%1").arg(m_dcPowerOutputOn ? "开" : "关"));
+        }
+    }
+
+    void PreparationPanel::onDcPowerReadback()
+    {
+        refreshDcPowerTelemetry(true);
+    }
+
+    void PreparationPanel::appendDcPowerErrorHistory(const QString &errorText)
+    {
+        const QString normalized = errorText.trimmed();
+        if (normalized.isEmpty())
+        {
+            return;
+        }
+
+        const QString entry = QString("%1 | %2")
+                                  .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+                                  .arg(normalized);
+
+        if (!m_dcPowerErrorHistory.isEmpty())
+        {
+            const QString last = m_dcPowerErrorHistory.back();
+            if (last.endsWith(QString(" | %1").arg(normalized)))
+            {
+                return;
+            }
+        }
+
+        m_dcPowerErrorHistory.push_back(entry);
+        while (m_dcPowerErrorHistory.size() > 5)
+        {
+            m_dcPowerErrorHistory.pop_front();
+        }
+    }
+
+    void PreparationPanel::onDcPowerShowErrorHistory()
+    {
+        if (m_dcPowerErrorHistory.isEmpty())
+        {
+            QMessageBox::information(this, "E3634A 错误历史", "暂无错误记录");
+            return;
+        }
+
+        QStringList lines;
+        lines.reserve(m_dcPowerErrorHistory.size());
+        for (const auto &entry : m_dcPowerErrorHistory)
+        {
+            lines << entry;
+        }
+
+        QMessageBox::information(this,
+                                 "E3634A 错误历史(最近5条)",
+                                 lines.join("\n"));
+    }
+
+    void PreparationPanel::refreshDcPowerTelemetry(bool showPopupOnError)
+    {
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        if (m_stationClient && strictRemoteMode)
+        {
+            if (m_dcPowerMeasureLabel)
+            {
+                m_dcPowerMeasureLabel->setText("实测: 远程模式未回读");
+            }
+            if (m_dcPowerErrorLabel)
+            {
+                m_dcPowerErrorLabel->setText("错误: --");
+                m_dcPowerErrorLabel->setStyleSheet(QString());
+            }
+            if (showPopupOnError)
+            {
+                QMessageBox::information(this, "E3634A", "远程模式暂不支持实时回读，请在主控台查看电源读数。\n可继续使用“电源设定/电源输出”命令。\n");
+            }
+            return;
+        }
+
+        if (!m_deviceManager)
+        {
+            if (m_dcPowerErrorLabel)
+            {
+                m_dcPowerErrorLabel->setText("错误: 设备管理器未初始化");
+                m_dcPowerErrorLabel->setStyleSheet("color:#d32f2f;");
+            }
+            appendDcPowerErrorHistory("设备管理器未初始化");
+            if (showPopupOnError)
+            {
+                QMessageBox::warning(this, "E3634A", "设备管理器未初始化");
+            }
+            return;
+        }
+
+        float voltage = 0.0f;
+        float current = 0.0f;
+        const bool ok = m_deviceManager->readDcPowerMeasurements(voltage, current);
+
+        std::string errCode;
+        const bool hasErrCode = m_deviceManager->readDcPowerErrorCode(errCode);
+        const QString errorText = hasErrCode
+                                      ? QString::fromStdString(errCode)
+                                      : QString::fromStdString(m_deviceManager->getDcPowerLastError());
+
+        if (m_dcPowerErrorLabel)
+        {
+            m_dcPowerErrorLabel->setText(QString("错误: %1").arg(errorText.isEmpty() ? "--" : errorText));
+            const bool isNoError = errorText.startsWith("+0") || errorText.startsWith("0,");
+            if (!errorText.isEmpty() && !isNoError)
+            {
+                m_dcPowerErrorLabel->setStyleSheet("color:#d32f2f;font-weight:600;");
+            }
+            else
+            {
+                m_dcPowerErrorLabel->setStyleSheet(QString());
+            }
+        }
+
+        const bool hasErrorCode = !errorText.isEmpty() &&
+                                  !(errorText.startsWith("+0") || errorText.startsWith("0,"));
+        if (hasErrorCode)
+        {
+            appendDcPowerErrorHistory(errorText);
+        }
+
+        if (!ok)
+        {
+            if (m_dcPowerMeasureLabel)
+            {
+                m_dcPowerMeasureLabel->setText("实测: -- V / -- A");
+            }
+            if (m_dcPowerStatusLabel)
+            {
+                m_dcPowerStatusLabel->setText("回读失败");
+            }
+
+            if (!errorText.isEmpty())
+            {
+                appendDcPowerErrorHistory(errorText);
+            }
+
+            if (showPopupOnError)
+            {
+                QMessageBox::warning(this,
+                                     "E3634A",
+                                     QString("读取电压/电流失败\n错误: %1")
+                                         .arg(errorText.isEmpty() ? "未知（请检查 RS232 配置与连线）" : errorText));
+            }
+            return;
+        }
+
+        if (m_dcPowerMeasureLabel)
+        {
+            m_dcPowerMeasureLabel->setText(QString("实测: %1 V / %2 A")
+                                               .arg(voltage, 0, 'f', 3)
+                                               .arg(current, 0, 'f', 4));
+        }
+
+        if (m_dcPowerStatusLabel)
+        {
+            m_dcPowerStatusLabel->setText(QString("回读 %1")
+                                              .arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
+        }
+
+        if (errorText.isEmpty() && m_dcPowerErrorLabel)
+        {
+            m_dcPowerErrorLabel->setText("错误: --");
+            m_dcPowerErrorLabel->setStyleSheet(QString());
         }
     }
 

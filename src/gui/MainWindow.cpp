@@ -636,12 +636,18 @@ namespace WaterTest
                 setPlcStatusState("disconnected", "远程模式：等待主控台连接");
             }
             if (terminalConnected)
+            {
+                if (m_preparationPanel)
+                    m_preparationPanel->startUpdate();
                 syncStationPanelsOnce();
+            }
             return terminalConnected;
         }
 
         if (m_isConnected)
         {
+            if (m_preparationPanel)
+                m_preparationPanel->startUpdate();
             if (m_diagVirtualConnected)
             {
                 statusBar()->showMessage("诊断模式已连接（未实际连接PLC）", 2000);
@@ -688,6 +694,9 @@ namespace WaterTest
 
             if (m_autoConnectTimer)
                 m_autoConnectTimer->stop();
+
+            if (m_preparationPanel)
+                m_preparationPanel->startUpdate();
 
             statusBar()->showMessage("诊断模式连接成功（已跳过PLC实连/采集/页面刷新）", 3000);
             setPlcStatusState("connected", "诊断模式：已跳过PLC实连");
@@ -790,6 +799,8 @@ namespace WaterTest
         {
             if (m_monitorPanel)
                 m_monitorPanel->startUpdate();
+            if (m_preparationPanel)
+                m_preparationPanel->startUpdate();
 
             // 为提升连接稳定性，复杂页面默认不启动高频定时刷新；按需通过配置逐步打开�?
             if (m_station1Panel)
