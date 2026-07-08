@@ -216,6 +216,15 @@ int main(int argc, char *argv[])
                                  case 2:
                                      ok = deviceManager->controlValve(static_cast<uint16_t>(cmd.index) + 1, cmd.action != 0);
                                      break;
+                                 case 3:
+                                     ok = deviceManager->setDcPowerOutput(cmd.action != 0);
+                                     break;
+                                 case 4:
+                                     ok = deviceManager->setDcPowerSetpoint(cmd.value1, cmd.value2);
+                                     break;
+                                 case 5:
+                                     ok = deviceManager->setValveOpeningPercent(static_cast<uint16_t>(cmd.index) + 1, cmd.value1);
+                                     break;
                                  default:
                                      break;
                                  }
