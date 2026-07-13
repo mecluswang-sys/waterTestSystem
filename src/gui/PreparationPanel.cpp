@@ -3159,7 +3159,7 @@ namespace WaterTest
     void PreparationPanel::refreshDcPowerTelemetry(bool showPopupOnError)
     {
         const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        if (m_stationClient && strictRemoteMode)
+        if (m_stationClient && strictRemoteMode && !m_deviceManager)
         {
             if (m_dcPowerMeasureLabel)
             {

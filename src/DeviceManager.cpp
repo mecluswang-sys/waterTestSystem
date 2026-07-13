@@ -82,6 +82,36 @@ namespace WaterTest
             return value;
         }
 
+        struct DcPowerRangeSelection
+        {
+            std::string command;
+            float maxVoltage;
+            float maxCurrent;
+        };
+
+        bool selectDcPowerRange(float voltageV,
+                                float currentA,
+                                DcPowerRangeSelection &selection)
+        {
+            if (voltageV > 25.0f)
+            {
+                if (currentA > 4.0f)
+                {
+                    return false;
+                }
+
+                selection.command = "VOLT:RANG P50V";
+                selection.maxVoltage = 50.0f;
+                selection.maxCurrent = 4.0f;
+                return true;
+            }
+
+            selection.command = "VOLT:RANG P25V";
+            selection.maxVoltage = 25.0f;
+            selection.maxCurrent = 7.0f;
+            return true;
+        }
+
         void appendDcPowerDebugLog(const std::string &message)
         {
             std::error_code ec;
@@ -257,6 +287,39 @@ namespace WaterTest
                 *errText = "read_timeout_or_empty";
             }
             return false;
+        }
+
+        bool queryScpiNoError(QSerialPort &port,
+                              int writeTimeoutMs,
+                              int readTimeoutMs,
+                              std::string *errText = nullptr)
+        {
+            std::string errorText;
+            std::string queryErr;
+            if (!queryScpiLine(port, "SYST:ERR?", errorText, writeTimeoutMs, readTimeoutMs, &queryErr))
+            {
+                if (errText)
+                {
+                    *errText = "query_failed SYST:ERR?: " + queryErr;
+                }
+                return false;
+            }
+
+            errorText = trimAscii(errorText);
+            if (!errorText.empty() && errorText.rfind("+0", 0) != 0)
+            {
+                if (errText)
+                {
+                    *errText = errorText;
+                }
+                return false;
+            }
+
+            if (errText)
+            {
+                *errText = errorText.empty() ? "+0,\"No error\"" : errorText;
+            }
+            return true;
         }
 
         bool modbusReadHoldingRegisters(QSerialPort &port,
@@ -976,6 +1039,7 @@ namespace WaterTest
 
         auto &cfg = ConfigManager::getInstance();
         const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
         const std::string cmd = std::string("OUTP ") + (on ? "ON" : "OFF");
 
         std::string stepErr;
@@ -992,6 +1056,12 @@ namespace WaterTest
             setDcPowerLastError("cmd_failed " + cmd + ": " + stepErr);
             return false;
         }
+        if (!queryScpiNoError(port, writeTimeoutMs, readTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_rejected cmd=" + cmd + " err=" + stepErr);
+            setDcPowerLastError("cmd_rejected " + cmd + ": " + stepErr);
+            return false;
+        }
 
         appendDcPowerDebugLog("[E3634A] output=" + std::string(on ? "ON" : "OFF"));
         setDcPowerLastError(std::string());
@@ -1003,6 +1073,7 @@ namespace WaterTest
         auto &cfg = ConfigManager::getInstance();
         const float maxVoltage = cfg.getFloat("e3634a.limit.max_voltage", 50.0f);
         const float maxCurrent = cfg.getFloat("e3634a.limit.max_current", 7.0f);
+        DcPowerRangeSelection rangeSelection;
         if (voltageV < 0.0f || currentA < 0.0f || voltageV > maxVoltage || currentA > maxCurrent)
         {
             std::ostringstream oss;
@@ -1011,6 +1082,18 @@ namespace WaterTest
                 << " current=" << currentA
                 << " maxVoltage=" << maxVoltage
                 << " maxCurrent=" << maxCurrent;
+            appendDcPowerDebugLog(oss.str());
+            setDcPowerLastError(oss.str());
+            return false;
+        }
+        if (!selectDcPowerRange(voltageV, currentA, rangeSelection))
+        {
+            std::ostringstream oss;
+            oss << "[E3634A] setpoint_out_of_range"
+                << " voltage=" << voltageV
+                << " current=" << currentA
+                << " range=P50V"
+                << " rangeMaxCurrent=4";
             appendDcPowerDebugLog(oss.str());
             setDcPowerLastError(oss.str());
             return false;
@@ -1026,6 +1109,7 @@ namespace WaterTest
         }
 
         const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
 
         std::ostringstream voltCmd;
         voltCmd << std::fixed << std::setprecision(3) << "VOLT " << voltageV;
@@ -1037,6 +1121,18 @@ namespace WaterTest
         {
             appendDcPowerDebugLog("[E3634A] cmd_failed cmd=SYST:REM err=" + stepErr);
             setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+        if (!writeScpiLine(port, rangeSelection.command, writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=" + rangeSelection.command + " err=" + stepErr);
+            setDcPowerLastError("cmd_failed " + rangeSelection.command + ": " + stepErr);
+            return false;
+        }
+        if (!queryScpiNoError(port, writeTimeoutMs, readTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_rejected cmd=" + rangeSelection.command + " err=" + stepErr);
+            setDcPowerLastError("cmd_rejected " + rangeSelection.command + ": " + stepErr);
             return false;
         }
         if (!writeScpiLine(port, voltCmd.str(), writeTimeoutMs, &stepErr))
@@ -1051,9 +1147,17 @@ namespace WaterTest
             setDcPowerLastError("cmd_failed " + currCmd.str() + ": " + stepErr);
             return false;
         }
+        if (!queryScpiNoError(port, writeTimeoutMs, readTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_rejected cmd=" + voltCmd.str() + "; " + currCmd.str() + " err=" + stepErr);
+            setDcPowerLastError("cmd_rejected setpoint: " + stepErr);
+            return false;
+        }
 
         std::ostringstream log;
-        log << "[E3634A] setpoint_ok voltage=" << voltageV << " current=" << currentA;
+        log << "[E3634A] setpoint_ok voltage=" << voltageV
+            << " current=" << currentA
+            << " range=" << rangeSelection.command;
         appendDcPowerDebugLog(log.str());
         setDcPowerLastError(std::string());
         return true;
