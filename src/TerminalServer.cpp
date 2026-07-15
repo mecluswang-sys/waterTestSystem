@@ -228,6 +228,14 @@ namespace WaterTest
             data.flow_rate = m_deviceManager->getFlowMeter(1).flowRate;
             data.timestamp = static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch() & 0xFFFFFFFF);
 
+            const auto selfCheck = m_deviceManager->getPlcSelfCheckStatus();
+            data.selfcheck_busy = selfCheck.busy ? 1 : 0;
+            data.selfcheck_done = selfCheck.done ? 1 : 0;
+            data.selfcheck_passed = selfCheck.passed ? 1 : 0;
+            data.selfcheck_failed = selfCheck.failed ? 1 : 0;
+            data.selfcheck_step_no = selfCheck.stepNo;
+            data.selfcheck_fault_code = selfCheck.faultCode;
+
             broadcastSensorData(data);
             emit dataReceived(data);
         }

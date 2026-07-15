@@ -74,6 +74,14 @@ namespace WaterTest
         float temperature[4];   // 4 temperature sensors (°C)
         float flow_rate = 0.0f; // Flow rate
         uint32_t timestamp = 0; // Timestamp (ms)
+
+        // PLC self-check runtime status (station1)
+        uint8_t selfcheck_busy = 0;
+        uint8_t selfcheck_done = 0;
+        uint8_t selfcheck_passed = 0;
+        uint8_t selfcheck_failed = 0;
+        int16_t selfcheck_step_no = 0;
+        uint16_t selfcheck_fault_code = 0;
     } PACKED_STRUCT;
 
     /**
@@ -81,7 +89,7 @@ namespace WaterTest
      */
     struct ControlCommand
     {
-        uint8_t command_type = 0; // 0: Relay, 1: Pump, 2: Valve, 3: E3634A output, 4: E3634A setpoint, 5: Regulating valve setpoint
+        uint8_t command_type = 0; // 0: Relay, 1: Pump, 2: Valve, 3: E3634A output, 4: E3634A setpoint, 5: Regulating valve setpoint, 6: PLC self-check control
         uint8_t index = 0;        // Device index
         uint8_t action = 0;       // 0: Off, 1: On
         uint8_t reserved = 0;     // Reserved for future use

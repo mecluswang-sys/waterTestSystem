@@ -168,6 +168,36 @@ namespace WaterTest
                          successTests(0), failedTests(0) {}
     };
 
+    // PLC-side station1 self-check runtime status
+    struct PlcSelfCheckStatus
+    {
+        bool online;
+        bool busy;
+        bool done;
+        bool passed;
+        bool failed;
+
+        int16_t stepNo;
+        uint16_t faultCode;
+
+        float ps4Before;
+        float ps4After;
+        float ps4Build;
+        float ps4Hold;
+        float ps5Build;
+        float ps5Hold;
+        float ps4Delta;
+        float ps5Delta;
+
+        std::chrono::system_clock::time_point timestamp;
+
+        PlcSelfCheckStatus()
+            : online(false), busy(false), done(false), passed(false), failed(false),
+              stepNo(0), faultCode(0),
+              ps4Before(0.0f), ps4After(0.0f), ps4Build(0.0f), ps4Hold(0.0f),
+              ps5Build(0.0f), ps5Hold(0.0f), ps4Delta(0.0f), ps5Delta(0.0f) {}
+    };
+
     // Alarm level
     enum class AlarmLevel
     {

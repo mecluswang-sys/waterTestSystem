@@ -54,6 +54,7 @@ namespace WaterTest
         void syncVisualStateOnce();
 
         // 自动化操作入口
+        void triggerSelfCheck();
         bool autoLowPressureOpenValve();
         bool autoLowPressureInternalLeakStage();
         bool autoHighPressureLeakStage();

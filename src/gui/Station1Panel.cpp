@@ -7,6 +7,12 @@
  * Station1Panel 是一个 QWidget，内嵌 QGraphicsView+QGraphicsScene 展示工艺流程图。
  * 场景中每个设备节点都是自定义 QGraphicsItem 子类（ElectricValveItem / RegulatingValveItem / SensorItem / FlowMeterItem 等），
  * 由 buildScene() 一次性构建，之后通过三条定时器周期刷新数据与动画。
+    
+    void Station1Panel::triggerSelfCheck()
+    {
+        onSelfCheck();
+    }
+ 
  *
  * 数据来源
  * --------
@@ -1042,6 +1048,36 @@ namespace WaterTest
     void Station1Panel::setStationClient(std::shared_ptr<StationClient> stationClient)
     {
         m_stationClient = stationClient;
+
+        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+        const bool connected = m_stationClient && m_stationClient->isConnected();
+        if (m_selfCheckBtn)
+        {
+            m_selfCheckBtn->setEnabled(!strictRemoteMode || connected);
+            m_selfCheckBtn->setToolTip(strictRemoteMode
+                                           ? (connected ? QString() : QString::fromUtf8("请先连接主控台后再执行自检"))
+                                           : QString());
+        }
+
+        if (m_stationClient)
+        {
+            QObject::connect(m_stationClient.get(), &StationClient::connected, this, [this]() {
+                const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                if (m_selfCheckBtn)
+                {
+                    m_selfCheckBtn->setEnabled(true);
+                    m_selfCheckBtn->setToolTip(QString());
+                }
+            });
+            QObject::connect(m_stationClient.get(), &StationClient::disconnected, this, [this]() {
+                const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                if (m_selfCheckBtn)
+                {
+                    m_selfCheckBtn->setEnabled(!strictRemoteMode);
+                    m_selfCheckBtn->setToolTip(strictRemoteMode ? QString::fromUtf8("请先连接主控台后再执行自检") : QString());
+                }
+            });
+        }
     }
 
     void Station1Panel::syncVisualStateOnce()
@@ -3515,11 +3551,80 @@ namespace WaterTest
         return ok;
     }
 
+    void Station1Panel::triggerSelfCheck()
+    {
+        onSelfCheck();
+    }
+
     void Station1Panel::onSelfCheck()
     {
         if (!m_deviceManager)
         {
             QMessageBox::warning(this, "系统自检", "设备管理器未初始化（请先连接系统）");
+            return;
+        }
+
+        const bool preferPlcSide = ConfigManager::getInstance().getBool("selfcheck.station1.use_plc_side", true);
+        if (preferPlcSide)
+        {
+            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+            bool ok = false;
+            const bool stationConnected = (m_stationClient && m_stationClient->isConnected());
+            const bool plcConnected = (m_deviceManager && m_deviceManager->isPlcConnected());
+
+            if (m_stationClient && strictRemoteMode && stationConnected)
+            {
+                ControlCommand cmd;
+                cmd.command_type = 6; // PLC self-check control
+                cmd.action = 1;       // start
+                ok = m_stationClient->sendCommand(cmd);
+                if (!ok)
+                {
+                    QMessageBox::warning(this,
+                                             "系统自检",
+                                             "已选择远程下发路径，但命令发送到主控台失败。\n"
+                                             "请检查主控台连接状态、网络链路以及 Terminal 是否正常运行。");
+                    return;
+                }
+            }
+            else if (plcConnected)
+            {
+                if (strictRemoteMode && m_stationClient && !stationConnected)
+                {
+                    QMessageBox::information(this,
+                                             "系统自检",
+                                             "主控台当前未连接，已切换为本地 PLC 自检调试路径。\n"
+                                             "如果你要走远程模式，请先连接主控台。\n");
+                }
+                ok = m_deviceManager->startPlcSelfCheck();
+                if (!ok)
+                {
+                    const QString plcErr = QString::fromStdString(m_deviceManager->getPlcLastError()).trimmed();
+                    QMessageBox::warning(this,
+                                             "系统自检",
+                                             plcErr.isEmpty()
+                                                 ? QString::fromUtf8("PLC 自检命令写入失败，请检查 DB20/DB21 映射、外部可访问性以及 PLC 连接状态。")
+                                                 : QString::fromUtf8("PLC 自检命令写入失败：") + plcErr + QString::fromUtf8("\n请检查 DB20/DB21 映射、外部可访问性以及 PLC 连接状态。"));
+                    return;
+                }
+            }
+            else
+            {
+                if (strictRemoteMode && m_stationClient && !stationConnected)
+                {
+                    QMessageBox::warning(this, "系统自检", "当前处于严格远程模式，但主控台尚未连接，同时本地 PLC 也不可用。\n请先连接主控台，或检查本地 PLC 连接状态。");
+                }
+                else
+                {
+                    QMessageBox::warning(this, "系统自检", "PLC 未连接，无法下发自检命令。请先检查 PLC 连接状态。");
+                }
+                return;
+            }
+
+            QMessageBox::information(this,
+                                     "系统自检",
+                                     "已下发 PLC 自检开始命令。\n请在上位机状态栏查看步骤号和故障码。\n"
+                                     "如需中止/复位，可通过命令类型6(action=2/3)下发。\n");
             return;
         }
 

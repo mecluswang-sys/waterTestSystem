@@ -13,6 +13,8 @@
 #include "gui/PumpGlyphRenderer.h"
 #include "gui/SensorGlyphRenderer.h"
 #include "gui/ValveGlyphRenderer.h"
+#include "gui/MainWindow.h"
+#include "gui/Station1Panel.h"
 #include "DeviceManager.h"
 #include "ConfigManager.h"
 #include "StationClient.h"
@@ -1758,10 +1760,6 @@ namespace WaterTest
         actionLayout->setContentsMargins(16, 6, 8, 30);
         actionLayout->setSpacing(6);
 
-        m_selfCheckBtn = new QPushButton("系统自检", m_actionBarOverlay);
-        m_selfCheckBtn->setProperty("tone", "info");
-        m_selfCheckBtn->setProperty("size", "lg");
-
         m_startFillingBtn = new QPushButton("加水", m_actionBarOverlay);
         m_startFillingBtn->setProperty("tone", "good");
         m_startFillingBtn->setProperty("size", "lg");
@@ -1841,7 +1839,6 @@ namespace WaterTest
             }
             w->update();
         };
-        repolish(m_selfCheckBtn);
         repolish(m_startFillingBtn);
         repolish(m_drainBtn);
         repolish(m_stopFillingBtn);
@@ -1850,7 +1847,6 @@ namespace WaterTest
         repolish(m_dcPowerReadBtn);
         repolish(m_dcPowerErrorHistoryBtn);
 
-        connect(m_selfCheckBtn, &QPushButton::clicked, this, &PreparationPanel::onSelfCheck);
         connect(m_startFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStartFilling);
         connect(m_drainBtn, &QPushButton::clicked, this, &PreparationPanel::onDrainWater);
         connect(m_stopFillingBtn, &QPushButton::clicked, this, &PreparationPanel::onStopAll);
@@ -1859,7 +1855,6 @@ namespace WaterTest
         connect(m_dcPowerReadBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerReadback);
         connect(m_dcPowerErrorHistoryBtn, &QPushButton::clicked, this, &PreparationPanel::onDcPowerShowErrorHistory);
 
-        actionLayout->addWidget(m_selfCheckBtn);
         actionLayout->addWidget(m_startFillingBtn);
         actionLayout->addWidget(m_drainBtn);
         actionLayout->addWidget(m_stopFillingBtn);
@@ -2340,6 +2335,16 @@ namespace WaterTest
 
     void PreparationPanel::onSelfCheck()
     {
+        if (auto *mainWindow = qobject_cast<MainWindow *>(window()))
+        {
+            mainWindow->activateStation1Tab();
+            QMessageBox::information(this,
+                                     "系统自检",
+                                     "自检功能已迁移到 1号操作台界面，请在该界面点击“系统自检”按钮。\n"
+                                     "当前已切换到 1号操作台。\n");
+            return;
+        }
+
         if (!m_deviceManager)
         {
             QMessageBox::warning(this, "系统自检", "设备管理器未初始化（请先连接系统）");

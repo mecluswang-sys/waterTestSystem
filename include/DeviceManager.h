@@ -287,6 +287,38 @@ namespace WaterTest
          */
         bool switchTestLine(TestLine line);
 
+        // ======== PLC侧自检命令/状态 ========
+        /**
+         * @brief 使能/关闭 PLC 侧自检流程
+         * @param enabled true=使能, false=关闭
+         * @return 是否成功
+         */
+        bool setPlcSelfCheckEnable(bool enabled);
+
+        /**
+         * @brief 触发 PLC 侧自检开始（脉冲）
+         * @return 是否成功
+         */
+        bool startPlcSelfCheck();
+
+        /**
+         * @brief 触发 PLC 侧自检中止（脉冲）
+         * @return 是否成功
+         */
+        bool abortPlcSelfCheck();
+
+        /**
+         * @brief 触发 PLC 侧自检复位（脉冲）
+         * @return 是否成功
+         */
+        bool resetPlcSelfCheck();
+
+        /**
+         * @brief 获取最近一次读取到的 PLC 自检状态
+         * @return 自检状态快照
+         */
+        PlcSelfCheckStatus getPlcSelfCheckStatus() const;
+
         // ======== 数据保存相关 ========
         /**
          * @brief 初始化数据保存系统
@@ -374,6 +406,7 @@ namespace WaterTest
 
         SystemStatus m_systemStatus;
         std::vector<AlarmInfo> m_alarms;
+        PlcSelfCheckStatus m_plcSelfCheckStatus;
 
         // 回调函数
         AlarmCallback m_alarmCallback;
@@ -398,6 +431,8 @@ namespace WaterTest
         bool readTemperatureSensors();
         bool readRegulatingValves();
         bool readSystemStatus();
+        bool readPlcSelfCheckStatus();
+        bool writePlcSelfCheckCmdBit(const std::string &cmdKeyPrefix, bool pulse);
         void checkAlarms();
         void addAlarm(AlarmLevel level, const std::string &message, const std::string &source);
         void setDcPowerLastError(const std::string &errorText);

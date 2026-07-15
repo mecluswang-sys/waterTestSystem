@@ -225,6 +225,29 @@ int main(int argc, char *argv[])
                                  case 5:
                                      ok = deviceManager->setValveOpeningPercent(static_cast<uint16_t>(cmd.index) + 1, cmd.value1);
                                      break;
+                                 case 6:
+                                     switch (cmd.action)
+                                     {
+                                     case 1:
+                                         ok = deviceManager->startPlcSelfCheck();
+                                         break;
+                                     case 2:
+                                         ok = deviceManager->abortPlcSelfCheck();
+                                         break;
+                                     case 3:
+                                         ok = deviceManager->resetPlcSelfCheck();
+                                         break;
+                                     case 4:
+                                         ok = deviceManager->setPlcSelfCheckEnable(true);
+                                         break;
+                                     case 5:
+                                         ok = deviceManager->setPlcSelfCheckEnable(false);
+                                         break;
+                                     default:
+                                         ok = false;
+                                         break;
+                                     }
+                                     break;
                                  default:
                                      break;
                                  }

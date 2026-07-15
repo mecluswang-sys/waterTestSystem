@@ -1,0 +1,625 @@
+(************************************************************)
+(* WaterTestSystem - Station1 SelfCheck PLC SCL Package     *)
+(* Version : v1.0                                            *)
+(* Date    : 2026-07-13                                      *)
+(* Purpose : Move Station1 self-check sequence to PLC        *)
+(* Target  : Siemens S7-1200 / TIA Portal SCL               *)
+(************************************************************)
+
+TYPE "UDT_WTS_SelfCheckParam"
+VERSION : 0.1
+   STRUCT
+      LinkageMinDeltaKpa : REAL := 10.0;    // Step1 threshold: ABS(PS4_after - PS4_before)
+      LinkageWaitMs      : TIME := T#3S;    // Step1 hold time after opening V1/V2/V4
+
+      BuildMinKpa        : REAL := 50.0;    // Step2 build pressure threshold on PS4
+      BuildTimeout       : TIME := T#2500MS;
+      HoldTime           : TIME := T#3500MS;
+
+      LeakMaxP4DropKpa   : REAL := 12.0;    // external leak threshold
+      LeakMaxP5RiseKpa   : REAL := 5.0;     // internal leak threshold
+
+      ValvePulseTime     : TIME := T#600MS; // Step4 pulse for V2/V3/V4
+      RelaySwitchGap     : TIME := T#180MS; // optional gap guard between relay actions
+   END_STRUCT;
+END_TYPE
+
+
+TYPE "UDT_WTS_SelfCheckStatus"
+VERSION : 0.1
+   STRUCT
+      Busy      : BOOL;
+      Done      : BOOL;
+      Passed    : BOOL;
+      Failed    : BOOL;
+
+      StepNo    : INT;   // 0 idle, 10/20/30/40 running, 90 pass, 99 fail
+      FaultCode : WORD;  // 0 means no fault
+
+      Ps4Before : REAL;
+      Ps4After  : REAL;
+      Ps4Build  : REAL;
+      Ps4Hold   : REAL;
+      Ps5Build  : REAL;
+      Ps5Hold   : REAL;
+
+      Ps4Delta  : REAL;  // build - hold
+      Ps5Delta  : REAL;  // hold - build
+   END_STRUCT;
+END_TYPE
+
+
+TYPE "UDT_WTS_SelfCheckCmd"
+VERSION : 0.1
+   STRUCT
+      Enable : BOOL := TRUE;
+      Start  : BOOL := FALSE; // HMI pulse
+      Abort  : BOOL := FALSE; // HMI pulse
+      Reset  : BOOL := FALSE; // HMI pulse
+   END_STRUCT;
+END_TYPE
+
+
+FUNCTION_BLOCK "FB_WTS_Station1SelfCheck"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      Enable         : BOOL;
+      Start          : BOOL;
+      Abort          : BOOL;
+      Reset          : BOOL;
+      EStopHealthy   : BOOL; // TRUE=healthy, FALSE=EStop active
+
+      // Process values from PLC acquisition layer.
+      Ps4Kpa         : REAL;
+      Ps5Kpa         : REAL;
+
+      // Current real feedback (actual output state or validated state).
+      V1Fb           : BOOL;
+      V2Fb           : BOOL;
+      V3Fb           : BOOL;
+      V4Fb           : BOOL;
+      Pump1Fb        : BOOL;
+
+      // Base command from normal mode (HMI/manual/auto outside self-check).
+      BaseV1Cmd      : BOOL;
+      BaseV2Cmd      : BOOL;
+      BaseV3Cmd      : BOOL;
+      BaseV4Cmd      : BOOL;
+      BasePump1Cmd   : BOOL;
+   END_VAR
+   VAR_IN_OUT
+      Param          : "UDT_WTS_SelfCheckParam";
+      Status         : "UDT_WTS_SelfCheckStatus";
+   END_VAR
+   VAR_OUTPUT
+      // Final command after arbitration. Connect these to real DO logic.
+      V1Cmd          : BOOL;
+      V2Cmd          : BOOL;
+      V3Cmd          : BOOL;
+      V4Cmd          : BOOL;
+      Pump1Cmd       : BOOL;
+   END_VAR
+   VAR
+      // State machine
+      State          : INT := 0;
+      SubStep        : INT := 0;
+      PulseIndex     : INT := 0;
+
+      // Edge detection
+      PrevStart      : BOOL := FALSE;
+      StartRise      : BOOL;
+
+      // Local command shadow while self-check is running
+      Sv1            : BOOL;
+      Sv2            : BOOL;
+      Sv3            : BOOL;
+      Sv4            : BOOL;
+      Sp1            : BOOL;
+
+      // Snapshot before self-check
+      V1Prev         : BOOL;
+      V2Prev         : BOOL;
+      V3Prev         : BOOL;
+      V4Prev         : BOOL;
+      Pump1Prev      : BOOL;
+
+      // Intermediates
+      TmpAbsDelta    : REAL;
+      ExternalLeak   : BOOL;
+      InternalLeak   : BOOL;
+
+      // Generic timers
+      TStep          : TON;
+      TGap           : TON;
+   END_VAR
+   VAR CONSTANT
+      ST_IDLE        : INT := 0;
+      ST_PRECHECK    : INT := 5;
+      ST_STEP1       : INT := 10;
+      ST_STEP2       : INT := 20;
+      ST_STEP3       : INT := 30;
+      ST_STEP4       : INT := 40;
+      ST_PASS        : INT := 90;
+      ST_FAIL        : INT := 99;
+
+      FC_NONE        : WORD := 16#0000;
+      FC_NOT_ENABLED : WORD := 16#0001;
+      FC_ESTOP       : WORD := 16#0002;
+      FC_ABORT       : WORD := 16#0003;
+      FC_LINKAGE_NG  : WORD := 16#0101;
+      FC_BUILD_TO    : WORD := 16#0201;
+      FC_BUILD_LOW   : WORD := 16#0202;
+      FC_EXT_LEAK    : WORD := 16#0301;
+      FC_INT_LEAK    : WORD := 16#0302;
+      FC_ACTION_NG   : WORD := 16#0401;
+   END_VAR
+BEGIN
+   // -------- edge detection --------
+   StartRise := Start AND NOT PrevStart;
+   PrevStart := Start;
+
+   // -------- reset path --------
+   IF Reset THEN
+      State := ST_IDLE;
+      SubStep := 0;
+      PulseIndex := 0;
+
+      Status.Busy := FALSE;
+      Status.Done := FALSE;
+      Status.Passed := FALSE;
+      Status.Failed := FALSE;
+      Status.StepNo := 0;
+      Status.FaultCode := FC_NONE;
+
+      Status.Ps4Before := 0.0;
+      Status.Ps4After := 0.0;
+      Status.Ps4Build := 0.0;
+      Status.Ps4Hold := 0.0;
+      Status.Ps5Build := 0.0;
+      Status.Ps5Hold := 0.0;
+      Status.Ps4Delta := 0.0;
+      Status.Ps5Delta := 0.0;
+   END_IF;
+
+   // -------- global abort / estop path --------
+   IF Abort THEN
+      State := ST_FAIL;
+      Status.FaultCode := FC_ABORT;
+   END_IF;
+
+   IF NOT EStopHealthy THEN
+      State := ST_FAIL;
+      Status.FaultCode := FC_ESTOP;
+   END_IF;
+
+   // -------- default command arbitration --------
+   // Not running self-check => pass through base commands.
+   Sv1 := BaseV1Cmd;
+   Sv2 := BaseV2Cmd;
+   Sv3 := BaseV3Cmd;
+   Sv4 := BaseV4Cmd;
+   Sp1 := BasePump1Cmd;
+
+   // -------- state machine --------
+   CASE State OF
+
+      ST_IDLE:
+         Status.Busy := FALSE;
+         Status.StepNo := 0;
+
+         IF StartRise THEN
+            IF NOT Enable THEN
+               Status.Done := TRUE;
+               Status.Passed := FALSE;
+               Status.Failed := TRUE;
+               Status.FaultCode := FC_NOT_ENABLED;
+               State := ST_FAIL;
+            ELSIF NOT EStopHealthy THEN
+               Status.Done := TRUE;
+               Status.Passed := FALSE;
+               Status.Failed := TRUE;
+               Status.FaultCode := FC_ESTOP;
+               State := ST_FAIL;
+            ELSE
+               // Snapshot current actual states for restore.
+               V1Prev := V1Fb;
+               V2Prev := V2Fb;
+               V3Prev := V3Fb;
+               V4Prev := V4Fb;
+               Pump1Prev := Pump1Fb;
+
+               Status.Done := FALSE;
+               Status.Passed := FALSE;
+               Status.Failed := FALSE;
+               Status.FaultCode := FC_NONE;
+
+               Status.Ps4Before := 0.0;
+               Status.Ps4After := 0.0;
+               Status.Ps4Build := 0.0;
+               Status.Ps4Hold := 0.0;
+               Status.Ps5Build := 0.0;
+               Status.Ps5Hold := 0.0;
+               Status.Ps4Delta := 0.0;
+               Status.Ps5Delta := 0.0;
+
+               SubStep := 0;
+               PulseIndex := 0;
+               State := ST_PRECHECK;
+            END_IF;
+         END_IF;
+
+      ST_PRECHECK:
+         Status.Busy := TRUE;
+         Status.StepNo := ST_PRECHECK;
+
+         // Optionally place pre-checks here (sensor validity, permissives).
+         // In this v1.0, directly enter Step1.
+         State := ST_STEP1;
+         SubStep := 0;
+
+      ST_STEP1:
+         Status.Busy := TRUE;
+         Status.StepNo := ST_STEP1;
+
+         CASE SubStep OF
+            0:
+               // Read baseline pressure before opening linkage valves.
+               Status.Ps4Before := Ps4Kpa;
+               SubStep := 1;
+
+            1:
+               // Open V1/V2/V4.
+               Sv1 := TRUE;
+               Sv2 := TRUE;
+               Sv4 := TRUE;
+
+               TStep(IN := TRUE, PT := Param.LinkageWaitMs);
+               IF TStep.Q THEN
+                  TStep(IN := FALSE, PT := Param.LinkageWaitMs);
+                  SubStep := 2;
+               END_IF;
+
+            2:
+               // Evaluate delta on PS4.
+               Status.Ps4After := Ps4Kpa;
+               TmpAbsDelta := Status.Ps4After - Status.Ps4Before;
+               IF TmpAbsDelta < 0.0 THEN
+                  TmpAbsDelta := 0.0 - TmpAbsDelta;
+               END_IF;
+
+               // Restore pre-selfcheck states for V1/V2/V4.
+               Sv1 := V1Prev;
+               Sv2 := V2Prev;
+               Sv4 := V4Prev;
+
+               IF TmpAbsDelta < Param.LinkageMinDeltaKpa THEN
+                  Status.FaultCode := FC_LINKAGE_NG;
+                  State := ST_FAIL;
+               ELSE
+                  State := ST_STEP2;
+                  SubStep := 0;
+               END_IF;
+
+         ELSE
+            SubStep := 0;
+         END_CASE;
+
+      ST_STEP2:
+         Status.Busy := TRUE;
+         Status.StepNo := ST_STEP2;
+
+         CASE SubStep OF
+            0:
+               // Close test valve V3 first.
+               Sv3 := FALSE;
+               SubStep := 1;
+
+            1:
+               // Start Pump1 and wait build pressure.
+               Sp1 := TRUE;
+               TStep(IN := TRUE, PT := Param.BuildTimeout);
+
+               IF Ps4Kpa >= Param.BuildMinKpa THEN
+                  Status.Ps4Build := Ps4Kpa;
+                  Status.Ps5Build := Ps5Kpa;
+                  TStep(IN := FALSE, PT := Param.BuildTimeout);
+                  Sp1 := FALSE;
+                  State := ST_STEP3;
+                  SubStep := 0;
+               ELSIF TStep.Q THEN
+                  TStep(IN := FALSE, PT := Param.BuildTimeout);
+                  Sp1 := FALSE;
+                  Status.FaultCode := FC_BUILD_TO;
+                  State := ST_FAIL;
+               END_IF;
+
+         ELSE
+            SubStep := 0;
+         END_CASE;
+
+      ST_STEP3:
+         Status.Busy := TRUE;
+         Status.StepNo := ST_STEP3;
+
+         CASE SubStep OF
+            0:
+               // Isolate upstream branch and hold.
+               Sv1 := FALSE;
+               Sv2 := FALSE;
+               Sv4 := FALSE;
+
+               TStep(IN := TRUE, PT := Param.HoldTime);
+               IF TStep.Q THEN
+                  TStep(IN := FALSE, PT := Param.HoldTime);
+                  SubStep := 1;
+               END_IF;
+
+            1:
+               // Leak evaluation.
+               Status.Ps4Hold := Ps4Kpa;
+               Status.Ps5Hold := Ps5Kpa;
+
+               Status.Ps4Delta := Status.Ps4Build - Status.Ps4Hold; // pressure drop
+               Status.Ps5Delta := Status.Ps5Hold - Status.Ps5Build; // pressure rise
+
+               ExternalLeak := (Status.Ps4Delta >= Param.LeakMaxP4DropKpa) AND NOT (Status.Ps5Delta >= Param.LeakMaxP5RiseKpa);
+               InternalLeak := (Status.Ps5Delta >= Param.LeakMaxP5RiseKpa) AND (Status.Ps4Delta > 0.0);
+
+               IF ExternalLeak THEN
+                  Status.FaultCode := FC_EXT_LEAK;
+                  State := ST_FAIL;
+               ELSIF InternalLeak THEN
+                  Status.FaultCode := FC_INT_LEAK;
+                  State := ST_FAIL;
+               ELSE
+                  State := ST_STEP4;
+                  SubStep := 0;
+                  PulseIndex := 0;
+               END_IF;
+
+         ELSE
+            SubStep := 0;
+         END_CASE;
+
+      ST_STEP4:
+         Status.Busy := TRUE;
+         Status.StepNo := ST_STEP4;
+
+         // Sequence pulse: V2 -> V3 -> V4, then restore original state.
+         CASE SubStep OF
+            0:
+               // Select current target by PulseIndex.
+               IF PulseIndex = 0 THEN
+                  Sv2 := TRUE;
+               ELSIF PulseIndex = 1 THEN
+                  Sv3 := TRUE;
+               ELSIF PulseIndex = 2 THEN
+                  Sv4 := TRUE;
+               ELSE
+                  State := ST_PASS;
+               END_IF;
+
+               TStep(IN := TRUE, PT := Param.ValvePulseTime);
+               SubStep := 1;
+
+            1:
+               IF PulseIndex = 0 THEN
+                  Sv2 := TRUE;
+               ELSIF PulseIndex = 1 THEN
+                  Sv3 := TRUE;
+               ELSIF PulseIndex = 2 THEN
+                  Sv4 := TRUE;
+               END_IF;
+
+               IF TStep.Q THEN
+                  TStep(IN := FALSE, PT := Param.ValvePulseTime);
+                  SubStep := 2;
+               END_IF;
+
+            2:
+               // Restore valve to pre-selfcheck state.
+               IF PulseIndex = 0 THEN
+                  Sv2 := V2Prev;
+               ELSIF PulseIndex = 1 THEN
+                  Sv3 := V3Prev;
+               ELSIF PulseIndex = 2 THEN
+                  Sv4 := V4Prev;
+               END_IF;
+
+               TGap(IN := TRUE, PT := Param.RelaySwitchGap);
+               IF TGap.Q THEN
+                  TGap(IN := FALSE, PT := Param.RelaySwitchGap);
+                  PulseIndex := PulseIndex + 1;
+                  SubStep := 0;
+               END_IF;
+
+         ELSE
+            SubStep := 0;
+         END_CASE;
+
+      ST_PASS:
+         Status.Busy := FALSE;
+         Status.Done := TRUE;
+         Status.Passed := TRUE;
+         Status.Failed := FALSE;
+         Status.StepNo := ST_PASS;
+         Status.FaultCode := FC_NONE;
+
+         // Full restore to original operation state.
+         Sv1 := V1Prev;
+         Sv2 := V2Prev;
+         Sv3 := V3Prev;
+         Sv4 := V4Prev;
+         Sp1 := Pump1Prev;
+
+         // Wait for Start release before allowing next start.
+         IF NOT Start THEN
+            State := ST_IDLE;
+         END_IF;
+
+      ST_FAIL:
+         Status.Busy := FALSE;
+         Status.Done := TRUE;
+         Status.Passed := FALSE;
+         Status.Failed := TRUE;
+         Status.StepNo := ST_FAIL;
+
+         // Safe stop policy for fault.
+         Sv1 := FALSE;
+         Sv2 := FALSE;
+         Sv3 := FALSE;
+         Sv4 := FALSE;
+         Sp1 := FALSE;
+
+         IF Reset THEN
+            State := ST_IDLE;
+         END_IF;
+
+   ELSE
+      // Unknown state -> force safe stop.
+      State := ST_FAIL;
+      IF Status.FaultCode = FC_NONE THEN
+         Status.FaultCode := FC_ACTION_NG;
+      END_IF;
+   END_CASE;
+
+   // -------- final command outputs --------
+   V1Cmd := Sv1;
+   V2Cmd := Sv2;
+   V3Cmd := Sv3;
+   V4Cmd := Sv4;
+   Pump1Cmd := Sp1;
+
+END_FUNCTION_BLOCK
+
+
+DATA_BLOCK "DB_WTS_SelfCheck_St1"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      Param    : "UDT_WTS_SelfCheckParam";
+      Status   : "UDT_WTS_SelfCheckStatus";
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+DATA_BLOCK "DB_WTS_SelfCheck_HMI"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      Cmd : "UDT_WTS_SelfCheckCmd";
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+FUNCTION "FC_WTS_WordsToReal" : REAL
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      LowWord  : WORD;
+      HighWord : WORD;
+   END_VAR
+   VAR_TEMP
+      RawDw : DWORD;
+      RawR  AT RawDw : REAL;
+   END_VAR
+BEGIN
+   // Keep same rule with PC side: REAL bits = (HighWord << 16) | LowWord.
+   RawDw := SHL(IN := WORD_TO_DWORD(HighWord), N := 16) OR WORD_TO_DWORD(LowWord);
+   "FC_WTS_WordsToReal" := RawR;
+END_FUNCTION
+
+
+FUNCTION_BLOCK "FB_WTS_PressureDecode"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_IN_OUT
+      RawWords      : ARRAY[0..279] OF WORD;
+      SensorKpa     : ARRAY[1..8] OF REAL;
+   END_VAR
+   VAR_TEMP
+      i     : INT;
+      base  : INT;
+      gainV : REAL;
+   END_VAR
+BEGIN
+   // Decode all sensors 1..8.
+   // word[2]/[3] main value, word[13]/[14] offset, word[15]/[16] gain
+   // Unit is already kPa in current project, so no extra unit conversion here.
+   FOR i := 1 TO 8 DO
+      base := (i - 1) * 17;
+      IF (base >= 0) AND ((base + 16) <= 279) THEN
+         gainV := "FC_WTS_WordsToReal"(LowWord := RawWords[base + 15], HighWord := RawWords[base + 16]);
+         IF gainV = 0.0 THEN
+            gainV := 1.0;
+         END_IF;
+         SensorKpa[i] :=
+            "FC_WTS_WordsToReal"(LowWord := RawWords[base + 2], HighWord := RawWords[base + 3]) * gainV +
+            "FC_WTS_WordsToReal"(LowWord := RawWords[base + 13], HighWord := RawWords[base + 14]);
+      ELSE
+         SensorKpa[i] := 0.0;
+      END_IF;
+   END_FOR;
+END_FUNCTION_BLOCK
+
+
+DATA_BLOCK "DB_Sensor"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      Pressure_Kpa : ARRAY[1..8] OF REAL;
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+(************************************************************)
+(* Cyclic call example (OB1 / Main control FB):             *)
+(*                                                          *)
+(* First: decode pressure from DB1 raw WORD buffer.         *)
+(* "FB_WTS_PressureDecode_1"(                              *)
+(*    RawWords      := "DB1_PressureRaw".Words,            *)
+(*    SensorKpa     := "DB_Sensor".Pressure_Kpa );         *)
+(* // Output only: DB_Sensor.Pressure_Kpa[1..8].           *)
+(*                                                          *)
+(* Then: self-check consumes engineering kPa values.        *)
+(* "FB_WTS_Station1SelfCheck_1"(                           *)
+(*    Enable       := "DB_WTS_SelfCheck_HMI".Cmd.Enable,  *)
+(*    Start        := "DB_WTS_SelfCheck_HMI".Cmd.Start,   *)
+(*    Abort        := "DB_WTS_SelfCheck_HMI".Cmd.Abort,   *)
+(*    Reset        := "DB_WTS_SelfCheck_HMI".Cmd.Reset,   *)
+(*    EStopHealthy := I0.0,                                *)
+(*                                                          *)
+(*    Ps4Kpa       := "DB_Sensor".Pressure_Kpa[4],         *)
+(*    Ps5Kpa       := "DB_Sensor".Pressure_Kpa[5],         *)
+(*                                                          *)
+(*    V1Fb         := Q0.0,                                *)
+(*    V2Fb         := Q0.1,                                *)
+(*    V3Fb         := Q0.2,                                *)
+(*    V4Fb         := Q0.3,                                *)
+(*    Pump1Fb      := Q1.0,                                *)
+(*                                                          *)
+(*    BaseV1Cmd    := "DB_BaseCtrl".V1Cmd,                 *)
+(*    BaseV2Cmd    := "DB_BaseCtrl".V2Cmd,                 *)
+(*    BaseV3Cmd    := "DB_BaseCtrl".V3Cmd,                 *)
+(*    BaseV4Cmd    := "DB_BaseCtrl".V4Cmd,                 *)
+(*    BasePump1Cmd := "DB_BaseCtrl".Pump1Cmd,              *)
+(*                                                          *)
+(*    Param        := "DB_WTS_SelfCheck_St1".Param,        *)
+(*    Status       := "DB_WTS_SelfCheck_St1".Status,       *)
+(*                                                          *)
+(*    V1Cmd        => "DB_Arb".V1FinalCmd,                 *)
+(*    V2Cmd        => "DB_Arb".V2FinalCmd,                 *)
+(*    V3Cmd        => "DB_Arb".V3FinalCmd,                 *)
+(*    V4Cmd        => "DB_Arb".V4FinalCmd,                 *)
+(*    Pump1Cmd     => "DB_Arb".Pump1FinalCmd );            *)
+(*                                                          *)
+(* Recommended HMI binding:                                  *)
+(*   Start/Abort/Reset -> "DB_WTS_SelfCheck_HMI".Cmd.*      *)
+(*   Busy/Done/Passed/Failed/StepNo/FaultCode ->             *)
+(*     "DB_WTS_SelfCheck_St1".Status.*                      *)
+(* NOTE: HMI按钮建议设置为脉冲(Pressed=1, Released=0)。      *)
+(************************************************************)

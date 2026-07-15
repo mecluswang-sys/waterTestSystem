@@ -833,6 +833,7 @@ namespace WaterTest
         success &= readTemperatureSensors();
         success &= readRegulatingValves();
         success &= readSystemStatus();
+        success &= readPlcSelfCheckStatus();
 
         checkAlarms();
 
@@ -856,6 +857,77 @@ namespace WaterTest
         }
 
         return success;
+    }
+
+    bool DeviceManager::setPlcSelfCheckEnable(bool enabled)
+    {
+        if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
+        const int byteOffset = cfg.getInt("selfcheck.plc.cmd.enable.byte_offset", 0);
+        const int bitOffset = cfg.getInt("selfcheck.plc.cmd.enable.bit_offset", 0);
+        if (bitOffset < 0 || bitOffset > 7)
+        {
+            return false;
+        }
+
+        return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, enabled) == S7PLCClient::Result::SUCCESS;
+    }
+
+    bool DeviceManager::writePlcSelfCheckCmdBit(const std::string &cmdKeyPrefix, bool pulse)
+    {
+        if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
+        const int byteOffset = cfg.getInt(cmdKeyPrefix + ".byte_offset", 0);
+        const int bitOffset = cfg.getInt(cmdKeyPrefix + ".bit_offset", 0);
+        if (bitOffset < 0 || bitOffset > 7)
+        {
+            return false;
+        }
+
+        if (!pulse)
+        {
+            return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, true) == S7PLCClient::Result::SUCCESS;
+        }
+
+        if (m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, true) != S7PLCClient::Result::SUCCESS)
+        {
+            return false;
+        }
+
+        const int pulseMs = cfg.getInt("selfcheck.plc.cmd.pulse_ms", 100);
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::max(20, pulseMs)));
+        return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, false) == S7PLCClient::Result::SUCCESS;
+    }
+
+    bool DeviceManager::startPlcSelfCheck()
+    {
+        return writePlcSelfCheckCmdBit("selfcheck.plc.cmd.start", true);
+    }
+
+    bool DeviceManager::abortPlcSelfCheck()
+    {
+        return writePlcSelfCheckCmdBit("selfcheck.plc.cmd.abort", true);
+    }
+
+    bool DeviceManager::resetPlcSelfCheck()
+    {
+        return writePlcSelfCheckCmdBit("selfcheck.plc.cmd.reset", true);
+    }
+
+    PlcSelfCheckStatus DeviceManager::getPlcSelfCheckStatus() const
+    {
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        return m_plcSelfCheckStatus;
     }
 
     PressureSensor DeviceManager::getPressureSensor(uint16_t id) const
@@ -1671,34 +1743,19 @@ namespace WaterTest
         }
 
         auto &cfg = ConfigManager::getInstance();
-        constexpr int kUnset = (std::numeric_limits<int>::min)();
-        const int dbSensor = cfg.getInt("db.sensor.number", -1);
-        const int mainValueRealOffset = cfg.getInt("db.sensor.main_value_real.offset", -1);
-        const int mainValueLowWordIndex = cfg.getInt("db.sensor.main_value_float.low_word_index", 2);
-        const int mainValueHighWordIndex = cfg.getInt("db.sensor.main_value_float.high_word_index", 3);
-
-        if (dbSensor < 0 ||
-            ((mainValueLowWordIndex < 0 || mainValueHighWordIndex < 0) && mainValueRealOffset < 0))
+        const int dbSensor = cfg.getInt("db.sensor.kpa.db_number", cfg.getInt("db.sensor.number", -1));
+        if (dbSensor < 0)
         {
-            appendPressureDebugLog("[DEVICE][PRESSURE][BUFFER] skipped: missing db.sensor.number or float word indexes");
+            appendPressureDebugLog("[DEVICE][PRESSURE][KPA] skipped: missing db.sensor.kpa.db_number (or db.sensor.number)");
             return false;
         }
 
-        const int baseOffset = cfg.getInt("db.sensor.base_offset", 0);
-        const int itemSize = cfg.getInt("db.sensor.item_size", 34);
-        const int baseWordIndex = cfg.getInt("db.sensor.base_word_index", -1);
-        const int itemWords = cfg.getInt("db.sensor.item_words", -1);
-        const int mainUnitWordIndex = cfg.getInt("db.sensor.unit.word_index", -1);
-        const int mainValueIntOffset = cfg.getInt("db.sensor.main_value_int.offset", 0);
-        const int mainDecimalWordIndex = cfg.getInt("db.sensor.main_decimal.word_index", -1);
-        const int offsetLowWordIndex = cfg.getInt("db.sensor.offset.low_word_index", -1);
-        const int offsetHighWordIndex = cfg.getInt("db.sensor.offset.high_word_index", -1);
-        const int gainLowWordIndex = cfg.getInt("db.sensor.gain.low_word_index", -1);
-        const int gainHighWordIndex = cfg.getInt("db.sensor.gain.high_word_index", -1);
-        const int mainDecimalOffset = cfg.getInt("db.sensor.main_decimal.offset", -1);
-        const float scale = cfg.getFloat("db.pressure.scale", 1.0f); // 工程值缩放，当前统一按 kPa 保存/显示
-        const std::string pressureWordOrder = cfg.getString("db.sensor.main_value_real.word_order", "CDAB");
-        bool anyBufferReadSuccess = false;
+        const int baseOffset = cfg.getInt("db.sensor.kpa.base_offset", 0);
+        const int elemSize = cfg.getInt("db.sensor.kpa.element_size", 4); // REAL=4B
+        const int indexBase = cfg.getInt("db.sensor.kpa.index_base", 1);  // DB_Sensor.SensorKpa[1..8]
+        const float scale = cfg.getFloat("db.pressure.scale", 1.0f);
+        const std::string kpaWordOrder = cfg.getString("db.sensor.kpa.word_order", "ABCD");
+        bool anyKpaReadSuccess = false;
 
         std::vector<uint16_t> sensorIds;
         std::unordered_map<uint16_t, int> defaultDisplayDecimals;
@@ -1714,221 +1771,60 @@ namespace WaterTest
 
         for (uint16_t id : sensorIds)
         {
-
             const std::string sensorPrefix = std::string("db.sensor.") + std::to_string(id) + ".";
-            const int sensorDbNumber = cfg.getInt(sensorPrefix + "number", dbSensor);
-            const int sensorBaseOffset = cfg.getInt(sensorPrefix + "base_offset", kUnset);
-            const int sensorItemSize = cfg.getInt(sensorPrefix + "item_size", kUnset);
-            const int sensorBaseWordIndex = cfg.getInt(sensorPrefix + "base_word_index", kUnset);
-            const int sensorItemWords = cfg.getInt(sensorPrefix + "item_words", kUnset);
-            const int sensorMainValueRealOffset = cfg.getInt(sensorPrefix + "main_value_real.offset", kUnset);
-            const int sensorMainValueLowWordIndex = cfg.getInt(sensorPrefix + "main_value_float.low_word_index", mainValueLowWordIndex);
-            const int sensorMainValueHighWordIndex = cfg.getInt(sensorPrefix + "main_value_float.high_word_index", mainValueHighWordIndex);
-            const int sensorMainUnitWordIndex = cfg.getInt(sensorPrefix + "unit.word_index", kUnset);
-            const int sensorMainDecimalWordIndex = cfg.getInt(sensorPrefix + "main_decimal.word_index", kUnset);
-            const int sensorOffsetLowWordIndex = cfg.getInt(sensorPrefix + "offset.low_word_index", kUnset);
-            const int sensorOffsetHighWordIndex = cfg.getInt(sensorPrefix + "offset.high_word_index", kUnset);
-            const int sensorGainLowWordIndex = cfg.getInt(sensorPrefix + "gain.low_word_index", kUnset);
-            const int sensorGainHighWordIndex = cfg.getInt(sensorPrefix + "gain.high_word_index", kUnset);
-            const int sensorMainDecimalOffset = cfg.getInt(sensorPrefix + "main_decimal.offset", kUnset);
+            const int sensorIndex = cfg.getInt(sensorPrefix + "kpa.index", static_cast<int>(id));
             const float sensorScale = cfg.getFloat(sensorPrefix + "scale", scale);
 
-            const bool hasSensorBaseOffset = (sensorBaseOffset != kUnset);
-            const bool hasSensorItemSize = (sensorItemSize != kUnset);
-            const bool hasSensorBaseWordIndex = (sensorBaseWordIndex != kUnset);
-            const bool hasSensorItemWords = (sensorItemWords != kUnset);
-            const bool hasSensorMainValueRealOffset = (sensorMainValueRealOffset != kUnset);
-            const bool hasSensorMainUnitWordIndex = (sensorMainUnitWordIndex != kUnset);
-            const bool hasSensorMainDecimalWordIndex = (sensorMainDecimalWordIndex != kUnset);
-            const bool hasSensorOffsetLowWordIndex = (sensorOffsetLowWordIndex != kUnset);
-            const bool hasSensorOffsetHighWordIndex = (sensorOffsetHighWordIndex != kUnset);
-            const bool hasSensorGainLowWordIndex = (sensorGainLowWordIndex != kUnset);
-            const bool hasSensorGainHighWordIndex = (sensorGainHighWordIndex != kUnset);
-            const bool hasSensorMainDecimalOffset = (sensorMainDecimalOffset != kUnset);
-            const int resolvedItemSize = hasSensorItemSize ? sensorItemSize : itemSize;
-            const int resolvedItemWords = hasSensorItemWords ? sensorItemWords : itemWords;
-
-            // item_size=0 时默认只有单结构体；可通过 db.sensor.<id>.* 覆盖读取多传感器。
-            if (resolvedItemSize <= 0 && id != 1 && !hasSensorBaseOffset && !hasSensorMainValueRealOffset)
+            if (elemSize <= 0)
             {
+                appendPressureDebugLog("[DEVICE][PRESSURE][KPA] skipped: invalid db.sensor.kpa.element_size");
+                break;
+            }
+
+            const int byteOffset = baseOffset + (sensorIndex - indexBase) * elemSize;
+            if (byteOffset < 0)
+            {
+                std::ostringstream oss;
+                oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
+                    << " sensorIndex=" << sensorIndex
+                    << " byteOffset=" << byteOffset
+                    << " result=invalid_offset";
+                appendPressureDebugLog(oss.str());
                 continue;
             }
 
-            int itemBase = 0;
-            int itemBaseWord = -1;
-            if ((hasSensorBaseWordIndex || baseWordIndex >= 0) && resolvedItemWords > 0)
-            {
-                const int resolvedBaseWord = hasSensorBaseWordIndex ? sensorBaseWordIndex : baseWordIndex;
-                itemBaseWord = resolvedBaseWord + (static_cast<int>(id) - 1) * resolvedItemWords;
-                itemBase = itemBaseWord * 2;
-            }
-            else
-            {
-                itemBase = hasSensorBaseOffset
-                               ? sensorBaseOffset
-                               : baseOffset + ((resolvedItemSize > 0) ? (static_cast<int>(id) - 1) * resolvedItemSize : 0);
-            }
-            const int realOffset = itemBase + (hasSensorMainValueRealOffset ? sensorMainValueRealOffset : mainValueRealOffset);
-            const int lowWordOffset = itemBase + sensorMainValueLowWordIndex * 2;
-            const int highWordOffset = itemBase + sensorMainValueHighWordIndex * 2;
-            const int unitWordIndex = hasSensorMainUnitWordIndex ? sensorMainUnitWordIndex : mainUnitWordIndex;
-            const int unitReadOffset = unitWordIndex >= 0 ? (itemBase + unitWordIndex * 2) : -1;
-            const int decimalWordIndex = hasSensorMainDecimalWordIndex ? sensorMainDecimalWordIndex : mainDecimalWordIndex;
-            const int decimalOffset = hasSensorMainDecimalOffset ? sensorMainDecimalOffset : mainDecimalOffset;
-            const int decimalReadOffset = decimalWordIndex >= 0 ? (itemBase + decimalWordIndex * 2)
-                                                                : (decimalOffset >= 0 ? itemBase + decimalOffset : -1);
-            const int resolvedOffsetLowWordIndex = hasSensorOffsetLowWordIndex ? sensorOffsetLowWordIndex : offsetLowWordIndex;
-            const int resolvedOffsetHighWordIndex = hasSensorOffsetHighWordIndex ? sensorOffsetHighWordIndex : offsetHighWordIndex;
-            const int resolvedGainLowWordIndex = hasSensorGainLowWordIndex ? sensorGainLowWordIndex : gainLowWordIndex;
-            const int resolvedGainHighWordIndex = hasSensorGainHighWordIndex ? sensorGainHighWordIndex : gainHighWordIndex;
-            const int offsetLowWordOffset = resolvedOffsetLowWordIndex >= 0 ? (itemBase + resolvedOffsetLowWordIndex * 2) : -1;
-            const int offsetHighWordOffset = resolvedOffsetHighWordIndex >= 0 ? (itemBase + resolvedOffsetHighWordIndex * 2) : -1;
-            const int gainLowWordOffset = resolvedGainLowWordIndex >= 0 ? (itemBase + resolvedGainLowWordIndex * 2) : -1;
-            const int gainHighWordOffset = resolvedGainHighWordIndex >= 0 ? (itemBase + resolvedGainHighWordIndex * 2) : -1;
-            const int intOffset = itemBase + mainValueIntOffset;
-
-            uint8_t rawLowWord[2] = {0, 0};
-            uint8_t rawHighWord[2] = {0, 0};
-            auto rLow = m_plcClient->readDB(sensorDbNumber, lowWordOffset, 2, rawLowWord);
-            auto rHigh = m_plcClient->readDB(sensorDbNumber, highWordOffset, 2, rawHighWord);
-            if (rLow != S7PLCClient::Result::SUCCESS || rHigh != S7PLCClient::Result::SUCCESS)
+            uint8_t rawBytes[4] = {0, 0, 0, 0};
+            auto rr = m_plcClient->readDB(dbSensor, byteOffset, 4, rawBytes);
+            if (rr != S7PLCClient::Result::SUCCESS)
             {
                 std::ostringstream oss;
-                oss << "[DEVICE][PRESSURE][BUFFER] sensor=" << id
-                    << " db=" << sensorDbNumber
-                    << " itemBase=" << itemBase
-                    << " itemBaseWord=" << itemBaseWord
-                    << " lowWordOffset=" << lowWordOffset
-                    << " highWordOffset=" << highWordOffset
-                    << " decimalOffset=" << decimalOffset
-                    << " result=readRaw_failed"
+                oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
+                    << " db=" << dbSensor
+                    << " offset=" << byteOffset
+                    << " result=read_failed"
                     << " error=\"" << m_plcClient->getLastError() << "\"";
                 appendPressureDebugLog(oss.str());
                 continue;
             }
 
-            const uint16_t lowWord = static_cast<uint16_t>((static_cast<uint16_t>(rawLowWord[0]) << 8) |
-                                                           static_cast<uint16_t>(rawLowWord[1]));
-            const uint16_t highWord = static_cast<uint16_t>((static_cast<uint16_t>(rawHighWord[0]) << 8) |
-                                                            static_cast<uint16_t>(rawHighWord[1]));
-            const float mainValueReal = modbusRegsToFloatBigEndianWords(highWord, lowWord);
-
-            int16_t mainValueInt = 0;
-            bool intValid = false;
-            uint8_t rawIntBytes[2] = {0, 0};
-            auto rInt = m_plcClient->readDB(sensorDbNumber, intOffset, 2, rawIntBytes);
-            if (rInt == S7PLCClient::Result::SUCCESS)
+            float pressureKPa = decodeFloatByWordOrder(rawBytes, kpaWordOrder) * sensorScale;
+            if (!std::isfinite(pressureKPa))
             {
-                // INT 为大端序
-                mainValueInt = static_cast<int16_t>((static_cast<uint16_t>(rawIntBytes[0]) << 8) |
-                                                    static_cast<uint16_t>(rawIntBytes[1]));
-                intValid = true;
+                std::ostringstream oss;
+                oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
+                    << " db=" << dbSensor
+                    << " offset=" << byteOffset
+                    << " result=non_finite";
+                appendPressureDebugLog(oss.str());
+                continue;
             }
 
-            float engineeringValue = mainValueReal;
-            bool usedIntFallback = false;
             int displayDecimals = 2;
             auto decIt = defaultDisplayDecimals.find(id);
             if (decIt != defaultDisplayDecimals.end())
             {
                 displayDecimals = decIt->second;
             }
-            float calibrationOffset = 0.0f;
-            float calibrationGain = 1.0f;
-            uint16_t rawUnitCode = 12;
-            HartPressureUnitInfo unitInfo{"kPa", 1.0f};
-            bool unitKnown = true;
-
-            auto readUint16Word = [&](int byteOffset, uint16_t &value) -> bool
-            {
-                if (byteOffset < 0)
-                    return false;
-                uint8_t rawWordBytes[2] = {0, 0};
-                auto result = m_plcClient->readDB(sensorDbNumber, byteOffset, 2, rawWordBytes);
-                if (result != S7PLCClient::Result::SUCCESS)
-                    return false;
-                value = static_cast<uint16_t>((static_cast<uint16_t>(rawWordBytes[0]) << 8) |
-                                              static_cast<uint16_t>(rawWordBytes[1]));
-                return true;
-            };
-
-            auto readFloatFromWords = [&](int lowByteOffset, int highByteOffset, float &value) -> bool
-            {
-                if (lowByteOffset < 0 || highByteOffset < 0)
-                    return false;
-
-                uint8_t lowBytes[2] = {0, 0};
-                uint8_t highBytes[2] = {0, 0};
-                auto lowResult = m_plcClient->readDB(sensorDbNumber, lowByteOffset, 2, lowBytes);
-                auto highResult = m_plcClient->readDB(sensorDbNumber, highByteOffset, 2, highBytes);
-                if (lowResult != S7PLCClient::Result::SUCCESS || highResult != S7PLCClient::Result::SUCCESS)
-                    return false;
-
-                const uint16_t low = static_cast<uint16_t>((static_cast<uint16_t>(lowBytes[0]) << 8) |
-                                                           static_cast<uint16_t>(lowBytes[1]));
-                const uint16_t high = static_cast<uint16_t>((static_cast<uint16_t>(highBytes[0]) << 8) |
-                                                            static_cast<uint16_t>(highBytes[1]));
-                value = modbusRegsToFloatBigEndianWords(high, low);
-                return true;
-            };
-
-            // 浮点值异常（极小、NaN、Inf）时，回退到整数主变量值，优先保证现场有可用读数
-            if (!std::isfinite(engineeringValue) || std::fabs(engineeringValue) < 1e-20f)
-            {
-                if (intValid)
-                {
-                    engineeringValue = static_cast<float>(mainValueInt);
-                    usedIntFallback = true;
-                }
-            }
-
-            if (!readFloatFromWords(offsetLowWordOffset, offsetHighWordOffset, calibrationOffset) || !std::isfinite(calibrationOffset))
-            {
-                calibrationOffset = 0.0f;
-            }
-
-            if (!readFloatFromWords(gainLowWordOffset, gainHighWordOffset, calibrationGain) || !std::isfinite(calibrationGain) || std::fabs(calibrationGain) < 1e-20f)
-            {
-                calibrationGain = 1.0f;
-            }
-
-            uint16_t unitCodeValue = 12;
-            if (readUint16Word(unitReadOffset, unitCodeValue))
-            {
-                rawUnitCode = unitCodeValue;
-                unitKnown = tryGetHartPressureUnitInfo(rawUnitCode, unitInfo);
-                if (!unitKnown)
-                {
-                    unitInfo = {"kPa", 1.0f};
-                }
-            }
-
-            engineeringValue = engineeringValue * calibrationGain + calibrationOffset;
-
-            if (decimalReadOffset >= 0)
-            {
-                uint8_t rawDecimalBytes[2] = {0, 0};
-                auto rDec = m_plcClient->readDB(sensorDbNumber, decimalReadOffset, 2, rawDecimalBytes);
-                if (rDec == S7PLCClient::Result::SUCCESS)
-                {
-                    const uint16_t mainDecimalRaw = static_cast<uint16_t>((static_cast<uint16_t>(rawDecimalBytes[0]) << 8) |
-                                                                          static_cast<uint16_t>(rawDecimalBytes[1]));
-                    displayDecimals = std::clamp(static_cast<int>(mainDecimalRaw), 0, 6);
-                }
-                else
-                {
-                    std::ostringstream oss;
-                    oss << "[DEVICE][PRESSURE][BUFFER] sensor=" << id
-                        << " db=" << sensorDbNumber
-                        << " decimalReadOffset=" << decimalReadOffset
-                        << " result=readDecimal_failed"
-                        << " error=\"" << m_plcClient->getLastError() << "\"";
-                    appendPressureDebugLog(oss.str());
-                }
-            }
-
-            const float pressureKPa = engineeringValue * sensorScale;
-
             {
                 std::lock_guard<std::mutex> writeLock(m_dataMutex);
                 auto sensorIt = m_pressureSensors.find(id);
@@ -1940,60 +1836,35 @@ namespace WaterTest
                     sensorIt->second.timestamp = std::chrono::system_clock::now();
                 }
             }
-            anyBufferReadSuccess = true;
+            anyKpaReadSuccess = true;
 
             std::ostringstream oss;
-            oss << "[DEVICE][PRESSURE][BUFFER] sensor=" << id
-                << " db=" << sensorDbNumber
-                << " itemBase=" << itemBase
-                << " itemBaseWord=" << itemBaseWord
-                << " realOffset=" << realOffset
-                << " lowWordIndex=" << sensorMainValueLowWordIndex
-                << " highWordIndex=" << sensorMainValueHighWordIndex
-                << " lowWordOffset=" << lowWordOffset
-                << " highWordOffset=" << highWordOffset
-                << " intOffset=" << intOffset
-                << " unitWordIndex=" << unitWordIndex
-                << " unitReadOffset=" << unitReadOffset
-                << " decimalWordIndex=" << decimalWordIndex
-                << " decimalOffset=" << decimalOffset
-                << " decimalReadOffset=" << decimalReadOffset
-                << " offsetWordIndex=" << resolvedOffsetLowWordIndex << "/" << resolvedOffsetHighWordIndex
-                << " offsetReadOffset=" << offsetLowWordOffset << "/" << offsetHighWordOffset
-                << " gainWordIndex=" << resolvedGainLowWordIndex << "/" << resolvedGainHighWordIndex
-                << " gainReadOffset=" << gainLowWordOffset << "/" << gainHighWordOffset
-                << " wordOrder=" << pressureWordOrder
-                << " rawWords=0x"
-                << std::hex << std::setw(4) << std::setfill('0') << lowWord
-                << ",0x" << std::setw(4) << std::setfill('0') << highWord
+            oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
+                << " db=" << dbSensor
+                << " sensorIndex=" << sensorIndex
+                << " indexBase=" << indexBase
+                << " baseOffset=" << baseOffset
+                << " elemSize=" << elemSize
+                << " readOffset=" << byteOffset
+                << " wordOrder=" << kpaWordOrder
+                << " rawBytes=0x"
+                << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(rawBytes[0])
+                << std::setw(2) << static_cast<int>(rawBytes[1])
+                << std::setw(2) << static_cast<int>(rawBytes[2])
+                << std::setw(2) << static_cast<int>(rawBytes[3])
                 << std::dec
-                << " rawIntBytes=0x"
-                << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(rawIntBytes[0])
-                << std::setw(2) << static_cast<int>(rawIntBytes[1])
-                << std::dec
-                << " intValue=" << mainValueInt
-                << " rawReal=" << mainValueReal
-                << " usedIntFallback=" << (usedIntFallback ? 1 : 0)
-                << " rawUnitCode=" << rawUnitCode
-                << " rawUnitLabel=" << unitInfo.label
-                << " rawUnitKnown=" << (unitKnown ? 1 : 0)
-                << " calibrationOffset=" << calibrationOffset
-                << " calibrationGain=" << calibrationGain
-                << " formula=raw*gain+offset"
-                << " displayDecimals=" << displayDecimals
-                << " engineering=" << engineeringValue
                 << " scale=" << sensorScale
                 << " pressureKPa=" << pressureKPa
                 << " status=" << static_cast<int>(DeviceStatus::ONLINE);
             appendPressureDebugLog(oss.str());
         }
 
-        if (!anyBufferReadSuccess)
+        if (!anyKpaReadSuccess)
         {
-            appendPressureDebugLog("[DEVICE][PRESSURE][BUFFER] all sensors read failed");
+            appendPressureDebugLog("[DEVICE][PRESSURE][KPA] all sensors read failed");
         }
 
-        return anyBufferReadSuccess;
+        return anyKpaReadSuccess;
     }
 
     bool DeviceManager::readFlowMeters()
@@ -2574,6 +2445,99 @@ namespace WaterTest
         }
 
         return true;
+    }
+
+    bool DeviceManager::readPlcSelfCheckStatus()
+    {
+        if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            std::lock_guard<std::mutex> lock(m_dataMutex);
+            m_plcSelfCheckStatus.online = false;
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        if (!cfg.getBool("selfcheck.plc.status.enable_readback", true))
+        {
+            return true;
+        }
+
+        const int dbStatus = cfg.getInt("selfcheck.plc.db_status", 21);
+
+        const int bBusyByte = cfg.getInt("selfcheck.plc.status.busy.byte_offset", 0);
+        const int bBusyBit = cfg.getInt("selfcheck.plc.status.busy.bit_offset", 0);
+        const int bDoneByte = cfg.getInt("selfcheck.plc.status.done.byte_offset", 0);
+        const int bDoneBit = cfg.getInt("selfcheck.plc.status.done.bit_offset", 1);
+        const int bPassedByte = cfg.getInt("selfcheck.plc.status.passed.byte_offset", 0);
+        const int bPassedBit = cfg.getInt("selfcheck.plc.status.passed.bit_offset", 2);
+        const int bFailedByte = cfg.getInt("selfcheck.plc.status.failed.byte_offset", 0);
+        const int bFailedBit = cfg.getInt("selfcheck.plc.status.failed.bit_offset", 3);
+
+        const int stepOffset = cfg.getInt("selfcheck.plc.status.step_offset", 2);
+        const int faultOffset = cfg.getInt("selfcheck.plc.status.fault_offset", 4);
+
+        const int ps4BeforeOffset = cfg.getInt("selfcheck.plc.status.ps4_before_offset", 6);
+        const int ps4AfterOffset = cfg.getInt("selfcheck.plc.status.ps4_after_offset", 10);
+        const int ps4BuildOffset = cfg.getInt("selfcheck.plc.status.ps4_build_offset", 14);
+        const int ps4HoldOffset = cfg.getInt("selfcheck.plc.status.ps4_hold_offset", 18);
+        const int ps5BuildOffset = cfg.getInt("selfcheck.plc.status.ps5_build_offset", 22);
+        const int ps5HoldOffset = cfg.getInt("selfcheck.plc.status.ps5_hold_offset", 26);
+        const int ps4DeltaOffset = cfg.getInt("selfcheck.plc.status.ps4_delta_offset", 30);
+        const int ps5DeltaOffset = cfg.getInt("selfcheck.plc.status.ps5_delta_offset", 34);
+
+        bool busy = false;
+        bool done = false;
+        bool passed = false;
+        bool failed = false;
+        int16_t step = 0;
+        int16_t fault = 0;
+        float ps4Before = 0.0f;
+        float ps4After = 0.0f;
+        float ps4Build = 0.0f;
+        float ps4Hold = 0.0f;
+        float ps5Build = 0.0f;
+        float ps5Hold = 0.0f;
+        float ps4Delta = 0.0f;
+        float ps5Delta = 0.0f;
+
+        bool ok = true;
+        ok &= (m_plcClient->readBool(dbStatus, bBusyByte, bBusyBit, busy) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readBool(dbStatus, bDoneByte, bDoneBit, done) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readBool(dbStatus, bPassedByte, bPassedBit, passed) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readBool(dbStatus, bFailedByte, bFailedBit, failed) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readInt16(dbStatus, stepOffset, step) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readInt16(dbStatus, faultOffset, fault) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps4BeforeOffset, ps4Before) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps4AfterOffset, ps4After) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps4BuildOffset, ps4Build) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps4HoldOffset, ps4Hold) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps5BuildOffset, ps5Build) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps5HoldOffset, ps5Hold) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps4DeltaOffset, ps4Delta) == S7PLCClient::Result::SUCCESS);
+        ok &= (m_plcClient->readReal(dbStatus, ps5DeltaOffset, ps5Delta) == S7PLCClient::Result::SUCCESS);
+
+        std::lock_guard<std::mutex> lock(m_dataMutex);
+        m_plcSelfCheckStatus.online = ok;
+        if (ok)
+        {
+            m_plcSelfCheckStatus.busy = busy;
+            m_plcSelfCheckStatus.done = done;
+            m_plcSelfCheckStatus.passed = passed;
+            m_plcSelfCheckStatus.failed = failed;
+            m_plcSelfCheckStatus.stepNo = step;
+            m_plcSelfCheckStatus.faultCode = static_cast<uint16_t>(fault);
+            m_plcSelfCheckStatus.ps4Before = ps4Before;
+            m_plcSelfCheckStatus.ps4After = ps4After;
+            m_plcSelfCheckStatus.ps4Build = ps4Build;
+            m_plcSelfCheckStatus.ps4Hold = ps4Hold;
+            m_plcSelfCheckStatus.ps5Build = ps5Build;
+            m_plcSelfCheckStatus.ps5Hold = ps5Hold;
+            m_plcSelfCheckStatus.ps4Delta = ps4Delta;
+            m_plcSelfCheckStatus.ps5Delta = ps5Delta;
+            m_plcSelfCheckStatus.timestamp = std::chrono::system_clock::now();
+        }
+
+        return ok;
     }
 
     void DeviceManager::checkAlarms()

@@ -234,6 +234,14 @@ namespace WaterTest
         }
     }
 
+    void MainWindow::activateStation1Tab()
+    {
+        if (m_tabWidget && m_station1Panel)
+        {
+            m_tabWidget->setCurrentWidget(m_station1Panel);
+        }
+    }
+
     void MainWindow::applyAppTheme()
     {
         auto &config = ConfigManager::getInstance();
@@ -1552,10 +1560,14 @@ namespace WaterTest
     {
         if (m_dataStatsLabel)
         {
+            const QString selfCheckText = QString("SC[%1/%2]")
+                                              .arg(static_cast<int>(data.selfcheck_step_no))
+                                              .arg(QString("0x%1").arg(static_cast<unsigned int>(data.selfcheck_fault_code), 4, 16, QLatin1Char('0')).toUpper());
             m_dataStatsLabel->setText(
-                QString("采样: P1=%1 kPa, F=%2 | Ts=%3")
+                QString("采样: P1=%1 kPa, F=%2 | %3 | Ts=%4")
                     .arg(data.pressure[0], 0, 'f', 2)
                     .arg(data.flow_rate, 0, 'f', 2)
+                    .arg(selfCheckText)
                     .arg(data.timestamp));
         }
     }

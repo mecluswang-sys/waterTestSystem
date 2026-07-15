@@ -36,6 +36,8 @@ Water Test System
 │   ├── docs/TERMINAL_STATION_ACCEPTANCE_CHECKLIST.md . Terminal/Station验收清单
 │   ├── docs/TERMINAL_STATION_COMMISSIONING_LOG_TEMPLATE.md . 联调日志模板
 │   ├── docs/FAULT_DIAGNOSIS_THREE_STAGE.md . 三段式故障定位表
+│   ├── docs/STATION1_SELFCHECK_PLC_TIA_SCL_v1.0.scl . 站1自检PLC状态机(SCL)
+│   ├── docs/STATION1_HMI_BINDING_AND_SIMULATION.md . 站1自检HMI绑定与仿真
 │   ├── docs/SINGLE_MACHINE_DAILY_COMMISSIONING_PLAN.md . 单机阶段日常联调计划
 │   ├── docs/2026-04-15_修改总结.md ............ 当日修改汇总
 │   ├── include/NetworkProtocol.h ........ 通信协议定义

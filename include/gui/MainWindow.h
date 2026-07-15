@@ -53,6 +53,8 @@ namespace WaterTest
         void setTerminalServer(std::shared_ptr<TerminalServer> server);
         void setStationClient(std::shared_ptr<StationClient> client);
             std::shared_ptr<DeviceManager> getDeviceManager() const { return m_deviceManager; }
+        Station1Panel *getStation1Panel() const { return m_station1Panel; }
+        void activateStation1Tab();
 
     protected:
         void closeEvent(QCloseEvent *event) override;
