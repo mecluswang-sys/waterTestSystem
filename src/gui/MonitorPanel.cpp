@@ -27,13 +27,6 @@ namespace WaterTest
 
     namespace
     {
-        constexpr double kKPaPerKgfCm2 = 98.0665;
-
-        static double kPaToKgfCm2(double kpa)
-        {
-            return kpa / kKPaPerKgfCm2;
-        }
-
         int pressureDisplayDecimals(const PressureSensor &sensor, int fallbackDecimals = 2)
         {
             if (sensor.displayDecimals >= 0 && sensor.displayDecimals <= 6)
@@ -141,8 +134,8 @@ namespace WaterTest
         // 放置到网格：第0行第1列
         mainLayout->addWidget(flowGroup, 0, 1);
 
-        // 电动阀组
-        QGroupBox *valveGroup = new QGroupBox("电动阀", this);
+        // 电动阀/调压阀组
+        QGroupBox *valveGroup = new QGroupBox("电动阀 / 调压阀", this);
         valveGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         QVBoxLayout *valveLayout = new QVBoxLayout(valveGroup);
         valveLayout->setContentsMargins(4, 4, 4, 4);
@@ -314,14 +307,13 @@ namespace WaterTest
             // 压力显示（内部单位 kPa，界面直接显示 kPa），若不存在则留空
             if (i < pSensors.size())
             {
-                double kgfCm2 = kPaToKgfCm2(static_cast<double>(pSensors[i].pressure));
-                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(kgfCm2, 'f', pressureDisplayDecimals(pSensors[i]))));
+                m_sensorTable->setItem(i, 2, new QTableWidgetItem(QString::number(pSensors[i].pressure, 'f', pressureDisplayDecimals(pSensors[i]))));
 
                 std::ostringstream oss;
                 oss << "[UI][PRESSURE] sensor=" << pSensors[i].id
                     << " pressureKPa=" << pSensors[i].pressure
                     << " displayDecimals=" << pSensors[i].displayDecimals
-                    << " displayKgfCm2=" << kgfCm2
+                    << " displayKPa=" << pSensors[i].pressure
                     << " status=" << static_cast<int>(pSensors[i].status);
                 appendPressureUiDebugLog(oss.str());
             }
@@ -487,58 +479,10 @@ namespace WaterTest
             return 4.0 + 16.0 * (static_cast<double>(percent) / 100.0);
         };
 
-        for (size_t i = 0; i < valves.size(); ++i)
-        {
-            const auto &valve = valves[i];
-
-            m_valveTable->setItem(i, 0, new QTableWidgetItem(QString::number(valve.id)));
-            m_valveTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(valve.name)));
-            m_valveTable->setItem(i, 2, new QTableWidgetItem(QString::number(valve.openingDegree)));
-            m_valveTable->setItem(i, 3, new QTableWidgetItem("-"));
-            m_valveTable->setItem(i, 4, new QTableWidgetItem("-"));
-
-            QString statusText;
-            QColor bgColor(200, 200, 200);
-
-            if (valve.status == ValveStatus::OPEN)
-            {
-                statusText = "开";
-                bgColor = QColor(100, 255, 100);
-            }
-            else if (valve.status == ValveStatus::CLOSED)
-            {
-                statusText = "关";
-                bgColor = QColor(200, 200, 200);
-            }
-            else if (valve.status == ValveStatus::OPENING)
-            {
-                statusText = "开启中";
-                bgColor = QColor(255, 255, 100);
-            }
-            else if (valve.status == ValveStatus::CLOSING)
-            {
-                statusText = "关闭中";
-                bgColor = QColor(255, 255, 100);
-            }
-            else if (valve.status == ValveStatus::FAULT)
-            {
-                statusText = "故障";
-                bgColor = QColor(255, 100, 100);
-            }
-            else
-            {
-                statusText = "未知";
-            }
-
-            auto *statusItem = new QTableWidgetItem(statusText);
-            statusItem->setBackground(bgColor);
-            m_valveTable->setItem(i, 5, statusItem);
-        }
-
         for (size_t i = 0; i < regValves.size(); ++i)
         {
             const auto &valve = regValves[i];
-            const int row = static_cast<int>(valves.size() + i);
+            const int row = static_cast<int>(i);
 
             const int aoRaw = percentToAoRaw(valve.openingSetpoint);
             const double ma = percentToMilliAmp(valve.openingSetpoint);
@@ -573,6 +517,55 @@ namespace WaterTest
             {
                 statusText = "动作中";
                 bgColor = QColor(255, 255, 100);
+            }
+            else
+            {
+                statusText = "未知";
+            }
+
+            auto *statusItem = new QTableWidgetItem(statusText);
+            statusItem->setBackground(bgColor);
+            m_valveTable->setItem(row, 5, statusItem);
+        }
+
+        for (size_t i = 0; i < valves.size(); ++i)
+        {
+            const auto &valve = valves[i];
+            const int row = static_cast<int>(regValves.size() + i);
+
+            m_valveTable->setItem(row, 0, new QTableWidgetItem(QString::number(valve.id)));
+            m_valveTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(valve.name)));
+            m_valveTable->setItem(row, 2, new QTableWidgetItem(QString::number(valve.openingDegree)));
+            m_valveTable->setItem(row, 3, new QTableWidgetItem("-"));
+            m_valveTable->setItem(row, 4, new QTableWidgetItem("-"));
+
+            QString statusText;
+            QColor bgColor(200, 200, 200);
+
+            if (valve.status == ValveStatus::OPEN)
+            {
+                statusText = "开";
+                bgColor = QColor(100, 255, 100);
+            }
+            else if (valve.status == ValveStatus::CLOSED)
+            {
+                statusText = "关";
+                bgColor = QColor(200, 200, 200);
+            }
+            else if (valve.status == ValveStatus::OPENING)
+            {
+                statusText = "开启中";
+                bgColor = QColor(255, 255, 100);
+            }
+            else if (valve.status == ValveStatus::CLOSING)
+            {
+                statusText = "关闭中";
+                bgColor = QColor(255, 255, 100);
+            }
+            else if (valve.status == ValveStatus::FAULT)
+            {
+                statusText = "故障";
+                bgColor = QColor(255, 100, 100);
             }
             else
             {

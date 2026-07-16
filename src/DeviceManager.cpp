@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -25,6 +26,78 @@ namespace WaterTest
 
     namespace
     {
+        struct PlcDbBitAddress
+        {
+            int byteOffset;
+            int bitOffset;
+
+            bool isValid() const
+            {
+                return byteOffset >= 0 && bitOffset >= 0 && bitOffset <= 7;
+            }
+        };
+
+        PlcDbBitAddress loadPlcBitAddress(ConfigManager &cfg,
+                                          const std::string &keyPrefix,
+                                          int defaultByteOffset,
+                                          int defaultBitOffset)
+        {
+            return PlcDbBitAddress{
+                cfg.getInt(keyPrefix + ".byte_offset", defaultByteOffset),
+                cfg.getInt(keyPrefix + ".bit_offset", defaultBitOffset)};
+        }
+
+        bool readPlcBoolField(S7PLCClient &client,
+                              int dbNumber,
+                              const PlcDbBitAddress &address,
+                              bool &value)
+        {
+            return address.isValid() &&
+                   client.readBool(dbNumber, address.byteOffset, address.bitOffset, value) == S7PLCClient::Result::SUCCESS;
+        }
+
+        bool writePlcBoolField(S7PLCClient &client,
+                               int dbNumber,
+                               const PlcDbBitAddress &address,
+                               bool value)
+        {
+            return address.isValid() &&
+                   client.writeBool(dbNumber, address.byteOffset, address.bitOffset, value) == S7PLCClient::Result::SUCCESS;
+        }
+
+        bool readPlcInt16Field(S7PLCClient &client,
+                               int dbNumber,
+                               int byteOffset,
+                               int16_t &value)
+        {
+            return byteOffset >= 0 &&
+                   client.readInt16(dbNumber, byteOffset, value) == S7PLCClient::Result::SUCCESS;
+        }
+
+        bool readPlcRealField(S7PLCClient &client,
+                              int dbNumber,
+                              int byteOffset,
+                              float &value)
+        {
+            return byteOffset >= 0 &&
+                   client.readReal(dbNumber, byteOffset, value) == S7PLCClient::Result::SUCCESS;
+        }
+
+        struct PlcSelfCheckBoolField
+        {
+            const char *keyPrefix;
+            int defaultByteOffset;
+            int defaultBitOffset;
+            bool PlcSelfCheckStatus::*member;
+        };
+
+        struct PlcSelfCheckRealField
+        {
+            const char *key;
+            int defaultOffset;
+            float PlcSelfCheckStatus::*member;
+        };
+
         uint16_t modbusCrc16(const QByteArray &data)
         {
             uint16_t crc = 0xFFFF;
@@ -868,14 +941,8 @@ namespace WaterTest
 
         auto &cfg = ConfigManager::getInstance();
         const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
-        const int byteOffset = cfg.getInt("selfcheck.plc.cmd.enable.byte_offset", 0);
-        const int bitOffset = cfg.getInt("selfcheck.plc.cmd.enable.bit_offset", 0);
-        if (bitOffset < 0 || bitOffset > 7)
-        {
-            return false;
-        }
-
-        return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, enabled) == S7PLCClient::Result::SUCCESS;
+        const auto address = loadPlcBitAddress(cfg, "selfcheck.plc.cmd.enable", 0, 0);
+        return writePlcBoolField(*m_plcClient, dbCmd, address, enabled);
     }
 
     bool DeviceManager::writePlcSelfCheckCmdBit(const std::string &cmdKeyPrefix, bool pulse)
@@ -887,26 +954,25 @@ namespace WaterTest
 
         auto &cfg = ConfigManager::getInstance();
         const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
-        const int byteOffset = cfg.getInt(cmdKeyPrefix + ".byte_offset", 0);
-        const int bitOffset = cfg.getInt(cmdKeyPrefix + ".bit_offset", 0);
-        if (bitOffset < 0 || bitOffset > 7)
+        const auto address = loadPlcBitAddress(cfg, cmdKeyPrefix, 0, 0);
+        if (!address.isValid())
         {
             return false;
         }
 
         if (!pulse)
         {
-            return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, true) == S7PLCClient::Result::SUCCESS;
+            return writePlcBoolField(*m_plcClient, dbCmd, address, true);
         }
 
-        if (m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, true) != S7PLCClient::Result::SUCCESS)
+        if (!writePlcBoolField(*m_plcClient, dbCmd, address, true))
         {
             return false;
         }
 
         const int pulseMs = cfg.getInt("selfcheck.plc.cmd.pulse_ms", 100);
         std::this_thread::sleep_for(std::chrono::milliseconds(std::max(20, pulseMs)));
-        return m_plcClient->writeBool(dbCmd, byteOffset, bitOffset, false) == S7PLCClient::Result::SUCCESS;
+        return writePlcBoolField(*m_plcClient, dbCmd, address, false);
     }
 
     bool DeviceManager::startPlcSelfCheck()
@@ -1396,23 +1462,56 @@ namespace WaterTest
     bool DeviceManager::setValveOpeningPercent(uint16_t id, float percent)
     {
         if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            qWarning() << "[Valve][DeviceManager] setValveOpeningPercent failed: plc not connected"
+                       << "id=" << id
+                       << "targetPercent=" << percent;
             return false;
+        }
 
         const float clamped = std::max(0.0f, std::min(100.0f, percent));
         auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
         if (aoMkIt == m_valveAoMerkerByteOffset.end() || aoMkIt->second < 0)
+        {
+            qWarning() << "[Valve][DeviceManager] setValveOpeningPercent failed: missing AO merker mapping"
+                       << "id=" << id;
             return false;
+        }
 
         const S7PLCClient::Result res = m_plcClient->writeMerkerReal(aoMkIt->second, clamped);
 
         if (res == S7PLCClient::Result::SUCCESS)
         {
+            float readback = 0.0f;
+            const S7PLCClient::Result readRes = m_plcClient->readMerkerReal(aoMkIt->second, readback);
+
             std::lock_guard<std::mutex> lock(m_dataMutex);
             auto it = m_regulatingValves.find(id);
             if (it != m_regulatingValves.end())
-                it->second.openingSetpoint = clamped;
+            {
+                it->second.openingSetpoint = (readRes == S7PLCClient::Result::SUCCESS)
+                                                 ? std::max(0.0f, std::min(100.0f, readback))
+                                                 : clamped;
+                it->second.deviceStatus = DeviceStatus::ONLINE;
+                it->second.timestamp = std::chrono::system_clock::now();
+            }
+
+            qInfo() << "[Valve][DeviceManager] setValveOpeningPercent"
+                    << "id=" << id
+                    << "targetPercent=" << clamped
+                    << "aoMerkerByteOffset=" << aoMkIt->second
+                    << "writeResult=" << static_cast<int>(res)
+                    << "readbackResult=" << static_cast<int>(readRes)
+                    << "readbackPercent=" << readback;
             return true;
         }
+
+        qWarning() << "[Valve][DeviceManager] setValveOpeningPercent write failed"
+                   << "id=" << id
+                   << "targetPercent=" << clamped
+                   << "aoMerkerByteOffset=" << aoMkIt->second
+                   << "result=" << static_cast<int>(res)
+                   << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
         return false;
     }
 
@@ -1752,49 +1851,40 @@ namespace WaterTest
 
         const int baseOffset = cfg.getInt("db.sensor.kpa.base_offset", 0);
         const int elemSize = cfg.getInt("db.sensor.kpa.element_size", 4); // REAL=4B
-        const int indexBase = cfg.getInt("db.sensor.kpa.index_base", 1);  // DB_Sensor.SensorKpa[1..8]
-        const float scale = cfg.getFloat("db.pressure.scale", 1.0f);
-        const std::string kpaWordOrder = cfg.getString("db.sensor.kpa.word_order", "ABCD");
         bool anyKpaReadSuccess = false;
 
         std::vector<uint16_t> sensorIds;
-        std::unordered_map<uint16_t, int> defaultDisplayDecimals;
         {
             std::lock_guard<std::mutex> lock(m_dataMutex);
             sensorIds.reserve(m_pressureSensors.size());
             for (const auto &pair : m_pressureSensors)
             {
                 sensorIds.push_back(pair.first);
-                defaultDisplayDecimals[pair.first] = pair.second.displayDecimals;
             }
         }
 
         for (uint16_t id : sensorIds)
         {
-            const std::string sensorPrefix = std::string("db.sensor.") + std::to_string(id) + ".";
-            const int sensorIndex = cfg.getInt(sensorPrefix + "kpa.index", static_cast<int>(id));
-            const float sensorScale = cfg.getFloat(sensorPrefix + "scale", scale);
-
             if (elemSize <= 0)
             {
                 appendPressureDebugLog("[DEVICE][PRESSURE][KPA] skipped: invalid db.sensor.kpa.element_size");
                 break;
             }
 
-            const int byteOffset = baseOffset + (sensorIndex - indexBase) * elemSize;
+            // 传感器索引与 PLC 数组一一对应：id=1 对应第1个 REAL。
+            const int byteOffset = baseOffset + (static_cast<int>(id) - 1) * elemSize;
             if (byteOffset < 0)
             {
                 std::ostringstream oss;
                 oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
-                    << " sensorIndex=" << sensorIndex
                     << " byteOffset=" << byteOffset
                     << " result=invalid_offset";
                 appendPressureDebugLog(oss.str());
                 continue;
             }
 
-            uint8_t rawBytes[4] = {0, 0, 0, 0};
-            auto rr = m_plcClient->readDB(dbSensor, byteOffset, 4, rawBytes);
+            float pressureKPa = 0.0f;
+            auto rr = m_plcClient->readReal(dbSensor, byteOffset, pressureKPa);
             if (rr != S7PLCClient::Result::SUCCESS)
             {
                 std::ostringstream oss;
@@ -1807,7 +1897,6 @@ namespace WaterTest
                 continue;
             }
 
-            float pressureKPa = decodeFloatByWordOrder(rawBytes, kpaWordOrder) * sensorScale;
             if (!std::isfinite(pressureKPa))
             {
                 std::ostringstream oss;
@@ -1819,19 +1908,13 @@ namespace WaterTest
                 continue;
             }
 
-            int displayDecimals = 2;
-            auto decIt = defaultDisplayDecimals.find(id);
-            if (decIt != defaultDisplayDecimals.end())
-            {
-                displayDecimals = decIt->second;
-            }
             {
                 std::lock_guard<std::mutex> writeLock(m_dataMutex);
                 auto sensorIt = m_pressureSensors.find(id);
                 if (sensorIt != m_pressureSensors.end())
                 {
                     sensorIt->second.pressure = pressureKPa;
-                    sensorIt->second.displayDecimals = displayDecimals;
+                    sensorIt->second.displayDecimals = 2;
                     sensorIt->second.status = DeviceStatus::ONLINE;
                     sensorIt->second.timestamp = std::chrono::system_clock::now();
                 }
@@ -1841,19 +1924,9 @@ namespace WaterTest
             std::ostringstream oss;
             oss << "[DEVICE][PRESSURE][KPA] sensor=" << id
                 << " db=" << dbSensor
-                << " sensorIndex=" << sensorIndex
-                << " indexBase=" << indexBase
                 << " baseOffset=" << baseOffset
                 << " elemSize=" << elemSize
                 << " readOffset=" << byteOffset
-                << " wordOrder=" << kpaWordOrder
-                << " rawBytes=0x"
-                << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(rawBytes[0])
-                << std::setw(2) << static_cast<int>(rawBytes[1])
-                << std::setw(2) << static_cast<int>(rawBytes[2])
-                << std::setw(2) << static_cast<int>(rawBytes[3])
-                << std::dec
-                << " scale=" << sensorScale
                 << " pressureKPa=" << pressureKPa
                 << " status=" << static_cast<int>(DeviceStatus::ONLINE);
             appendPressureDebugLog(oss.str());
@@ -2394,22 +2467,50 @@ namespace WaterTest
         {
             const uint16_t id = pair.first;
             RegulatingValve &valve = pair.second;
+            bool anyReadSuccess = false;
 
-            // 最小化路径：仅保留 MD 开度反馈。
+            auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
+            if (aoMkIt != m_valveAoMerkerByteOffset.end() && aoMkIt->second >= 0)
+            {
+                float openingSetpoint = 0.0f;
+                const auto aoRes = m_plcClient->readMerkerReal(aoMkIt->second, openingSetpoint);
+                if (aoRes == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.openingSetpoint = std::max(0.0f, std::min(100.0f, openingSetpoint));
+                    anyReadSuccess = true;
+                }
+                else
+                {
+                    qWarning() << "[Valve][DeviceManager] readRegulatingValves AO read failed"
+                               << "id=" << id
+                               << "aoMerkerByteOffset=" << aoMkIt->second
+                               << "result=" << static_cast<int>(aoRes)
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                }
+            }
+
+            // 最小化路径：反馈值来自 AI 对应的 MD 映射。
             auto aiMkIt = m_valveAiMerkerByteOffset.find(id);
             if (aiMkIt != m_valveAiMerkerByteOffset.end() && aiMkIt->second >= 0)
             {
                 float openingPercent = 0.0f;
-                if (m_plcClient->readMerkerReal(aiMkIt->second, openingPercent) == S7PLCClient::Result::SUCCESS)
+                const auto aiRes = m_plcClient->readMerkerReal(aiMkIt->second, openingPercent);
+                if (aiRes == S7PLCClient::Result::SUCCESS)
                 {
                     valve.openingPercent = std::max(0.0f, std::min(100.0f, openingPercent));
-                    valve.deviceStatus = DeviceStatus::ONLINE;
+                    anyReadSuccess = true;
+                }
+                else
+                {
+                    qWarning() << "[Valve][DeviceManager] readRegulatingValves AI read failed"
+                               << "id=" << id
+                               << "aiMerkerByteOffset=" << aiMkIt->second
+                               << "result=" << static_cast<int>(aiRes)
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
                 }
             }
-            else
-            {
-                valve.deviceStatus = DeviceStatus::OFFLINE;
-            }
+
+            valve.deviceStatus = anyReadSuccess ? DeviceStatus::ONLINE : DeviceStatus::OFFLINE;
 
             if (valve.openingPercent > 1.0f)
                 valve.status = ValveStatus::OPENING;
@@ -2417,6 +2518,15 @@ namespace WaterTest
                 valve.status = ValveStatus::CLOSED;
 
             valve.timestamp = std::chrono::system_clock::now();
+
+            qInfo() << "[Valve][DeviceManager] readRegulatingValves"
+                    << "id=" << id
+                    << "openingSetpoint=" << valve.openingSetpoint
+                    << "openingPercent=" << valve.openingPercent
+                    << "deviceStatus=" << static_cast<int>(valve.deviceStatus)
+                    << "status=" << static_cast<int>(valve.status)
+                    << "aoMerkerByteOffset=" << ((aoMkIt != m_valveAoMerkerByteOffset.end()) ? aoMkIt->second : -1)
+                    << "aiMerkerByteOffset=" << ((aiMkIt != m_valveAiMerkerByteOffset.end()) ? aiMkIt->second : -1);
         }
 
         return true;
@@ -2464,77 +2574,60 @@ namespace WaterTest
 
         const int dbStatus = cfg.getInt("selfcheck.plc.db_status", 21);
 
-        const int bBusyByte = cfg.getInt("selfcheck.plc.status.busy.byte_offset", 0);
-        const int bBusyBit = cfg.getInt("selfcheck.plc.status.busy.bit_offset", 0);
-        const int bDoneByte = cfg.getInt("selfcheck.plc.status.done.byte_offset", 0);
-        const int bDoneBit = cfg.getInt("selfcheck.plc.status.done.bit_offset", 1);
-        const int bPassedByte = cfg.getInt("selfcheck.plc.status.passed.byte_offset", 0);
-        const int bPassedBit = cfg.getInt("selfcheck.plc.status.passed.bit_offset", 2);
-        const int bFailedByte = cfg.getInt("selfcheck.plc.status.failed.byte_offset", 0);
-        const int bFailedBit = cfg.getInt("selfcheck.plc.status.failed.bit_offset", 3);
+        PlcSelfCheckStatus snapshot;
+        bool ok = true;
 
-        const int stepOffset = cfg.getInt("selfcheck.plc.status.step_offset", 2);
-        const int faultOffset = cfg.getInt("selfcheck.plc.status.fault_offset", 4);
+        const std::array<PlcSelfCheckBoolField, 4> boolFields{{
+            {"selfcheck.plc.status.busy", 0, 0, &PlcSelfCheckStatus::busy},
+            {"selfcheck.plc.status.done", 0, 1, &PlcSelfCheckStatus::done},
+            {"selfcheck.plc.status.passed", 0, 2, &PlcSelfCheckStatus::passed},
+            {"selfcheck.plc.status.failed", 0, 3, &PlcSelfCheckStatus::failed},
+        }};
 
-        const int ps4BeforeOffset = cfg.getInt("selfcheck.plc.status.ps4_before_offset", 6);
-        const int ps4AfterOffset = cfg.getInt("selfcheck.plc.status.ps4_after_offset", 10);
-        const int ps4BuildOffset = cfg.getInt("selfcheck.plc.status.ps4_build_offset", 14);
-        const int ps4HoldOffset = cfg.getInt("selfcheck.plc.status.ps4_hold_offset", 18);
-        const int ps5BuildOffset = cfg.getInt("selfcheck.plc.status.ps5_build_offset", 22);
-        const int ps5HoldOffset = cfg.getInt("selfcheck.plc.status.ps5_hold_offset", 26);
-        const int ps4DeltaOffset = cfg.getInt("selfcheck.plc.status.ps4_delta_offset", 30);
-        const int ps5DeltaOffset = cfg.getInt("selfcheck.plc.status.ps5_delta_offset", 34);
+        for (const auto &field : boolFields)
+        {
+            bool value = false;
+            const auto address = loadPlcBitAddress(cfg, field.keyPrefix, field.defaultByteOffset, field.defaultBitOffset);
+            ok &= readPlcBoolField(*m_plcClient, dbStatus, address, value);
+            snapshot.*(field.member) = value;
+        }
 
-        bool busy = false;
-        bool done = false;
-        bool passed = false;
-        bool failed = false;
         int16_t step = 0;
         int16_t fault = 0;
-        float ps4Before = 0.0f;
-        float ps4After = 0.0f;
-        float ps4Build = 0.0f;
-        float ps4Hold = 0.0f;
-        float ps5Build = 0.0f;
-        float ps5Hold = 0.0f;
-        float ps4Delta = 0.0f;
-        float ps5Delta = 0.0f;
+        ok &= readPlcInt16Field(*m_plcClient, dbStatus, cfg.getInt("selfcheck.plc.status.step_offset", 2), step);
+        ok &= readPlcInt16Field(*m_plcClient, dbStatus, cfg.getInt("selfcheck.plc.status.fault_offset", 4), fault);
 
-        bool ok = true;
-        ok &= (m_plcClient->readBool(dbStatus, bBusyByte, bBusyBit, busy) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readBool(dbStatus, bDoneByte, bDoneBit, done) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readBool(dbStatus, bPassedByte, bPassedBit, passed) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readBool(dbStatus, bFailedByte, bFailedBit, failed) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readInt16(dbStatus, stepOffset, step) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readInt16(dbStatus, faultOffset, fault) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps4BeforeOffset, ps4Before) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps4AfterOffset, ps4After) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps4BuildOffset, ps4Build) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps4HoldOffset, ps4Hold) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps5BuildOffset, ps5Build) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps5HoldOffset, ps5Hold) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps4DeltaOffset, ps4Delta) == S7PLCClient::Result::SUCCESS);
-        ok &= (m_plcClient->readReal(dbStatus, ps5DeltaOffset, ps5Delta) == S7PLCClient::Result::SUCCESS);
+        const std::array<PlcSelfCheckRealField, 8> realFields{{
+            {"selfcheck.plc.status.ps4_before_offset", 6, &PlcSelfCheckStatus::ps4Before},
+            {"selfcheck.plc.status.ps4_after_offset", 10, &PlcSelfCheckStatus::ps4After},
+            {"selfcheck.plc.status.ps4_build_offset", 14, &PlcSelfCheckStatus::ps4Build},
+            {"selfcheck.plc.status.ps4_hold_offset", 18, &PlcSelfCheckStatus::ps4Hold},
+            {"selfcheck.plc.status.ps5_build_offset", 22, &PlcSelfCheckStatus::ps5Build},
+            {"selfcheck.plc.status.ps5_hold_offset", 26, &PlcSelfCheckStatus::ps5Hold},
+            {"selfcheck.plc.status.ps4_delta_offset", 30, &PlcSelfCheckStatus::ps4Delta},
+            {"selfcheck.plc.status.ps5_delta_offset", 34, &PlcSelfCheckStatus::ps5Delta},
+        }};
+
+        for (const auto &field : realFields)
+        {
+            float value = 0.0f;
+            ok &= readPlcRealField(*m_plcClient, dbStatus, cfg.getInt(field.key, field.defaultOffset), value);
+            snapshot.*(field.member) = value;
+        }
+
+        snapshot.online = ok;
+        snapshot.stepNo = step;
+        snapshot.faultCode = static_cast<uint16_t>(fault);
+        snapshot.timestamp = std::chrono::system_clock::now();
 
         std::lock_guard<std::mutex> lock(m_dataMutex);
-        m_plcSelfCheckStatus.online = ok;
         if (ok)
         {
-            m_plcSelfCheckStatus.busy = busy;
-            m_plcSelfCheckStatus.done = done;
-            m_plcSelfCheckStatus.passed = passed;
-            m_plcSelfCheckStatus.failed = failed;
-            m_plcSelfCheckStatus.stepNo = step;
-            m_plcSelfCheckStatus.faultCode = static_cast<uint16_t>(fault);
-            m_plcSelfCheckStatus.ps4Before = ps4Before;
-            m_plcSelfCheckStatus.ps4After = ps4After;
-            m_plcSelfCheckStatus.ps4Build = ps4Build;
-            m_plcSelfCheckStatus.ps4Hold = ps4Hold;
-            m_plcSelfCheckStatus.ps5Build = ps5Build;
-            m_plcSelfCheckStatus.ps5Hold = ps5Hold;
-            m_plcSelfCheckStatus.ps4Delta = ps4Delta;
-            m_plcSelfCheckStatus.ps5Delta = ps5Delta;
-            m_plcSelfCheckStatus.timestamp = std::chrono::system_clock::now();
+            m_plcSelfCheckStatus = snapshot;
+        }
+        else
+        {
+            m_plcSelfCheckStatus.online = false;
         }
 
         return ok;

@@ -231,52 +231,26 @@ namespace WaterTest
         }
 
         /**
-         * @brief 将界面传感器 ID 解析为远程 SensorData::pressure[] 的数组下标（0~3）。
+         * @brief 解析远程 SensorData::pressure[] 下标。
          *
-         * 仅在 strict_remote_mode=true 且本地 DeviceManager 无法读到该传感器时使用。
-         * 优先级：
-         *   1. config "station.pressure_sensor.<id>.remote_index"（0~3 直接使用）
-         *   2. config "station.pressure_sensor.<id>.modbus_address"（1~4 则 index=address-1）
-         *   3. 回退到 fallbackIndex（保持向后兼容）
+         * 1号操作台远程压力数组固定为 Pressure3..Pressure8，
+         * 因此按 sensorId 直接映射：3->0, 4->1, ..., 8->5。
          */
         static int resolveRemotePressureIndex(uint16_t sensorId, int fallbackIndex)
         {
-            auto &cfg = ConfigManager::getInstance();
-
-            const std::string prefix = "station.pressure_sensor." + std::to_string(sensorId) + ".";
-            const int configuredIndex = cfg.getInt(prefix + "remote_index", -1);
-            if (configuredIndex >= 0 && configuredIndex <= 3)
-                return configuredIndex;
-
-            const int modbusAddress = cfg.getInt(prefix + "modbus_address", -1);
-            if (modbusAddress >= 1 && modbusAddress <= 4)
-                return modbusAddress - 1;
-
-            if (fallbackIndex < 0)
+            Q_UNUSED(fallbackIndex);
+            if (sensorId < 3)
                 return 0;
-            if (fallbackIndex > 3)
-                return 3;
-            return fallbackIndex;
+            if (sensorId > 8)
+                return 5;
+            return static_cast<int>(sensorId) - 3;
         }
 
         /**
-         * @brief 将界面传感器 ID 解析为本地 DeviceManager::getPressureSensor() 的实际查询 ID。
-         *
-         * config "station.pressure_sensor.<sensorId>.modbus_address" 存储的是
-         * PLC 压力数据区的序号索引（1-based），并非 Modbus 通信地址。
-         * 若配置值在 [1, pressure.count] 范围内，则用该值作为查询 ID；
-         * 否则退回原始 sensorId（向后兼容）。
+         * @brief 本地压力读取按传感器 ID 一一对应，不做额外映射。
          */
         static uint16_t resolveLocalPressureSensorId(uint16_t sensorId)
         {
-            auto &cfg = ConfigManager::getInstance();
-            const std::string prefix = "station.pressure_sensor." + std::to_string(sensorId) + ".";
-            const int modbusAddress = cfg.getInt(prefix + "modbus_address", -1);
-            const int pressureCount = std::max(1, cfg.getInt("pressure.count", 7));
-
-            // 本地PLC路径下，modbus_address 作为“压力数据区序号索引”使用。
-            if (modbusAddress >= 1 && modbusAddress <= pressureCount)
-                return static_cast<uint16_t>(modbusAddress);
             return sensorId;
         }
 
@@ -1886,12 +1860,12 @@ namespace WaterTest
 
     bool Station1Panel::readPressureValueForDisplay(uint16_t configuredSensorId, size_t fallbackIndex, double &pressureKpa) const
     {
-        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+        if (!m_deviceManager)
             return false;
 
         if (m_stationClient && m_stationClient->isConnected())
         {
-            if (m_deviceManager)
+            if (m_deviceManager->isPlcConnected())
             {
                 const auto sensor = m_deviceManager->getPressureSensor(resolveLocalPressureSensorId(configuredSensorId));
                 if (sensor.id != 0)
@@ -1902,10 +1876,13 @@ namespace WaterTest
             }
 
             const SensorData net = m_stationClient->getLatestSensorData();
-            const int remotePressureIndex = std::clamp(resolveRemotePressureIndex(configuredSensorId, static_cast<int>(fallbackIndex)), 0, 3);
+            const int remotePressureIndex = std::clamp(resolveRemotePressureIndex(configuredSensorId, static_cast<int>(fallbackIndex)), 0, 5);
             pressureKpa = static_cast<double>(net.pressure[remotePressureIndex]);
             return true;
         }
+
+        if (!m_deviceManager->isPlcConnected())
+            return false;
 
         if (!m_deviceManager)
             return false;
@@ -2475,8 +2452,8 @@ namespace WaterTest
                 if (stationClient && stationClient->isConnected())
                 {
                     const SensorData net = stationClient->getLatestSensorData();
-                    const int idx6 = std::clamp(resolveRemotePressureIndex(6, 2), 0, 3);
-                    const int idx7 = std::clamp(resolveRemotePressureIndex(7, 3), 0, 3);
+                    const int idx6 = std::clamp(resolveRemotePressureIndex(6, 2), 0, 5);
+                    const int idx7 = std::clamp(resolveRemotePressureIndex(7, 3), 0, 5);
 
                     if (p6.id == 0)
                     {
@@ -2679,8 +2656,8 @@ namespace WaterTest
                     const SensorData net = stationClient->getLatestSensorData();
                     const int upstreamFallback = std::max(0, upstreamPsNumber - 4);
                     const int downstreamFallback = std::max(0, downstreamPsNumber - 4);
-                    const int upstreamIndex = std::clamp(resolveRemotePressureIndex(upstreamPsNumber, upstreamFallback), 0, 3);
-                    const int downstreamIndex = std::clamp(resolveRemotePressureIndex(downstreamPsNumber, downstreamFallback), 0, 3);
+                    const int upstreamIndex = std::clamp(resolveRemotePressureIndex(upstreamPsNumber, upstreamFallback), 0, 5);
+                    const int downstreamIndex = std::clamp(resolveRemotePressureIndex(downstreamPsNumber, downstreamFallback), 0, 5);
 
                     if (upstream.id == 0)
                     {
