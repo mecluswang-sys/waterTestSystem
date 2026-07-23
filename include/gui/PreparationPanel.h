@@ -98,6 +98,7 @@ namespace WaterTest
         QGraphicsItem *m_itemPump2;
         QGraphicsItem *m_itemValve1;
         QGraphicsItem *m_itemValve2;
+        QGraphicsItem *m_itemValve3;
         QGraphicsItem *m_itemPS1;
         QGraphicsItem *m_itemPS2;
         QGraphicsItem *m_itemPS3;

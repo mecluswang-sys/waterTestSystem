@@ -179,6 +179,13 @@ namespace WaterTest
         bool readDcPowerMeasurements(float &voltageV, float &currentA);
 
         /**
+         * @brief 读取 E3634A 输出开关状态（OUTP?）
+         * @param on 输出参数，true=输出开启，false=输出关闭
+         * @return 是否成功
+         */
+        bool readDcPowerOutputState(bool &on);
+
+        /**
          * @brief 读取 E3634A 设备识别字符串(*IDN?)
          * @param idn 输出设备识别字符串
          * @return 是否成功
@@ -319,6 +326,12 @@ namespace WaterTest
          */
         PlcSelfCheckStatus getPlcSelfCheckStatus() const;
 
+        /**
+         * @brief 立即读取一次 PLC 自检状态并更新缓存
+         * @return 是否读取成功
+         */
+        bool refreshPlcSelfCheckStatus();
+
         // ======== 数据保存相关 ========
         /**
          * @brief 初始化数据保存系统
@@ -407,6 +420,7 @@ namespace WaterTest
         SystemStatus m_systemStatus;
         std::vector<AlarmInfo> m_alarms;
         PlcSelfCheckStatus m_plcSelfCheckStatus;
+        bool m_plcSelfCheckEnableLatched = false;
 
         // 回调函数
         AlarmCallback m_alarmCallback;

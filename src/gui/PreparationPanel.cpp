@@ -1449,6 +1449,7 @@ namespace WaterTest
           m_itemPump2(nullptr),
           m_itemValve1(nullptr),
           m_itemValve2(nullptr),
+          m_itemValve3(nullptr),
           m_itemPS1(nullptr),
           m_itemPS2(nullptr),
           m_itemPS3(nullptr),
@@ -1777,7 +1778,11 @@ namespace WaterTest
         m_dcPowerVoltageSpinBox->setRange(0.0, 50.0);
         m_dcPowerVoltageSpinBox->setDecimals(2);
         m_dcPowerVoltageSpinBox->setSuffix(" V");
-        m_dcPowerVoltageSpinBox->setValue(24.0);
+        const auto &cfg = ConfigManager::getInstance();
+        const bool dcPowerEnabled = cfg.getBool("e3634a.enabled", false);
+        const double defaultVoltage = static_cast<double>(cfg.getFloat("action_test.rated_voltage", 24.0f));
+        const double defaultCurrent = static_cast<double>(cfg.getFloat("action_test.current_limit", 1.0f));
+        m_dcPowerVoltageSpinBox->setValue(defaultVoltage);
         m_dcPowerVoltageSpinBox->setSingleStep(0.1);
         m_dcPowerVoltageSpinBox->setToolTip("E3634A 电压设定值");
 
@@ -1785,7 +1790,7 @@ namespace WaterTest
         m_dcPowerCurrentSpinBox->setRange(0.0, 7.0);
         m_dcPowerCurrentSpinBox->setDecimals(3);
         m_dcPowerCurrentSpinBox->setSuffix(" A");
-        m_dcPowerCurrentSpinBox->setValue(1.000);
+        m_dcPowerCurrentSpinBox->setValue(defaultCurrent);
         m_dcPowerCurrentSpinBox->setSingleStep(0.05);
         m_dcPowerCurrentSpinBox->setToolTip("E3634A 电流限值");
 
@@ -1868,8 +1873,24 @@ namespace WaterTest
         actionLayout->addWidget(m_dcPowerErrorLabel);
         actionLayout->addStretch(1);
 
+        if (!dcPowerEnabled)
+        {
+            m_dcPowerVoltageSpinBox->setVisible(false);
+            m_dcPowerCurrentSpinBox->setVisible(false);
+            m_dcPowerApplyBtn->setVisible(false);
+            m_dcPowerOutputBtn->setVisible(false);
+            m_dcPowerReadBtn->setVisible(false);
+            m_dcPowerErrorHistoryBtn->setVisible(false);
+            m_dcPowerMeasureLabel->setVisible(false);
+            m_dcPowerErrorLabel->setVisible(false);
+            m_dcPowerStatusLabel->setVisible(false);
+            m_dcPowerMeasureLabel->setText("电源功能未开放");
+            m_dcPowerErrorLabel->setText("错误: --");
+        }
+
         updateActionBarOverlayGeometry();
         updateReliefValveStatus();
+        refreshDcPowerTelemetry(false);
     }
 
     void PreparationPanel::updateActionBarOverlayGeometry()
@@ -1907,6 +1928,7 @@ namespace WaterTest
         m_itemPump2 = nullptr;
         m_itemValve1 = nullptr;
         m_itemValve2 = nullptr;
+        m_itemValve3 = nullptr;
         m_itemPS1 = nullptr;
         m_itemPS2 = nullptr;
         m_itemPS3 = nullptr;
@@ -1989,6 +2011,7 @@ namespace WaterTest
         valve3->setZValue(2);
         valve3->setScale(kValveScale);
         m_scene->addItem(valve3);
+        m_itemValve3 = valve3;
 
         auto *teeNode = new TeeNodeItem("三通节点");
         teeNode->setPos(tee);
@@ -2525,8 +2548,18 @@ namespace WaterTest
         auto valve1 = m_deviceManager->getValve(1); // 进水阀
         auto valve2 = m_deviceManager->getValve(2); // 出水阀
 
-        const bool v1Open = (valve1.status == ValveStatus::OPEN || valve1.status == ValveStatus::OPENING);
-        const bool v2Open = (valve2.status == ValveStatus::OPEN || valve2.status == ValveStatus::OPENING);
+        bool v1Open = (valve1.status == ValveStatus::OPEN || valve1.status == ValveStatus::OPENING);
+        bool v2Open = (valve2.status == ValveStatus::OPEN || valve2.status == ValveStatus::OPENING);
+        bool v3Open = false;
+
+        // 自检流程会直接切继电器，优先用继电器实况驱动图元开关态。
+        bool relayOn = false;
+        if (m_deviceManager->getRelayState(0, relayOn))
+            v1Open = relayOn;
+        if (m_deviceManager->getRelayState(1, relayOn))
+            v2Open = relayOn;
+        if (m_deviceManager->getRelayState(2, relayOn))
+            v3Open = relayOn;
 
         if (auto *item = dynamic_cast<ValveItem *>(m_itemValve1))
         {
@@ -2537,6 +2570,11 @@ namespace WaterTest
         {
             item->setOpen(v2Open);
             item->setDegree(valve2.openingDegree);
+        }
+        if (auto *item = dynamic_cast<ValveItem *>(m_itemValve3))
+        {
+            item->setOpen(v3Open);
+            item->setDegree(v3Open ? 100 : 0);
         }
     }
 
@@ -3034,6 +3072,12 @@ namespace WaterTest
 
     void PreparationPanel::onDcPowerApplySetpoint()
     {
+        if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+        {
+            QMessageBox::information(this, "E3634A", "电源功能暂未开放");
+            return;
+        }
+
         const float voltage = m_dcPowerVoltageSpinBox ? static_cast<float>(m_dcPowerVoltageSpinBox->value()) : 0.0f;
         const float current = m_dcPowerCurrentSpinBox ? static_cast<float>(m_dcPowerCurrentSpinBox->value()) : 0.0f;
 
@@ -3068,6 +3112,12 @@ namespace WaterTest
 
     void PreparationPanel::onDcPowerOutputToggled()
     {
+        if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+        {
+            QMessageBox::information(this, "E3634A", "电源功能暂未开放");
+            return;
+        }
+
         const bool targetOn = !m_dcPowerOutputOn;
 
         bool ok = false;
@@ -3110,6 +3160,12 @@ namespace WaterTest
 
     void PreparationPanel::onDcPowerReadback()
     {
+        if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+        {
+            QMessageBox::information(this, "E3634A", "电源功能暂未开放");
+            return;
+        }
+
         refreshDcPowerTelemetry(true);
     }
 
@@ -3163,6 +3219,25 @@ namespace WaterTest
 
     void PreparationPanel::refreshDcPowerTelemetry(bool showPopupOnError)
     {
+        if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+        {
+            if (m_dcPowerMeasureLabel)
+            {
+                m_dcPowerMeasureLabel->setText("电源功能未开放");
+            }
+            if (m_dcPowerErrorLabel)
+            {
+                m_dcPowerErrorLabel->setText("错误: --");
+                m_dcPowerErrorLabel->setStyleSheet(QString());
+            }
+            if (m_dcPowerStatusLabel)
+            {
+                m_dcPowerStatusLabel->setText("未开放");
+            }
+            Q_UNUSED(showPopupOnError);
+            return;
+        }
+
         const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
         if (m_stationClient && strictRemoteMode && !m_deviceManager)
         {
@@ -3195,6 +3270,24 @@ namespace WaterTest
                 QMessageBox::warning(this, "E3634A", "设备管理器未初始化");
             }
             return;
+        }
+
+        bool outputOnReadback = m_dcPowerOutputOn;
+        const bool outputReadOk = m_deviceManager->readDcPowerOutputState(outputOnReadback);
+        if (outputReadOk)
+        {
+            m_dcPowerOutputOn = outputOnReadback;
+            if (m_dcPowerOutputBtn)
+            {
+                m_dcPowerOutputBtn->setText(QString("输出:%1").arg(m_dcPowerOutputOn ? "开" : "关"));
+                m_dcPowerOutputBtn->setProperty("tone", m_dcPowerOutputOn ? "good" : "warn");
+                if (auto *s = m_dcPowerOutputBtn->style())
+                {
+                    s->unpolish(m_dcPowerOutputBtn);
+                    s->polish(m_dcPowerOutputBtn);
+                }
+                m_dcPowerOutputBtn->update();
+            }
         }
 
         float voltage = 0.0f;

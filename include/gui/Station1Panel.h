@@ -105,12 +105,15 @@ namespace WaterTest
         void onStopButtonClicked(const char *source = "ui");
         bool controlStartStop(bool start, const char *source);
         void pollPhysicalStartStopButtons();
+        void startSelfCheckStatusPolling();
+        void stopSelfCheckStatusPolling();
 
         QGraphicsView *m_view;
         QGraphicsScene *m_scene;
         QTimer *m_flowTimer;
         QTimer *m_dataTimer;
         QTimer *m_relayTimer;
+        QTimer *m_selfCheckStatusPollTimer;
         qreal m_flowDashOffset;
         bool m_pipeFlowAnimationEnabled;
         std::vector<QGraphicsPathItem *> m_flowPipeItems;

@@ -936,43 +936,202 @@ namespace WaterTest
     {
         if (!m_plcClient || !m_plcClient->isConnected())
         {
+            qWarning() << "[SelfCheck][DeviceManager] setPlcSelfCheckEnable failed: plc not connected"
+                       << "enabled=" << enabled;
             return false;
         }
 
         auto &cfg = ConfigManager::getInstance();
+        const std::string cmdSource = toUpperAscii(trimAscii(cfg.getString("selfcheck.plc.cmd.source", "db")));
+        bool ok = false;
+
+        if (cmdSource == "MERKER")
+        {
+            const int mByte = cfg.getInt("selfcheck.plc.cmd.enable.merker_byte_offset", -1);
+            const int mBit = cfg.getInt("selfcheck.plc.cmd.enable.merker_bit_offset", -1);
+            if (mByte >= 0 && mBit >= 0 && mBit <= 7)
+            {
+                ok = (m_plcClient->writeMerkerBool(mByte, mBit, enabled) == S7PLCClient::Result::SUCCESS);
+            }
+
+            if (!ok)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] setPlcSelfCheckEnable write failed"
+                           << "source=MERKER"
+                           << "mByte=" << mByte
+                           << "mBit=" << mBit
+                           << "enabled=" << enabled
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
+            return ok;
+        }
+
         const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
         const auto address = loadPlcBitAddress(cfg, "selfcheck.plc.cmd.enable", 0, 0);
-        return writePlcBoolField(*m_plcClient, dbCmd, address, enabled);
+        ok = writePlcBoolField(*m_plcClient, dbCmd, address, enabled);
+        if (!ok)
+        {
+            qWarning() << "[SelfCheck][DeviceManager] setPlcSelfCheckEnable write failed"
+                       << "source=DB"
+                       << "db=" << dbCmd
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset
+                       << "enabled=" << enabled
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            return false;
+        }
+
+        qInfo() << "[SelfCheck][DeviceManager] setPlcSelfCheckEnable write ok"
+                << "source=DB"
+                << "db=" << dbCmd
+                << "byteOffset=" << address.byteOffset
+                << "bitOffset=" << address.bitOffset
+                << "enabled=" << enabled;
+
+        m_plcSelfCheckEnableLatched = enabled;
+        return ok;
     }
 
     bool DeviceManager::writePlcSelfCheckCmdBit(const std::string &cmdKeyPrefix, bool pulse)
     {
         if (!m_plcClient || !m_plcClient->isConnected())
         {
+            qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit failed: plc not connected"
+                       << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                       << "pulse=" << pulse;
             return false;
         }
 
         auto &cfg = ConfigManager::getInstance();
+        const std::string cmdSource = toUpperAscii(trimAscii(cfg.getString("selfcheck.plc.cmd.source", "db")));
+
+        if (cmdSource == "MERKER")
+        {
+            const int mByte = cfg.getInt(cmdKeyPrefix + ".merker_byte_offset", -1);
+            const int mBit = cfg.getInt(cmdKeyPrefix + ".merker_bit_offset", -1);
+            if (mByte < 0 || mBit < 0 || mBit > 7)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit invalid MERKER address"
+                           << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                           << "mByte=" << mByte
+                           << "mBit=" << mBit;
+                return false;
+            }
+
+            if (!pulse)
+            {
+                const bool ok = (m_plcClient->writeMerkerBool(mByte, mBit, true) == S7PLCClient::Result::SUCCESS);
+                if (!ok)
+                {
+                    qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit MERKER set-true failed"
+                               << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                               << "mByte=" << mByte
+                               << "mBit=" << mBit
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                }
+                return ok;
+            }
+
+            // 先拉低一次，确保后续一定形成有效上升沿。
+            if (m_plcClient->writeMerkerBool(mByte, mBit, false) != S7PLCClient::Result::SUCCESS)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit MERKER pre-clear failed"
+                           << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                           << "mByte=" << mByte
+                           << "mBit=" << mBit
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
+
+            if (m_plcClient->writeMerkerBool(mByte, mBit, true) != S7PLCClient::Result::SUCCESS)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit MERKER set-true failed"
+                           << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                           << "mByte=" << mByte
+                           << "mBit=" << mBit
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                return false;
+            }
+
+            const int pulseMs = cfg.getInt("selfcheck.plc.cmd.pulse_ms", 100);
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::max(20, pulseMs)));
+            const bool ok = (m_plcClient->writeMerkerBool(mByte, mBit, false) == S7PLCClient::Result::SUCCESS);
+            if (!ok)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit MERKER set-false failed"
+                           << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                           << "mByte=" << mByte
+                           << "mBit=" << mBit
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
+            return ok;
+        }
+
         const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
         const auto address = loadPlcBitAddress(cfg, cmdKeyPrefix, 0, 0);
         if (!address.isValid())
         {
+            qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit invalid address"
+                       << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                       << "source=DB"
+                       << "db=" << dbCmd
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset;
             return false;
         }
 
         if (!pulse)
         {
-            return writePlcBoolField(*m_plcClient, dbCmd, address, true);
+            const bool ok = writePlcBoolField(*m_plcClient, dbCmd, address, true);
+            if (ok)
+            {
+                qInfo() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit level-write ok"
+                        << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                        << "source=DB"
+                        << "db=" << dbCmd
+                        << "byteOffset=" << address.byteOffset
+                        << "bitOffset=" << address.bitOffset;
+            }
+            return ok;
+        }
+
+        // 先拉低一次，确保后续一定形成有效上升沿。
+        if (!writePlcBoolField(*m_plcClient, dbCmd, address, false))
+        {
+            qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit pre-clear failed"
+                       << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                       << "source=DB"
+                       << "db=" << dbCmd
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
         }
 
         if (!writePlcBoolField(*m_plcClient, dbCmd, address, true))
         {
+            qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit set-true failed"
+                       << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                       << "source=DB"
+                       << "db=" << dbCmd
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
             return false;
         }
 
         const int pulseMs = cfg.getInt("selfcheck.plc.cmd.pulse_ms", 100);
         std::this_thread::sleep_for(std::chrono::milliseconds(std::max(20, pulseMs)));
-        return writePlcBoolField(*m_plcClient, dbCmd, address, false);
+        const bool ok = writePlcBoolField(*m_plcClient, dbCmd, address, false);
+        if (!ok)
+        {
+            qWarning() << "[SelfCheck][DeviceManager] writePlcSelfCheckCmdBit set-false failed"
+                       << "cmdKeyPrefix=" << QString::fromStdString(cmdKeyPrefix)
+                       << "source=DB"
+                       << "db=" << dbCmd
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+        }
+        return ok;
     }
 
     bool DeviceManager::startPlcSelfCheck()
@@ -994,6 +1153,11 @@ namespace WaterTest
     {
         std::lock_guard<std::mutex> lock(m_dataMutex);
         return m_plcSelfCheckStatus;
+    }
+
+    bool DeviceManager::refreshPlcSelfCheckStatus()
+    {
+        return readPlcSelfCheckStatus();
     }
 
     PressureSensor DeviceManager::getPressureSensor(uint16_t id) const
@@ -1363,6 +1527,61 @@ namespace WaterTest
         return true;
     }
 
+    bool DeviceManager::readDcPowerOutputState(bool &on)
+    {
+        on = false;
+
+        QSerialPort port;
+        std::string err;
+        if (!configureE3634ASerialPort(port, &err))
+        {
+            appendDcPowerDebugLog("[E3634A] open_failed err=\"" + err + "\"");
+            setDcPowerLastError("open_failed: " + err);
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int writeTimeoutMs = cfg.getInt("e3634a.rs232.write_timeout_ms", 600);
+        const int readTimeoutMs = cfg.getInt("e3634a.rs232.read_timeout_ms", 900);
+
+        std::string stepErr;
+        if (!writeScpiLine(port, "SYST:REM", writeTimeoutMs, &stepErr))
+        {
+            appendDcPowerDebugLog("[E3634A] cmd_failed cmd=SYST:REM err=" + stepErr);
+            setDcPowerLastError("cmd_failed SYST:REM: " + stepErr);
+            return false;
+        }
+
+        std::string resp;
+        std::string queryErr;
+        if (!queryScpiLine(port, "OUTP?", resp, writeTimeoutMs, readTimeoutMs, &queryErr))
+        {
+            appendDcPowerDebugLog("[E3634A] query_failed cmd=OUTP? err=" + queryErr);
+            setDcPowerLastError("query_failed OUTP?: " + queryErr);
+            return false;
+        }
+
+        const std::string normalized = toUpperAscii(trimAscii(resp));
+        if (normalized == "1" || normalized == "ON")
+        {
+            on = true;
+        }
+        else if (normalized == "0" || normalized == "OFF")
+        {
+            on = false;
+        }
+        else
+        {
+            appendDcPowerDebugLog("[E3634A] parse_failed outp_resp=\"" + resp + "\"");
+            setDcPowerLastError("parse_failed OUTP?: \"" + resp + "\"");
+            return false;
+        }
+
+        appendDcPowerDebugLog("[E3634A] outp=" + normalized);
+        setDcPowerLastError(std::string());
+        return true;
+    }
+
     bool DeviceManager::getDcPowerIdentity(std::string &idn)
     {
         idn.clear();
@@ -1549,31 +1768,73 @@ namespace WaterTest
             return false;
         }
 
+        auto &cfg = ConfigManager::getInstance();
+
         // 特殊映射：
-        // - index=0~3 -> M100.0~M100.3
-        // - index=5   -> M100.4（站1电磁阀5）
+        // - index=0~3 -> selfcheck.plc.base_ctrl.v1~v4
+        // - index=5   -> 过渡期双写：selfcheck.plc.base_ctrl.v5 + M100.4
         if (index <= 3 || index == 5)
         {
-            const int mBit = (index <= 3) ? static_cast<int>(index) : 4;
-            auto res = m_plcClient->writeMerkerBool(100, mBit, on);
-            if (res == S7PLCClient::Result::SUCCESS)
+            const std::array<std::pair<const char *, int>, 5> relayKeys{{
+                {"selfcheck.plc.base_ctrl.v1", 0},
+                {"selfcheck.plc.base_ctrl.v2", 1},
+                {"selfcheck.plc.base_ctrl.v3", 2},
+                {"selfcheck.plc.base_ctrl.v4", 3},
+                {"selfcheck.plc.base_ctrl.v5", 4},
+            }};
+
+            const int dbNumber = cfg.getInt("selfcheck.plc.base_ctrl.db", 13);
+            const size_t relayIdx = (index == 5) ? 4U : static_cast<size_t>(index);
+            const auto &relayKey = relayKeys.at(relayIdx);
+            const auto address = loadPlcBitAddress(cfg, relayKey.first, 0, relayKey.second);
+            const bool dbOk = writePlcBoolField(*m_plcClient, dbNumber, address, on);
+            if (dbOk)
             {
-                qInfo() << "[M100][DeviceManager] setRelay M100 path"
+                qInfo() << "[BaseCtrl][DeviceManager] setRelay base-control path"
                         << "index=" << index
-                        << "addr=" << QString("M100.%1").arg(mBit)
+                        << "db=" << dbNumber
+                        << "byteOff=" << address.byteOffset
+                        << "bit=" << address.bitOffset
                         << "on=" << on
-                        << "result=" << static_cast<int>(res);
+                        << "result=" << dbOk;
             }
             else
             {
-                qWarning() << "[M100][DeviceManager] setRelay M100 path failed"
+                qWarning() << "[BaseCtrl][DeviceManager] setRelay base-control path failed"
                            << "index=" << index
-                           << "addr=" << QString("M100.%1").arg(mBit)
+                           << "db=" << dbNumber
+                           << "byteOff=" << address.byteOffset
+                           << "bit=" << address.bitOffset
                            << "on=" << on
-                           << "result=" << static_cast<int>(res)
+                           << "result=" << dbOk
                            << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
             }
-            return res == S7PLCClient::Result::SUCCESS;
+
+            if (index == 5)
+            {
+                auto mRes = m_plcClient->writeMerkerBool(100, 4, on);
+                const bool mOk = (mRes == S7PLCClient::Result::SUCCESS);
+                if (!mOk)
+                {
+                    qWarning() << "[M100][DeviceManager] setRelay legacy M100.4 fallback write failed"
+                               << "index=" << index
+                               << "addr=M100.4"
+                               << "on=" << on
+                               << "result=" << static_cast<int>(mRes)
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                }
+                else
+                {
+                    qInfo() << "[M100][DeviceManager] setRelay legacy M100.4 fallback write ok"
+                            << "index=" << index
+                            << "addr=M100.4"
+                            << "on=" << on;
+                }
+
+                return dbOk || mOk;
+            }
+
+            return dbOk;
         }
 
         // 其余 index 支持 Q0.1-Q1.7（index 1-15）：byteOffset = index/8，bit = index%8
@@ -1613,33 +1874,84 @@ namespace WaterTest
             return false;
         }
 
+        auto &cfg = ConfigManager::getInstance();
+
         // 特殊映射：
-        // - index=0~3 -> M100.0~M100.3
-        // - index=5   -> M100.4（站1电磁阀5）
+        // - index=0~3 -> selfcheck.plc.base_ctrl.v1~v4
+        // - index=5   -> 过渡期优先读 M100.4，失败再回退读 selfcheck.plc.base_ctrl.v5
         if (index <= 3 || index == 5)
         {
-            const int mBit = (index <= 3) ? static_cast<int>(index) : 4;
+            const std::array<std::pair<const char *, int>, 5> relayKeys{{
+                {"selfcheck.plc.base_ctrl.v1", 0},
+                {"selfcheck.plc.base_ctrl.v2", 1},
+                {"selfcheck.plc.base_ctrl.v3", 2},
+                {"selfcheck.plc.base_ctrl.v4", 3},
+                {"selfcheck.plc.base_ctrl.v5", 4},
+            }};
+
+            const int dbNumber = cfg.getInt("selfcheck.plc.base_ctrl.db", 13);
+            const size_t relayIdx = (index == 5) ? 4U : static_cast<size_t>(index);
+            const auto &relayKey = relayKeys.at(relayIdx);
+            const auto address = loadPlcBitAddress(cfg, relayKey.first, 0, relayKey.second);
             bool value = false;
-            auto res = m_plcClient->readMerkerBool(100, mBit, value);
-            if (res == S7PLCClient::Result::SUCCESS)
+            const bool dbOk = readPlcBoolField(*m_plcClient, dbNumber, address, value);
+            if (index == 5)
+            {
+                bool mValue = false;
+                auto mRes = m_plcClient->readMerkerBool(100, 4, mValue);
+                if (mRes == S7PLCClient::Result::SUCCESS)
+                {
+                    on = mValue;
+                    qInfo() << "[M100][DeviceManager] getRelayState legacy M100.4 path"
+                            << "index=" << index
+                            << "addr=M100.4"
+                            << "on=" << on;
+                    return true;
+                }
+
+                if (dbOk)
+                {
+                    on = value;
+                    qInfo() << "[BaseCtrl][DeviceManager] getRelayState base-control fallback path"
+                            << "index=" << index
+                            << "db=" << dbNumber
+                            << "byteOff=" << address.byteOffset
+                            << "bit=" << address.bitOffset
+                            << "on=" << on;
+                    return true;
+                }
+
+                qWarning() << "[M100][DeviceManager] getRelayState index=5 read failed on both paths"
+                           << "db=" << dbNumber
+                           << "dbByteOff=" << address.byteOffset
+                           << "dbBit=" << address.bitOffset
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                return false;
+            }
+
+            if (dbOk)
             {
                 on = value;
-                qInfo() << "[M100][DeviceManager] getRelayState M100 path"
+                qInfo() << "[BaseCtrl][DeviceManager] getRelayState base-control path"
                         << "index=" << index
-                        << "addr=" << QString("M100.%1").arg(mBit)
+                        << "db=" << dbNumber
+                        << "byteOff=" << address.byteOffset
+                        << "bit=" << address.bitOffset
                         << "on=" << on
-                        << "result=" << static_cast<int>(res);
+                        << "result=" << dbOk;
                 return true;
             }
-            qWarning() << "[M100][DeviceManager] getRelayState M100 path failed"
+            qWarning() << "[BaseCtrl][DeviceManager] getRelayState base-control path failed"
                        << "index=" << index
-                       << "addr=" << QString("M100.%1").arg(mBit)
-                       << "result=" << static_cast<int>(res)
+                       << "db=" << dbNumber
+                       << "byteOff=" << address.byteOffset
+                       << "bit=" << address.bitOffset
+                       << "result=" << dbOk
                        << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
             return false;
         }
 
-        // 其余 index 支持 Q0.1-Q1.7（index 1-15）
+        // 其余 index 支持 Q0.1-Q1.7（index 1-15）：byteOffset = index/8，bit = index%8
         if (index > 15)
         {
             return false;
@@ -2460,7 +2772,6 @@ namespace WaterTest
     {
         if (!m_plcClient)
             return false;
-
         std::lock_guard<std::mutex> lock(m_dataMutex);
 
         for (auto &pair : m_regulatingValves)
@@ -2588,14 +2899,42 @@ namespace WaterTest
         {
             bool value = false;
             const auto address = loadPlcBitAddress(cfg, field.keyPrefix, field.defaultByteOffset, field.defaultBitOffset);
-            ok &= readPlcBoolField(*m_plcClient, dbStatus, address, value);
+            const bool fieldOk = readPlcBoolField(*m_plcClient, dbStatus, address, value);
+            ok &= fieldOk;
+            if (!fieldOk)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] status bool read failed"
+                           << "db=" << dbStatus
+                           << "key=" << field.keyPrefix
+                           << "byteOffset=" << address.byteOffset
+                           << "bitOffset=" << address.bitOffset
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
             snapshot.*(field.member) = value;
         }
 
         int16_t step = 0;
         int16_t fault = 0;
-        ok &= readPlcInt16Field(*m_plcClient, dbStatus, cfg.getInt("selfcheck.plc.status.step_offset", 2), step);
-        ok &= readPlcInt16Field(*m_plcClient, dbStatus, cfg.getInt("selfcheck.plc.status.fault_offset", 4), fault);
+        const int stepOffset = cfg.getInt("selfcheck.plc.status.step_offset", 2);
+        const int faultOffset = cfg.getInt("selfcheck.plc.status.fault_offset", 4);
+        const bool stepOk = readPlcInt16Field(*m_plcClient, dbStatus, stepOffset, step);
+        const bool faultOk = readPlcInt16Field(*m_plcClient, dbStatus, faultOffset, fault);
+        ok &= stepOk;
+        ok &= faultOk;
+        if (!stepOk)
+        {
+            qWarning() << "[SelfCheck][DeviceManager] status step read failed"
+                       << "db=" << dbStatus
+                       << "offset=" << stepOffset
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+        }
+        if (!faultOk)
+        {
+            qWarning() << "[SelfCheck][DeviceManager] status fault read failed"
+                       << "db=" << dbStatus
+                       << "offset=" << faultOffset
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+        }
 
         const std::array<PlcSelfCheckRealField, 8> realFields{{
             {"selfcheck.plc.status.ps4_before_offset", 6, &PlcSelfCheckStatus::ps4Before},
@@ -2611,7 +2950,17 @@ namespace WaterTest
         for (const auto &field : realFields)
         {
             float value = 0.0f;
-            ok &= readPlcRealField(*m_plcClient, dbStatus, cfg.getInt(field.key, field.defaultOffset), value);
+            const int offset = cfg.getInt(field.key, field.defaultOffset);
+            const bool fieldOk = readPlcRealField(*m_plcClient, dbStatus, offset, value);
+            ok &= fieldOk;
+            if (!fieldOk)
+            {
+                qWarning() << "[SelfCheck][DeviceManager] status real read failed"
+                           << "db=" << dbStatus
+                           << "key=" << field.key
+                           << "offset=" << offset
+                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            }
             snapshot.*(field.member) = value;
         }
 
@@ -2628,6 +2977,27 @@ namespace WaterTest
         else
         {
             m_plcSelfCheckStatus.online = false;
+            qWarning() << "[SelfCheck][DeviceManager] readPlcSelfCheckStatus failed"
+                       << "db=" << dbStatus
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+        }
+
+        if (ok && m_plcSelfCheckEnableLatched && (snapshot.done || snapshot.passed || snapshot.failed))
+        {
+            if (setPlcSelfCheckEnable(false))
+            {
+            qInfo() << "[SelfCheck][DeviceManager] auto-cleared Enable after terminal status (forced)"
+                        << "done=" << snapshot.done
+                        << "passed=" << snapshot.passed
+                        << "failed=" << snapshot.failed;
+            }
+            else
+            {
+                qWarning() << "[SelfCheck][DeviceManager] auto-clear Enable failed after terminal status"
+                           << "done=" << snapshot.done
+                           << "passed=" << snapshot.passed
+                           << "failed=" << snapshot.failed;
+            }
         }
 
         return ok;

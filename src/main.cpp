@@ -217,10 +217,26 @@ int main(int argc, char *argv[])
                                      ok = deviceManager->controlValve(static_cast<uint16_t>(cmd.index) + 1, cmd.action != 0);
                                      break;
                                  case 3:
-                                     ok = deviceManager->setDcPowerOutput(cmd.action != 0);
+                                     if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+                                     {
+                                         qWarning() << "[Terminal] E3634A command rejected: feature disabled (output).";
+                                         ok = false;
+                                     }
+                                     else
+                                     {
+                                         ok = deviceManager->setDcPowerOutput(cmd.action != 0);
+                                     }
                                      break;
                                  case 4:
-                                     ok = deviceManager->setDcPowerSetpoint(cmd.value1, cmd.value2);
+                                     if (!ConfigManager::getInstance().getBool("e3634a.enabled", false))
+                                     {
+                                         qWarning() << "[Terminal] E3634A command rejected: feature disabled (setpoint).";
+                                         ok = false;
+                                     }
+                                     else
+                                     {
+                                         ok = deviceManager->setDcPowerSetpoint(cmd.value1, cmd.value2);
+                                     }
                                      break;
                                  case 5:
                                      ok = deviceManager->setValveOpeningPercent(static_cast<uint16_t>(cmd.index) + 1, cmd.value1);

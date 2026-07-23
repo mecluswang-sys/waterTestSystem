@@ -77,6 +77,7 @@
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QTextEdit>
+#include <QProgressBar>
 #include <QMessageBox>
 #include <QStyle>
 #include <QStyleOptionSlider>
@@ -149,6 +150,51 @@ namespace WaterTest
         {
             Q_UNUSED(stationNumber);
             return std::vector<RelayDef>(kStation1Relays.begin(), kStation1Relays.end());
+        }
+
+        static QString selfCheckStepText(int stepNo)
+        {
+            switch (stepNo)
+            {
+            case 0: return QString::fromUtf8("空闲");
+            case 5: return QString::fromUtf8("预检");
+            case 10: return QString::fromUtf8("联通性检查");
+            case 20: return QString::fromUtf8("建压");
+            case 30: return QString::fromUtf8("泄漏判定");
+            case 40: return QString::fromUtf8("脉冲测试");
+            case 90: return QString::fromUtf8("完成");
+            case 99: return QString::fromUtf8("失败");
+            default: return QString::fromUtf8("未知(%1)").arg(stepNo);
+            }
+        }
+
+        static QString selfCheckStatusText(const PlcSelfCheckStatus &sc)
+        {
+            auto realText = [](float value) { return QString::number(value, 'f', 2); };
+
+            QString text;
+            text += QString::fromUtf8("忙碌: %1\n").arg(sc.busy ? QString::fromUtf8("是") : QString::fromUtf8("否"));
+            text += QString::fromUtf8("完成: %1\n").arg(sc.done ? QString::fromUtf8("是") : QString::fromUtf8("否"));
+            text += QString::fromUtf8("通过: %1\n").arg(sc.passed ? QString::fromUtf8("是") : QString::fromUtf8("否"));
+            text += QString::fromUtf8("失败: %1\n").arg(sc.failed ? QString::fromUtf8("是") : QString::fromUtf8("否"));
+            text += QString::fromUtf8("步骤: %1 (%2)\n").arg(sc.stepNo).arg(selfCheckStepText(sc.stepNo));
+            text += QString::fromUtf8("故障码: 0x%1\n").arg(QString::number(sc.faultCode, 16).rightJustified(4, '0').toUpper());
+            text += QString::fromUtf8("PS4 Before/After/Build/Hold: %1 / %2 / %3 / %4\n")
+                        .arg(realText(sc.ps4Before), realText(sc.ps4After), realText(sc.ps4Build), realText(sc.ps4Hold));
+            text += QString::fromUtf8("PS5 Build/Hold/Delta: %1 / %2 / %3\n")
+                        .arg(realText(sc.ps5Build), realText(sc.ps5Hold), realText(sc.ps5Delta));
+            text += QString::fromUtf8("PS4 Delta: %1\n").arg(realText(sc.ps4Delta));
+
+            if (sc.failed)
+                text += QString::fromUtf8("\n异常: 自检失败，请查看故障码和步骤号。\n");
+            else if (sc.passed)
+                text += QString::fromUtf8("\n结果: 自检通过。\n");
+            else if (sc.done)
+                text += QString::fromUtf8("\n结果: 自检结束。\n");
+            else if (!sc.online)
+                text += QString::fromUtf8("\n提示: 正在等待 PLC 自检状态刷新。\n");
+
+            return text;
         }
 
         static std::array<uint16_t, 2> pressureSensorsForRelayImpl(uint8_t relayIndex)
@@ -1012,6 +1058,7 @@ namespace WaterTest
           m_flowTimer(nullptr),
           m_dataTimer(nullptr),
           m_relayTimer(nullptr),
+          m_selfCheckStatusPollTimer(nullptr),
           m_flowDashOffset(0.0)
     {
         setupUI();
@@ -1023,32 +1070,29 @@ namespace WaterTest
     {
         m_stationClient = stationClient;
 
-        const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
-        const bool connected = m_stationClient && m_stationClient->isConnected();
+        const bool plcConnected = m_deviceManager && m_deviceManager->isPlcConnected();
         if (m_selfCheckBtn)
         {
-            m_selfCheckBtn->setEnabled(!strictRemoteMode || connected);
-            m_selfCheckBtn->setToolTip(strictRemoteMode
-                                           ? (connected ? QString() : QString::fromUtf8("请先连接主控台后再执行自检"))
-                                           : QString());
+            m_selfCheckBtn->setEnabled(plcConnected);
+            m_selfCheckBtn->setToolTip(plcConnected ? QString() : QString::fromUtf8("请先连接 PLC 后再执行自检"));
         }
 
         if (m_stationClient)
         {
             QObject::connect(m_stationClient.get(), &StationClient::connected, this, [this]() {
-                const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
                 if (m_selfCheckBtn)
                 {
-                    m_selfCheckBtn->setEnabled(true);
-                    m_selfCheckBtn->setToolTip(QString());
+                    const bool plcConnected = m_deviceManager && m_deviceManager->isPlcConnected();
+                    m_selfCheckBtn->setEnabled(plcConnected);
+                    m_selfCheckBtn->setToolTip(plcConnected ? QString() : QString::fromUtf8("请先连接 PLC 后再执行自检"));
                 }
             });
             QObject::connect(m_stationClient.get(), &StationClient::disconnected, this, [this]() {
-                const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
                 if (m_selfCheckBtn)
                 {
-                    m_selfCheckBtn->setEnabled(!strictRemoteMode);
-                    m_selfCheckBtn->setToolTip(strictRemoteMode ? QString::fromUtf8("请先连接主控台后再执行自检") : QString());
+                    const bool plcConnected = m_deviceManager && m_deviceManager->isPlcConnected();
+                    m_selfCheckBtn->setEnabled(plcConnected);
+                    m_selfCheckBtn->setToolTip(plcConnected ? QString() : QString::fromUtf8("请先连接 PLC 后再执行自检"));
                 }
             });
         }
@@ -1201,6 +1245,20 @@ namespace WaterTest
         m_relayTimer = new QTimer(this);
         connect(m_relayTimer, &QTimer::timeout, this, [this]() { updateRelayButtons(); });
         m_relayTimer->start(1000);
+
+        // 自检状态轮询：仅在 PLC 自检运行期间启用。
+        m_selfCheckStatusPollTimer = new QTimer(this);
+        m_selfCheckStatusPollTimer->setInterval(250);
+        connect(m_selfCheckStatusPollTimer, &QTimer::timeout, this, [this]() {
+            if (!m_deviceManager)
+                return;
+            m_deviceManager->refreshPlcSelfCheckStatus();
+            updateRelayButtons(true);
+            updateSensorValues(true);
+            const auto sc = m_deviceManager->getPlcSelfCheckStatus();
+            if (sc.done || sc.passed || sc.failed)
+                stopSelfCheckStatusPolling();
+        });
 
         buildScene();
         updateRelayButtons();
@@ -1858,6 +1916,22 @@ namespace WaterTest
         }
     }
 
+    void Station1Panel::startSelfCheckStatusPolling()
+    {
+        if (!m_selfCheckStatusPollTimer || !m_deviceManager)
+            return;
+
+        m_deviceManager->refreshPlcSelfCheckStatus();
+        if (!m_selfCheckStatusPollTimer->isActive())
+            m_selfCheckStatusPollTimer->start();
+    }
+
+    void Station1Panel::stopSelfCheckStatusPolling()
+    {
+        if (m_selfCheckStatusPollTimer && m_selfCheckStatusPollTimer->isActive())
+            m_selfCheckStatusPollTimer->stop();
+    }
+
     bool Station1Panel::readPressureValueForDisplay(uint16_t configuredSensorId, size_t fallbackIndex, double &pressureKpa) const
     {
         if (!m_deviceManager)
@@ -2055,6 +2129,20 @@ namespace WaterTest
             return false;
         }
 
+        const QString sourceText = QString::fromUtf8(source ? source : "");
+        if (!sourceText.startsWith("selfcheck"))
+        {
+            const auto sc = m_deviceManager->getPlcSelfCheckStatus();
+            if (sc.busy)
+            {
+                qWarning() << "[SelfCheck][Station1Panel] relay control blocked while self-check busy"
+                           << "src=" << source
+                           << "index=" << index
+                           << "target=" << on;
+                return false;
+            }
+        }
+
         if (isM100RelayIndex(index))
         {
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -2192,6 +2280,20 @@ namespace WaterTest
                        << "id=" << id
                        << "target=" << open;
             return false;
+        }
+
+        const QString sourceText = QString::fromUtf8(source ? source : "");
+        if (!sourceText.startsWith("selfcheck"))
+        {
+            const auto sc = m_deviceManager->getPlcSelfCheckStatus();
+            if (sc.busy)
+            {
+                qWarning() << "[SelfCheck][Station1Panel] regulating valve control blocked while self-check busy"
+                           << "src=" << source
+                           << "id=" << id
+                           << "targetOpen=" << open;
+                return false;
+            }
         }
 
         const bool useRemote = (m_stationClient && m_stationClient->isConnected());
@@ -3544,64 +3646,386 @@ namespace WaterTest
         const bool preferPlcSide = ConfigManager::getInstance().getBool("selfcheck.station1.use_plc_side", true);
         if (preferPlcSide)
         {
-            const bool strictRemoteMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+            auto &cfg = ConfigManager::getInstance();
+            const bool enableOptional = cfg.getBool("selfcheck.plc.cmd.enable_optional", true);
+            const bool preOpenRegValves = cfg.getBool("selfcheck.station1.preopen_regulating_valves", true);
+            const float reg1Target = cfg.getFloat("selfcheck.station1.regulating_valve1_opening_percent", 100.0f);
+            const float reg2Target = cfg.getFloat("selfcheck.station1.regulating_valve2_opening_percent", 100.0f);
+            const int regSettleMs = cfg.getInt("selfcheck.station1.regulating_valve_settle_ms", 1200);
             bool ok = false;
-            const bool stationConnected = (m_stationClient && m_stationClient->isConnected());
             const bool plcConnected = (m_deviceManager && m_deviceManager->isPlcConnected());
 
-            if (m_stationClient && strictRemoteMode && stationConnected)
+            if (plcConnected)
             {
-                ControlCommand cmd;
-                cmd.command_type = 6; // PLC self-check control
-                cmd.action = 1;       // start
-                ok = m_stationClient->sendCommand(cmd);
-                if (!ok)
-                {
-                    QMessageBox::warning(this,
-                                             "系统自检",
-                                             "已选择远程下发路径，但命令发送到主控台失败。\n"
-                                             "请检查主控台连接状态、网络链路以及 Terminal 是否正常运行。");
-                    return;
-                }
-            }
-            else if (plcConnected)
-            {
-                if (strictRemoteMode && m_stationClient && !stationConnected)
+                m_deviceManager->refreshPlcSelfCheckStatus();
+                const auto prevSc = m_deviceManager->getPlcSelfCheckStatus();
+                if (prevSc.busy)
                 {
                     QMessageBox::information(this,
                                              "系统自检",
-                                             "主控台当前未连接，已切换为本地 PLC 自检调试路径。\n"
-                                             "如果你要走远程模式，请先连接主控台。\n");
+                                             QString::fromUtf8("PLC 自检仍在运行中（Step=%1），请等待结束后再启动。")
+                                                 .arg(prevSc.stepNo));
+                    return;
                 }
-                ok = m_deviceManager->startPlcSelfCheck();
+
+                if (prevSc.done || prevSc.passed || prevSc.failed)
+                {
+                    const bool resetOk = m_deviceManager->resetPlcSelfCheck();
+                    if (!resetOk)
+                    {
+                        QMessageBox::warning(this,
+                                             "系统自检",
+                                             QString::fromUtf8("二次启动前自动复位失败，请检查 Reset 命令映射与PLC连接。"));
+                        return;
+                    }
+                    QThread::msleep(80);
+                }
+
+                if (preOpenRegValves)
+                {
+                    const bool reg1Ok = m_deviceManager->setValveOpeningPercent(1, reg1Target);
+                    const bool reg2Ok = m_deviceManager->setValveOpeningPercent(2, reg2Target);
+                    if (!(reg1Ok && reg2Ok))
+                    {
+                        QMessageBox::warning(this,
+                                             "系统自检",
+                                             QString::fromUtf8("自检前调压阀预开失败：Reg1=%1%2，Reg2=%3%4\n请检查调压阀映射与PLC连接。")
+                                                 .arg(reg1Ok ? QString::fromUtf8("成功") : QString::fromUtf8("失败"))
+                                                 .arg(reg1Ok ? QString() : QString::fromUtf8("（阀1）"))
+                                                 .arg(reg2Ok ? QString::fromUtf8("成功") : QString::fromUtf8("失败"))
+                                                 .arg(reg2Ok ? QString() : QString::fromUtf8("（阀2）")));
+                        return;
+                    }
+
+                    if (regSettleMs > 0)
+                    {
+                        QElapsedTimer regSettleTimer;
+                        regSettleTimer.start();
+                        while (regSettleTimer.elapsed() < regSettleMs)
+                        {
+                            m_deviceManager->updateAllDevices();
+                            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
+                            QThread::msleep(20);
+                        }
+                    }
+
+                    qInfo() << "[SelfCheck][Station1Panel] pre-open regulating valves done"
+                            << "reg1Target=" << reg1Target
+                            << "reg2Target=" << reg2Target
+                            << "settleMs=" << regSettleMs;
+                }
+
+                const bool enableOk = m_deviceManager->setPlcSelfCheckEnable(true);
+                bool startOk = false;
+
+                if (enableOk || enableOptional)
+                {
+                    startOk = m_deviceManager->startPlcSelfCheck();
+                }
+
+                ok = (enableOk || enableOptional) && startOk;
                 if (!ok)
                 {
                     const QString plcErr = QString::fromStdString(m_deviceManager->getPlcLastError()).trimmed();
+                    const int dbCmd = cfg.getInt("selfcheck.plc.db_cmd", 20);
+                    const int enByte = cfg.getInt("selfcheck.plc.cmd.enable.byte_offset", 0);
+                    const int enBit = cfg.getInt("selfcheck.plc.cmd.enable.bit_offset", 0);
+                    const int stByte = cfg.getInt("selfcheck.plc.cmd.start.byte_offset", 0);
+                    const int stBit = cfg.getInt("selfcheck.plc.cmd.start.bit_offset", 1);
+
+                    QString failedStep;
+                    if (!enableOk && !enableOptional)
+                        failedStep = QString::fromUtf8("Enable 写入失败（严格模式）");
+                    else if (!enableOk && enableOptional)
+                        failedStep = QString::fromUtf8("Enable 写入失败（已按可选模式继续）但 Start 仍失败");
+                    else
+                        failedStep = QString::fromUtf8("Start 脉冲写入失败");
+
                     QMessageBox::warning(this,
                                              "系统自检",
                                              plcErr.isEmpty()
-                                                 ? QString::fromUtf8("PLC 自检命令写入失败，请检查 DB20/DB21 映射、外部可访问性以及 PLC 连接状态。")
-                                                 : QString::fromUtf8("PLC 自检命令写入失败：") + plcErr + QString::fromUtf8("\n请检查 DB20/DB21 映射、外部可访问性以及 PLC 连接状态。"));
+                                                 ? QString::fromUtf8("PLC 自检命令写入失败：") + failedStep +
+                                                       QString::fromUtf8("\n当前映射：DB%1, Enable=DBX%2.%3, Start=DBX%4.%5")
+                                                           .arg(dbCmd)
+                                                           .arg(enByte).arg(enBit)
+                                                           .arg(stByte).arg(stBit) +
+                                                       QString::fromUtf8("\n请检查 Enable/Trigger 映射、外部可访问性以及 PLC 连接状态。")
+                                                 : QString::fromUtf8("PLC 自检命令写入失败：") + plcErr +
+                                                       QString::fromUtf8("\n失败步骤：") + failedStep +
+                                                       QString::fromUtf8("\n当前映射：DB%1, Enable=DBX%2.%3, Start=DBX%4.%5")
+                                                           .arg(dbCmd)
+                                                           .arg(enByte).arg(enBit)
+                                                           .arg(stByte).arg(stBit) +
+                                                       QString::fromUtf8("\n请检查 Enable/Trigger 映射、外部可访问性以及 PLC 连接状态。"));
                     return;
                 }
             }
             else
             {
-                if (strictRemoteMode && m_stationClient && !stationConnected)
-                {
-                    QMessageBox::warning(this, "系统自检", "当前处于严格远程模式，但主控台尚未连接，同时本地 PLC 也不可用。\n请先连接主控台，或检查本地 PLC 连接状态。");
-                }
-                else
-                {
-                    QMessageBox::warning(this, "系统自检", "PLC 未连接，无法下发自检命令。请先检查 PLC 连接状态。");
-                }
+                QMessageBox::warning(this, "系统自检", "PLC 未连接，无法下发自检命令。请先检查 PLC 连接状态。");
                 return;
             }
 
-            QMessageBox::information(this,
-                                     "系统自检",
-                                     "已下发 PLC 自检开始命令。\n请在上位机状态栏查看步骤号和故障码。\n"
-                                     "如需中止/复位，可通过命令类型6(action=2/3)下发。\n");
+            startSelfCheckStatusPolling();
+
+            QDialog statusDialog(this);
+            statusDialog.setWindowTitle(QString::fromUtf8("系统自检状态跟踪"));
+            statusDialog.setWindowModality(Qt::WindowModal);
+            statusDialog.resize(760, 540);
+            statusDialog.setStyleSheet(
+                "QDialog { background: #edf2f7; }"
+                "QFrame#scCard {"
+                " background: #ffffff;"
+                " border: 1px solid #cfd9e3;"
+                " border-radius: 14px;"
+                " }"
+                "QLabel#scTitle {"
+                " color: #12324a;"
+                " font-size: 20px;"
+                " font-weight: 700;"
+                " }"
+                "QLabel#scSubtitle {"
+                " color: #4d667d;"
+                " font-size: 12px;"
+                " }"
+                "QLabel#scBadge {"
+                " color: #ffffff;"
+                " background: #2d8f74;"
+                " border-radius: 12px;"
+                " font-size: 12px;"
+                " font-weight: 700;"
+                " padding: 4px 10px;"
+                " }"
+                "QLabel#scMetricCard {"
+                " background: #f7fafc;"
+                " border: 1px solid #d4e0eb;"
+                " border-radius: 10px;"
+                " color: #223f56;"
+                " font-size: 12px;"
+                " padding: 6px 10px;"
+                " }"
+                "QLabel#scHint {"
+                " color: #486177;"
+                " font-size: 12px;"
+                " }"
+                "QTextEdit#scSummary {"
+                " background: #f5f8fb;"
+                " border: 1px solid #d5e1ec;"
+                " border-radius: 10px;"
+                " color: #1b3246;"
+                " font-family: Consolas, 'Microsoft YaHei UI';"
+                " font-size: 12px;"
+                " }"
+                "QProgressBar#scProgress {"
+                " height: 14px;"
+                " border: 1px solid #c7d6e4;"
+                " border-radius: 7px;"
+                " background: #e7eef5;"
+                " text-align: center;"
+                " color: #234158;"
+                " font-size: 11px;"
+                " }"
+                "QProgressBar#scProgress::chunk {"
+                " border-radius: 6px;"
+                " background: #2d8f74;"
+                " }"
+                "QPushButton#scCloseBtn {"
+                " min-width: 116px;"
+                " min-height: 34px;"
+                " border-radius: 10px;"
+                " color: #ffffff;"
+                " background: #2a6f97;"
+                " border: 1px solid #255f83;"
+                " font-weight: 700;"
+                " }"
+                "QPushButton#scCloseBtn:hover { background: #327da8; }"
+            );
+
+            auto *layout = new QVBoxLayout(&statusDialog);
+            layout->setContentsMargins(14, 14, 14, 14);
+            layout->setSpacing(10);
+
+            auto *headerCard = new QFrame(&statusDialog);
+            headerCard->setObjectName("scCard");
+            auto *headerLayout = new QVBoxLayout(headerCard);
+            headerLayout->setContentsMargins(14, 12, 14, 12);
+            headerLayout->setSpacing(8);
+
+            auto *titleRow = new QHBoxLayout();
+            auto *titleLabel = new QLabel(QString::fromUtf8("PLC 自检实时跟踪"), headerCard);
+            titleLabel->setObjectName("scTitle");
+            auto *statusBadge = new QLabel(QString::fromUtf8("运行中"), headerCard);
+            statusBadge->setObjectName("scBadge");
+            titleRow->addWidget(titleLabel);
+            titleRow->addStretch();
+            titleRow->addWidget(statusBadge);
+
+            auto *subtitleLabel = new QLabel(QString::fromUtf8("自检过程中自动刷新步骤、故障码与压力快照。"), headerCard);
+            subtitleLabel->setObjectName("scSubtitle");
+            subtitleLabel->setWordWrap(true);
+
+            auto *progressBar = new QProgressBar(headerCard);
+            progressBar->setObjectName("scProgress");
+            progressBar->setRange(0, 100);
+            progressBar->setValue(0);
+            progressBar->setFormat(QString::fromUtf8("准备中 %p%"));
+
+            auto *metricRow = new QHBoxLayout();
+            metricRow->setSpacing(8);
+            auto *metricRuntime = new QLabel(QString::fromUtf8("运行时长\n0 ms"), headerCard);
+            metricRuntime->setObjectName("scMetricCard");
+            auto *metricStep = new QLabel(QString::fromUtf8("当前步骤\n0 (空闲)"), headerCard);
+            metricStep->setObjectName("scMetricCard");
+            auto *metricFault = new QLabel(QString::fromUtf8("故障码\n0x0000"), headerCard);
+            metricFault->setObjectName("scMetricCard");
+            auto *metricResult = new QLabel(QString::fromUtf8("结果\n等待"), headerCard);
+            metricResult->setObjectName("scMetricCard");
+            metricRow->addWidget(metricRuntime, 1);
+            metricRow->addWidget(metricStep, 1);
+            metricRow->addWidget(metricFault, 1);
+            metricRow->addWidget(metricResult, 1);
+
+            headerLayout->addLayout(titleRow);
+            headerLayout->addWidget(subtitleLabel);
+            headerLayout->addWidget(progressBar);
+            headerLayout->addLayout(metricRow);
+
+            auto *summaryEdit = new QTextEdit(&statusDialog);
+            summaryEdit->setObjectName("scSummary");
+            summaryEdit->setReadOnly(true);
+            summaryEdit->setMinimumHeight(280);
+
+            auto *hintLabel = new QLabel(QString::fromUtf8("提示：窗口可保持打开；自检到达终态后会自动清零 Enable。"), &statusDialog);
+            hintLabel->setObjectName("scHint");
+            hintLabel->setWordWrap(true);
+
+            auto *closeBtn = new QPushButton(QString::fromUtf8("关闭"), &statusDialog);
+            closeBtn->setObjectName("scCloseBtn");
+            auto *buttonRow = new QHBoxLayout();
+            buttonRow->addStretch();
+            buttonRow->addWidget(closeBtn);
+
+            layout->addWidget(headerCard);
+            layout->addWidget(summaryEdit, 1);
+            layout->addWidget(hintLabel);
+            layout->addLayout(buttonRow);
+
+            QObject::connect(closeBtn, &QPushButton::clicked, &statusDialog, &QDialog::accept);
+
+            QElapsedTimer elapsedTimer;
+            elapsedTimer.start();
+            auto refreshStatus = [this, summaryEdit, titleLabel, subtitleLabel, closeBtn, elapsedTimer, statusBadge, progressBar, metricRuntime, metricStep, metricFault, metricResult]() mutable
+            {
+                auto stepProgress = [](int stepNo, bool done, bool passed, bool failed) -> int {
+                    if (failed)
+                        return 100;
+                    if (passed || done || stepNo >= 90)
+                        return 100;
+                    if (stepNo <= 0)
+                        return 0;
+                    if (stepNo <= 5)
+                        return 10;
+                    if (stepNo <= 10)
+                        return 28;
+                    if (stepNo <= 20)
+                        return 48;
+                    if (stepNo <= 30)
+                        return 72;
+                    if (stepNo <= 40)
+                        return 92;
+                    return 96;
+                };
+
+                if (!m_deviceManager)
+                {
+                    summaryEdit->setPlainText(QString::fromUtf8("设备管理器不可用，无法读取自检状态。"));
+                    titleLabel->setText(QString::fromUtf8("PLC 自检状态读取失败"));
+                    subtitleLabel->setText(QString::fromUtf8("请检查设备管理器初始化状态与PLC链路。"));
+                    statusBadge->setText(QString::fromUtf8("读取失败"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#c24b45; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setValue(0);
+                    progressBar->setFormat(QString::fromUtf8("状态不可用 %p%"));
+                    metricRuntime->setText(QString::fromUtf8("运行时长\n--"));
+                    metricStep->setText(QString::fromUtf8("当前步骤\n--"));
+                    metricFault->setText(QString::fromUtf8("故障码\n--"));
+                    metricResult->setText(QString::fromUtf8("结果\n读取失败"));
+                    return;
+                }
+
+                // 自检跟踪窗口期间同步刷新 1 号操作台图元，让阀门开关动作可视化。
+                updateRelayButtons(true);
+                updateSensorValues(true);
+
+                const auto sc = m_deviceManager->getPlcSelfCheckStatus();
+                QString text = selfCheckStatusText(sc);
+                const qint64 elapsedMs = elapsedTimer.elapsed();
+                text.prepend(QString::fromUtf8("运行时长: %1 ms\n\n").arg(elapsedMs));
+                summaryEdit->setPlainText(text);
+
+                const int progress = stepProgress(sc.stepNo, sc.done, sc.passed, sc.failed);
+                progressBar->setValue(progress);
+                progressBar->setFormat(QString::fromUtf8("流程进度 %1%" ).arg(progress));
+                metricRuntime->setText(QString::fromUtf8("运行时长\n%1 ms").arg(elapsedMs));
+                metricStep->setText(QString::fromUtf8("当前步骤\n%1 (%2)").arg(sc.stepNo).arg(selfCheckStepText(sc.stepNo)));
+                metricFault->setText(QString::fromUtf8("故障码\n0x%1").arg(QString::number(sc.faultCode, 16).rightJustified(4, '0').toUpper()));
+
+                if (sc.failed)
+                {
+                    titleLabel->setText(QString::fromUtf8("系统自检状态跟踪 - 失败"));
+                    subtitleLabel->setText(QString::fromUtf8("检测到故障，建议记录故障码并回查步骤判据。"));
+                    statusBadge->setText(QString::fromUtf8("失败"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#bb3e3e; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setStyleSheet(QStringLiteral("QProgressBar#scProgress { height:14px; border:1px solid #e1c9c9; border-radius:7px; background:#f5e7e7; text-align:center; color:#6c2a2a; font-size:11px; } QProgressBar#scProgress::chunk { border-radius:6px; background:#bb3e3e; }"));
+                    metricResult->setText(QString::fromUtf8("结果\n失败"));
+                    closeBtn->setText(QString::fromUtf8("关闭"));
+                }
+                else if (sc.passed)
+                {
+                    titleLabel->setText(QString::fromUtf8("系统自检状态跟踪 - 通过"));
+                    subtitleLabel->setText(QString::fromUtf8("所有阶段判据满足，系统自检通过。"));
+                    statusBadge->setText(QString::fromUtf8("通过"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#2d8f74; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setStyleSheet(QStringLiteral("QProgressBar#scProgress { height:14px; border:1px solid #c7d6e4; border-radius:7px; background:#e7eef5; text-align:center; color:#234158; font-size:11px; } QProgressBar#scProgress::chunk { border-radius:6px; background:#2d8f74; }"));
+                    metricResult->setText(QString::fromUtf8("结果\n通过"));
+                    closeBtn->setText(QString::fromUtf8("关闭"));
+                }
+                else if (sc.done)
+                {
+                    titleLabel->setText(QString::fromUtf8("系统自检状态跟踪 - 已结束"));
+                    subtitleLabel->setText(QString::fromUtf8("流程已结束，请确认最终结果与现场状态。"));
+                    statusBadge->setText(QString::fromUtf8("已结束"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#3f7193; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setStyleSheet(QStringLiteral("QProgressBar#scProgress { height:14px; border:1px solid #c7d6e4; border-radius:7px; background:#e7eef5; text-align:center; color:#234158; font-size:11px; } QProgressBar#scProgress::chunk { border-radius:6px; background:#3f7193; }"));
+                    metricResult->setText(QString::fromUtf8("结果\n结束"));
+                    closeBtn->setText(QString::fromUtf8("关闭"));
+                }
+                else if (sc.busy)
+                {
+                    titleLabel->setText(QString::fromUtf8("系统自检状态跟踪 - 运行中"));
+                    subtitleLabel->setText(QString::fromUtf8("正在执行自检流程，图元状态与压力数据实时更新。"));
+                    statusBadge->setText(QString::fromUtf8("运行中"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#c07a2a; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setStyleSheet(QStringLiteral("QProgressBar#scProgress { height:14px; border:1px solid #d7cfbf; border-radius:7px; background:#f4eee2; text-align:center; color:#5a4121; font-size:11px; } QProgressBar#scProgress::chunk { border-radius:6px; background:#c07a2a; }"));
+                    metricResult->setText(QString::fromUtf8("结果\n进行中"));
+                    closeBtn->setText(QString::fromUtf8("关闭"));
+                }
+                else
+                {
+                    titleLabel->setText(QString::fromUtf8("系统自检状态跟踪 - 等待启动"));
+                    subtitleLabel->setText(QString::fromUtf8("命令已下发，等待PLC进入自检状态。"));
+                    statusBadge->setText(QString::fromUtf8("等待"));
+                    statusBadge->setStyleSheet(QStringLiteral("QLabel#scBadge { color:#ffffff; background:#5d7388; border-radius:12px; font-size:12px; font-weight:700; padding:4px 10px; }"));
+                    progressBar->setStyleSheet(QStringLiteral("QProgressBar#scProgress { height:14px; border:1px solid #c7d6e4; border-radius:7px; background:#e7eef5; text-align:center; color:#234158; font-size:11px; } QProgressBar#scProgress::chunk { border-radius:6px; background:#5d7388; }"));
+                    metricResult->setText(QString::fromUtf8("结果\n等待"));
+                }
+            };
+
+            QTimer statusTimer(&statusDialog);
+            QObject::connect(&statusTimer, &QTimer::timeout, &statusDialog, refreshStatus);
+            statusTimer.start(300);
+            refreshStatus();
+
+            statusDialog.exec();
             return;
         }
 
@@ -4226,6 +4650,19 @@ namespace WaterTest
      */
     void Station1Panel::onRelayBtnClicked(uint8_t index, const char *source)
     {
+        if (m_deviceManager)
+        {
+            const auto sc = m_deviceManager->getPlcSelfCheckStatus();
+            if (sc.busy)
+            {
+                QMessageBox::information(this,
+                                         "自检运行中",
+                                         "PLC 系统自检正在运行，已临时锁定手动阀门控制，避免与自检输出仲裁冲突。\n"
+                                         "请等待自检结束后再进行手动操作。");
+                return;
+            }
+        }
+
         if (relayUsesM100_4(index))
         {
             qInfo() << "[M100][Station1Panel] relay mapped to M100.4"
@@ -4246,8 +4683,16 @@ namespace WaterTest
             const auto relayDefs = relayDefsForStation(m_panelConfig.stationNumber);
             const RelayDef *def = findRelayDefByIndex(relayDefs, index);
             const QString addr = def ? def->addr : QString("Q?");
-            QMessageBox::warning(this, "操作失败",
-                                 QString("切换 %1 失败，请检查 PLC/终端连接状态。").arg(addr));
+            if (isM100RelayIndex(index))
+            {
+                QMessageBox::warning(this, "操作失败",
+                                     QString("切换 %1 失败，请检查基础控制 DB 是否关闭优化访问、并允许绝对地址读写。").arg(addr));
+            }
+            else
+            {
+                QMessageBox::warning(this, "操作失败",
+                                     QString("切换 %1 失败，请检查 PLC/终端连接状态。").arg(addr));
+            }
         }
     }
 
