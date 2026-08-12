@@ -1,6 +1,6 @@
 /**
  * @file Station1Panel.cpp
- * @brief 1号操作台面板实现（工艺流程图展示 + 实时控制）
+ * @brief Station1 工作台 1（DN25）面板实现（工艺流程图展示 + 实时控制）
  *
  * 架构概览
  * --------
@@ -136,7 +136,7 @@ namespace WaterTest
             return isM100RelayIndex(index) || relayUsesM100_4(index);
         }
 
-        // 1号操作台 DQ 输出匹配表：仅保留 5 个电磁阀。
+        // Station1 工作台 1（DN25）DQ 输出匹配表：仅保留 5 个电磁阀。
         static const std::array<RelayDef, 5> kStation1Relays{{
             {0, "电磁阀1", "M100.0", "valve"},
             {1, "电磁阀2", "M100.1", "valve"},
@@ -279,7 +279,7 @@ namespace WaterTest
         /**
          * @brief 解析远程 SensorData::pressure[] 下标。
          *
-         * 1号操作台远程压力数组固定为 Pressure3..Pressure8，
+         * Station1 工作台 1（DN25）远程压力数组固定为 Pressure3..Pressure8，
          * 因此按 sensorId 直接映射：3->0, 4->1, ..., 8->5。
          */
         static int resolveRemotePressureIndex(uint16_t sensorId, int fallbackIndex)
@@ -4122,7 +4122,7 @@ namespace WaterTest
                     .arg(s.name.toHtmlEscaped(), color, icon, s.detail.toHtmlEscaped());
             }
             return QStringLiteral(
-                "<h3 style='margin:0 0 8px 0'>") + QString::fromUtf8("1号操作台系统自检") +
+                "<h3 style='margin:0 0 8px 0'>") + QString::fromUtf8("Station1 工作台 1（DN25）系统自检") +
                 QStringLiteral("</h3>"
                 "<table style='border-collapse:collapse;border:1px solid #223244;width:100%' border='1'>"
                 "<tr style='background:#0f1a24'><th style='padding:6px 10px'>") +
@@ -4877,7 +4877,7 @@ namespace WaterTest
         addBlueGridBackground(m_scene, m_scene->sceneRect());
 
         // 标题
-        auto *caption = m_scene->addText(QString("%1号操作台流程 -- DN25").arg(m_panelConfig.stationNumber));
+        auto *caption = m_scene->addText(QString("Station1 工作台 %1 -- DN25").arg(m_panelConfig.stationNumber));
         caption->setDefaultTextColor(kUiText);
         QFont tf = caption->font();
         tf.setPointSize(14);

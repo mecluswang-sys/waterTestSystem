@@ -343,9 +343,9 @@ namespace WaterTest
         m_monitorPanel = new MonitorPanel(m_deviceManager, this);
         m_tabWidget->addTab(m_monitorPanel, "② 实时监控");
 
-        // Tab 3: 1号操作台
+        // Tab 3: Station1 工作台 1（DN25）
         m_station1Panel = new Station1Panel(m_deviceManager, this);
-        m_tabWidget->addTab(m_station1Panel, "③ 1号操作台");
+        m_tabWidget->addTab(m_station1Panel, "③ Station1 工作台 1（DN25）");
 
         mainLayout->addWidget(m_tabWidget);
         setCentralWidget(centralWidget);

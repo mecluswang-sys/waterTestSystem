@@ -2363,8 +2363,8 @@ namespace WaterTest
             mainWindow->activateStation1Tab();
             QMessageBox::information(this,
                                      "系统自检",
-                                     "自检功能已迁移到 1号操作台界面，请在该界面点击“系统自检”按钮。\n"
-                                     "当前已切换到 1号操作台。\n");
+                                     "自检功能已迁移到 Station1 工作台 1（DN25）界面，请在该界面点击“系统自检”按钮。\n"
+                                     "当前已切换到 Station1 工作台 1（DN25）。\n");
             return;
         }
 
