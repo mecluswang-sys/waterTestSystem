@@ -1,0 +1,21 @@
+<svg width="160" height="240" viewBox="-70 -90 160 240" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#39434d"/>
+      <stop offset="0.5" stop-color="#5b6873"/>
+      <stop offset="1" stop-color="#39434d"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="0" cy="-65" rx="46" ry="9" fill="#46515c" stroke="#8b98a3" stroke-width="2"/>
+  <rect x="-46" y="-65" width="92" height="120" fill="url(#shell)" stroke="#8b98a3" stroke-width="2"/>
+  <ellipse cx="0" cy="55" rx="46" ry="9" fill="#46515c" stroke="#8b98a3" stroke-width="2"/>
+  <line x1="-64" y1="15" x2="-46" y2="15" stroke="#4A5F73" stroke-width="14" stroke-linecap="round"/>
+  <line x1="-64" y1="15" x2="-46" y2="15" stroke="#65788A" stroke-width="10" stroke-linecap="round"/>
+  <line x1="46" y1="50" x2="64" y2="50" stroke="#4A5F73" stroke-width="14" stroke-linecap="round"/>
+  <line x1="46" y1="50" x2="64" y2="50" stroke="#65788A" stroke-width="10" stroke-linecap="round"/>
+  <rect x="-36" y="64" width="8" height="18" fill="#46515c" stroke="#8b98a3"/>
+  <rect x="28" y="64" width="8" height="18" fill="#46515c" stroke="#8b98a3"/>
+  <rect x="-40" y="82" width="80" height="4" fill="#46515c" stroke="#8b98a3"/>
+  <ellipse cx="0" cy="-68" rx="8" ry="3" fill="#46515c" stroke="#8b98a3"/>
+  <circle cx="60" cy="-56" r="4" fill="#666f78" stroke="#101418"/>
+</svg>

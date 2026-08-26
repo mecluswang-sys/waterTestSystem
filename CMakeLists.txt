@@ -15,7 +15,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # 查找Qt6
-find_package(Qt6 COMPONENTS Core Widgets Sql Network SerialPort REQUIRED)
+find_package(Qt6 COMPONENTS Core Widgets Svg Sql Network SerialPort REQUIRED)
 
 # 查找SQLite3
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
@@ -71,6 +71,7 @@ set(SOURCES
     src/gui/ConfigDialog.cpp
     src/gui/PreparationPanel.cpp
     src/gui/Station1Panel.cpp
+    include/gui/SvgPipeFlowItem.h
     src/gui/TickedSlider.cpp
     examples/PumpWidget.cpp
 )
@@ -124,6 +125,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE 
     Qt6::Core
     Qt6::Widgets
+    Qt6::Svg
     Qt6::Sql
     Qt6::Network
     Qt6::SerialPort

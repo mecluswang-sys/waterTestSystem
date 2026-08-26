@@ -1,0 +1,14 @@
+<svg width="124" height="110" viewBox="0 0 124 110" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="62" cy="46" r="30" fill="#172534" stroke="#8AA0B5" stroke-width="2"/>
+  <circle cx="62" cy="46" r="25" fill="#0E1622" stroke="#4A5F73" stroke-width="1"/>
+
+  <path d="M 40 61 L 38 64 M 35 52 L 31 53 M 34 42 L 30 41 M 39 32 L 36 29 M 47 25 L 45 21 M 57 22 L 57 18 M 67 22 L 68 18 M 77 25 L 79 21 M 85 32 L 88 29 M 90 42 L 94 41 M 89 52 L 93 53 M 84 61 L 86 64" fill="none" stroke="#7A9DB5" stroke-width="1" stroke-linecap="round"/>
+
+  <rect x="32" y="34" width="60" height="21" rx="4" fill="#0E141C" stroke="#4A5F73" stroke-width="1"/>
+  <text x="62" y="31" text-anchor="middle" font-size="8" fill="#F5F8FF">压力 (kPa)</text>
+  <text x="62" y="51" text-anchor="middle" font-size="15" font-weight="bold" fill="#F5F8FF"></text>
+
+  <line x1="62" y1="76" x2="62" y2="82" stroke="#4A5F73" stroke-width="4" stroke-linecap="round"/>
+  <line x1="62" y1="76" x2="62" y2="82" stroke="#8AA0B5" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="62" cy="82" r="3" fill="#46BDFF" stroke="#0E1622" stroke-width="1"/>
+</svg>

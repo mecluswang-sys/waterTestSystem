@@ -1,0 +1,15 @@
+<svg width="180" height="120" viewBox="-90 -60 180 120" xmlns="http://www.w3.org/2000/svg">
+  <line x1="-30" y1="0" x2="-33" y2="0" stroke="#4A5F73" stroke-width="14" stroke-linecap="round"/>
+  <line x1="-30" y1="0" x2="-33" y2="0" stroke="#5EC7FF" stroke-width="10" stroke-linecap="round"/>
+  <line x1="33" y1="0" x2="30" y2="0" stroke="#4A5F73" stroke-width="14" stroke-linecap="round"/>
+  <line x1="33" y1="0" x2="30" y2="0" stroke="#5EC7FF" stroke-width="10" stroke-linecap="round"/>
+  <rect x="-18" y="-54" width="36" height="36" rx="6" fill="none" stroke="#2ECC71" stroke-width="3"/>
+  <line x1="0" y1="-18" x2="0" y2="0" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="-31" y1="-17" x2="0" y2="0" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="-31" y1="17" x2="0" y2="0" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="-31" y1="-17" x2="-31" y2="17" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="31" y1="-17" x2="0" y2="0" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="31" y1="17" x2="0" y2="0" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+  <line x1="31" y1="-17" x2="31" y2="17" stroke="#2ECC71" stroke-width="3" stroke-linecap="round"/>
+
+</svg>

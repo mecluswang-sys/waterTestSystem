@@ -10,6 +10,7 @@
 
 #include <QGraphicsItem>
 #include <QPainter>
+#include <QSvgRenderer>
 #include <QString>
 
 namespace WaterTest
@@ -33,7 +34,7 @@ namespace WaterTest
             setFlags(QGraphicsItem::ItemIsSelectable);
         }
 
-        QRectF boundingRect() const override { return QRectF(-50, -68, 104, 128); }
+        QRectF boundingRect() const override { return QRectF(-90, -60, 180, 120); }
 
         void setOpen(bool open)
         {
@@ -55,7 +56,32 @@ namespace WaterTest
 
         void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
         {
-            GuiGlyph::drawValveGlyph(p, boundingRect(), m_name, m_open, m_degree, isSelected(), m_theme);
+            static QSvgRenderer openRenderer(QStringLiteral(":/hmi/valve-open.svg"));
+            static QSvgRenderer closedRenderer(QStringLiteral(":/hmi/valve-close.svg"));
+            QSvgRenderer &renderer = m_open ? openRenderer : closedRenderer;
+            if (!renderer.isValid())
+            {
+                GuiGlyph::drawValveGlyph(p, boundingRect(), m_name, m_open, m_degree, isSelected(), m_theme);
+                return;
+            }
+
+            p->save();
+            renderer.render(p, boundingRect());
+
+            if (isSelected())
+            {
+                p->setPen(QPen(m_theme.cyan, 2, Qt::DashLine));
+                p->setBrush(Qt::NoBrush);
+                p->drawRect(boundingRect().adjusted(2, 2, -2, -2));
+            }
+
+            p->setPen(m_theme.text);
+            QFont font = p->font();
+            font.setPointSize(9);
+            font.setBold(true);
+            p->setFont(font);
+            p->drawText(QRectF(-70, 34, 140, 18), Qt::AlignCenter, m_name);
+            p->restore();
         }
 
     private:

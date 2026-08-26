@@ -20,7 +20,6 @@ class QPushButton;
 class QFrame;
 class QColor;
 class QGraphicsItem;
-class QGraphicsPathItem;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -116,7 +115,7 @@ namespace WaterTest
         QTimer *m_selfCheckStatusPollTimer;
         qreal m_flowDashOffset;
         bool m_pipeFlowAnimationEnabled;
-        std::vector<QGraphicsPathItem *> m_flowPipeItems;
+        std::vector<QGraphicsItem *> m_flowPipeItems;
         std::array<QGraphicsItem *, 16> m_pressureSensorItems{};
         std::array<QGraphicsItem *, 16> m_valveItems{};
         std::array<QGraphicsItem *, 3> m_regulatingValveItems{};

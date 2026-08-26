@@ -5,6 +5,7 @@
   "dependencies": [
     "snap7",
     "sqlite3",
+    "qtsvg",
     {
       "name": "qtbase",
       "default-features": false,
