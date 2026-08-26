@@ -46,6 +46,7 @@
 #include "gui/HmiGlyphThemeUtils.h"
 #include "gui/InstrumentGlyphRenderer.h"
 #include "gui/PipeGlyphRenderer.h"
+#include "gui/SvgPipeFlowItem.h"
 #include "gui/ElectricValveItem.h"
 #include "gui/RegulatingValveItem.h"
 #include "gui/ProcessValveGlyphRenderer.h"
@@ -81,6 +82,8 @@
 #include <QMessageBox>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QSvgRenderer>
+#include <QByteArray>
 #include <QDebug>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -100,11 +103,12 @@ namespace WaterTest
     {
         // ===== 场景图元缩放比例 =====
         constexpr qreal kDeviceItemScale = 1.45;
+        constexpr qreal kPressureSensorScale = 1.65;
         constexpr qreal kAccumulatorItemScale = 1.2;
 
         // ===== 管道三层渲染宽度（像素） =====
         constexpr qreal kPipeOuterWidth = 14.0;
-        constexpr qreal kPipeInnerWidth = 9.0;
+        constexpr qreal kPipeInnerWidth = 10.0;
         constexpr qreal kPipeFlowWidth = 5.0;
 
         /**
@@ -619,6 +623,147 @@ namespace WaterTest
     namespace
     {
 
+        class SvgPipeSegmentItem : public QGraphicsItem
+        {
+        public:
+                        SvgPipeSegmentItem(const QPointF &start, const QPointF &end, qreal pipeWidth = 14.0)
+                : m_length(std::hypot(end.x() - start.x(), end.y() - start.y())),
+                m_halfWidth(pipeWidth * 0.5),
+                                    m_renderer()
+            {
+                setPos(start);
+                setRotation(std::atan2(end.y() - start.y(), end.x() - start.x()) * 180.0 / M_PI);
+                setZValue(1);
+                                const QByteArray svg = QByteArray("<svg viewBox=\"0 -") + QByteArray::number(m_halfWidth) +
+                                                                             QByteArray(" ") + QByteArray::number(m_length) + QByteArray(" ") +
+                                                                             QByteArray::number(pipeWidth) + QByteArray("\" xmlns=\"http://www.w3.org/2000/svg\">") +
+                                                                             QByteArray("<line x1=\"0\" y1=\"0\" x2=\"") + QByteArray::number(m_length) +
+                                                                             QByteArray("\" y2=\"0\" stroke=\"#4A5F73\" stroke-width=\"") +
+                                                                             QByteArray::number(pipeWidth) + QByteArray("\" stroke-linecap=\"butt\"/>") +
+                                                                             QByteArray("<line x1=\"0\" y1=\"0\" x2=\"") + QByteArray::number(m_length) +
+                                                                             QByteArray("\" y2=\"0\" stroke=\"#65788A\" stroke-width=\"") +
+                                                                             QByteArray::number(pipeWidth - 4.0) + QByteArray("\" stroke-linecap=\"butt\"/></svg>");
+                                m_renderer.load(svg);
+            }
+
+            QRectF boundingRect() const override
+            {
+                return QRectF(0.0, -m_halfWidth, m_length, m_halfWidth * 2.0);
+            }
+
+            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
+            {
+                if (!p || !m_renderer.isValid() || m_length <= 0.01)
+                    return;
+                m_renderer.render(p, QRectF(0.0, -m_halfWidth, m_length, m_halfWidth * 2.0));
+            }
+
+        private:
+            qreal m_length;
+            qreal m_halfWidth;
+            QSvgRenderer m_renderer;
+        };
+
+        static void addSvgFlowSegment(QGraphicsScene *scene,
+                                      const QPointF &start,
+                                      const QPointF &end,
+                                      QSvgRenderer *renderer,
+                                      int segmentId)
+        {
+            if (!scene || !renderer || !renderer->isValid())
+                return;
+            auto *flow = new SvgPipeFlowItem(start, end, renderer);
+            flow->setData(0, "hmi_pipe_flow");
+            if (segmentId >= 0)
+                flow->setData(1, segmentId);
+            scene->addItem(flow);
+        }
+
+        static bool addSvgFlowPath(QGraphicsScene *scene,
+                                   const QPainterPath &path,
+                                   QSvgRenderer *renderer,
+                                   int segmentId)
+        {
+            if (!scene || !renderer || !renderer->isValid())
+                return false;
+
+            bool added = false;
+            for (int index = 1; index < path.elementCount(); ++index)
+            {
+                const auto previous = path.elementAt(index - 1);
+                const auto current = path.elementAt(index);
+                if (current.type != QPainterPath::LineToElement)
+                    continue;
+
+                const QPointF start(previous.x, previous.y);
+                const QPointF end(current.x, current.y);
+                if (QLineF(start, end).length() <= 0.01)
+                    continue;
+
+                addSvgFlowSegment(scene, start, end, renderer, segmentId);
+                added = true;
+            }
+            return added;
+        }
+
+        class SvgPipeElbowItem : public QGraphicsItem
+        {
+        public:
+            SvgPipeElbowItem(const QPointF &corner,
+                             const QPointF &previous,
+                             const QPointF &next,
+                             QSvgRenderer *renderer,
+                             qreal pipeWidth = 12.0)
+                : m_renderer(renderer),
+                  m_scale(pipeWidth / 12.0)
+            {
+                const qreal incomingAngle = std::atan2(corner.y() - previous.y(), corner.x() - previous.x());
+                const qreal outgoingX = next.x() - corner.x();
+                const qreal outgoingY = next.y() - corner.y();
+                const qreal cross = (corner.x() - previous.x()) * outgoingY -
+                                    (corner.y() - previous.y()) * outgoingX;
+
+                setPos(corner);
+                setRotation(incomingAngle * 180.0 / M_PI);
+                setScale(m_scale);
+                if (cross < 0.0)
+                    setTransform(QTransform::fromScale(1.0, -1.0));
+                setZValue(2);
+            }
+
+            QRectF boundingRect() const override
+            {
+                return QRectF(-36.0, -36.0, 72.0, 72.0);
+            }
+
+            void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
+            {
+                if (!p || !m_renderer || !m_renderer->isValid())
+                    return;
+                m_renderer->render(p, boundingRect());
+            }
+
+        private:
+            QSvgRenderer *m_renderer;
+            qreal m_scale;
+        };
+
+        static bool isRightAngle(const QPointF &previous,
+                                 const QPointF &corner,
+                                 const QPointF &next)
+        {
+            const QPointF incoming(corner.x() - previous.x(), corner.y() - previous.y());
+            const QPointF outgoing(next.x() - corner.x(), next.y() - corner.y());
+            const qreal incomingLength = std::hypot(incoming.x(), incoming.y());
+            const qreal outgoingLength = std::hypot(outgoing.x(), outgoing.y());
+            if (incomingLength <= 0.01 || outgoingLength <= 0.01)
+                return false;
+
+            const qreal cosine = (incoming.x() * outgoing.x() + incoming.y() * outgoing.y()) /
+                                 (incomingLength * outgoingLength);
+            return qAbs(cosine) <= 0.01;
+        }
+
         /**
          * @brief 向场景添加一段默认规格的三层管道（外壁+内壁+流动层）。
          * arrowTip/arrowFrom 保留参数，当前未绘制箭头（Q_UNUSED），流动方向由动画偏移体现。
@@ -630,6 +775,67 @@ namespace WaterTest
                                         int segmentId = -1)
         {
             ensureUiTokensInitialized();
+
+            static QSvgRenderer elbowRenderer(QStringLiteral(":/hmi/pipe-elbow-close.svg"));
+            static QSvgRenderer flowRenderer(QStringLiteral(":/hmi/pipe-flow.svg"));
+            if (elbowRenderer.isValid())
+            {
+                bool hasLineSegment = false;
+                for (int index = 1; index < path.elementCount(); ++index)
+                {
+                    const auto previous = path.elementAt(index - 1);
+                    const auto current = path.elementAt(index);
+                    if (current.type != QPainterPath::LineToElement)
+                        continue;
+
+                    const QPointF start(previous.x, previous.y);
+                    const QPointF end(current.x, current.y);
+                    const qreal dx = end.x() - start.x();
+                    const qreal dy = end.y() - start.y();
+                    const qreal length = std::hypot(dx, dy);
+                    if (length <= 0.01)
+                        continue;
+
+                    const qreal startTrim = (index > 1 && length > 60.0) ? 30.0 : 0.0;
+                    const qreal endTrim = (index + 1 < path.elementCount() && length > 60.0) ? 30.0 : 0.0;
+                    const QPointF direction(dx / length, dy / length);
+                    const QPointF trimmedStart = start + direction * startTrim;
+                    const QPointF trimmedEnd = end - direction * endTrim;
+                    if (QLineF(trimmedStart, trimmedEnd).length() <= 0.01)
+                        continue;
+
+                    auto *svgPipe = new SvgPipeSegmentItem(trimmedStart, trimmedEnd);
+                    scene->addItem(svgPipe);
+                    hasLineSegment = true;
+                }
+
+                if (elbowRenderer.isValid())
+                {
+                    for (int index = 1; index + 1 < path.elementCount(); ++index)
+                    {
+                        const auto previous = path.elementAt(index - 1);
+                        const auto current = path.elementAt(index);
+                        const auto next = path.elementAt(index + 1);
+                        if (current.type == QPainterPath::LineToElement &&
+                            next.type == QPainterPath::LineToElement &&
+                            isRightAngle(QPointF(previous.x, previous.y),
+                                         QPointF(current.x, current.y),
+                                         QPointF(next.x, next.y)))
+                        {
+                            scene->addItem(new SvgPipeElbowItem(QPointF(current.x, current.y),
+                                                                QPointF(previous.x, previous.y),
+                                                                QPointF(next.x, next.y),
+                                                                &elbowRenderer));
+                        }
+                    }
+                }
+
+                if (hasLineSegment)
+                {
+                    addSvgFlowPath(scene, path, &flowRenderer, segmentId);
+                    return;
+                }
+            }
 
             GuiGlyph::addDynamicPipeToScene(scene,
                                             path,
@@ -662,6 +868,67 @@ namespace WaterTest
         {
             ensureUiTokensInitialized();
 
+            static QSvgRenderer elbowRenderer(QStringLiteral(":/hmi/pipe-elbow-close.svg"));
+            static QSvgRenderer flowRenderer(QStringLiteral(":/hmi/pipe-flow.svg"));
+            if (elbowRenderer.isValid())
+            {
+                bool hasLineSegment = false;
+                for (int index = 1; index < path.elementCount(); ++index)
+                {
+                    const auto previous = path.elementAt(index - 1);
+                    const auto current = path.elementAt(index);
+                    if (current.type != QPainterPath::LineToElement)
+                        continue;
+
+                    const QPointF start(previous.x, previous.y);
+                    const QPointF end(current.x, current.y);
+                    const qreal dx = end.x() - start.x();
+                    const qreal dy = end.y() - start.y();
+                    const qreal length = std::hypot(dx, dy);
+                    if (length <= 0.01)
+                        continue;
+
+                    const qreal startTrim = (index > 1 && length > 60.0) ? 30.0 : 0.0;
+                    const qreal endTrim = (index + 1 < path.elementCount() && length > 60.0) ? 30.0 : 0.0;
+                    const QPointF direction(dx / length, dy / length);
+                    const QPointF trimmedStart = start + direction * startTrim;
+                    const QPointF trimmedEnd = end - direction * endTrim;
+                    if (QLineF(trimmedStart, trimmedEnd).length() <= 0.01)
+                        continue;
+
+                    scene->addItem(new SvgPipeSegmentItem(trimmedStart, trimmedEnd, outerWidth));
+                    hasLineSegment = true;
+                }
+
+                if (elbowRenderer.isValid())
+                {
+                    for (int index = 1; index + 1 < path.elementCount(); ++index)
+                    {
+                        const auto previous = path.elementAt(index - 1);
+                        const auto current = path.elementAt(index);
+                        const auto next = path.elementAt(index + 1);
+                        if (current.type == QPainterPath::LineToElement &&
+                            next.type == QPainterPath::LineToElement &&
+                            isRightAngle(QPointF(previous.x, previous.y),
+                                         QPointF(current.x, current.y),
+                                         QPointF(next.x, next.y)))
+                        {
+                            scene->addItem(new SvgPipeElbowItem(QPointF(current.x, current.y),
+                                                                QPointF(previous.x, previous.y),
+                                                                QPointF(next.x, next.y),
+                                                                &elbowRenderer,
+                                                                outerWidth));
+                        }
+                    }
+                }
+
+                if (hasLineSegment)
+                {
+                    addSvgFlowPath(scene, path, &flowRenderer, segmentId);
+                    return;
+                }
+            }
+
             GuiGlyph::addDynamicPipeToScene(scene,
                                             path,
                                             0.0,
@@ -682,6 +949,34 @@ namespace WaterTest
         // ========== Station1 的图标化拟物设备图元（与 PreparationPanel 同风格） ==========
         // 所有 Item 类均内联在匿名 namespace 中，不对外暴露。
         // 渲染逻辑委托给 GuiGlyph 命名空间下对应的 draw*Glyph 函数。
+
+        static void paintSvgSelectionFrame(QPainter *p, const QRectF &rect, bool selected)
+        {
+            if (!p || !selected)
+                return;
+            const auto theme = makeGlyphTheme();
+            p->setPen(QPen(theme.cyan, 2, Qt::DashLine));
+            p->setBrush(Qt::NoBrush);
+            p->drawRoundedRect(rect.adjusted(2.0, 2.0, -2.0, -2.0), 10.0, 10.0);
+        }
+
+        static void paintSvgNameLabel(QPainter *p, const QRectF &rect, const QString &text, const QColor &color = QColor())
+        {
+            if (!p || text.isEmpty())
+                return;
+
+            p->save();
+            p->setPen(color.isValid() ? color : QColor("#EAF7FF"));
+            QFont labelFont = p->font();
+            labelFont.setFamily("Consolas");
+            labelFont.setPointSize(8);
+            labelFont.setBold(true);
+            p->setFont(labelFont);
+            p->drawText(QRectF(rect.left() + 8.0, rect.top() + 16.0, rect.width() - 16.0, 16.0),
+                        Qt::AlignCenter,
+                        text);
+            p->restore();
+        }
 
         /**
          * @brief 蓄能器图元。
@@ -704,7 +999,17 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawAccumulatorGlyph(p, boundingRect(), m_name, isSelected(), makeGlyphTheme(), m_showReturnPort);
+                static QSvgRenderer renderer(QStringLiteral(":/hmi/accumulator.svg"));
+                if (renderer.isValid())
+                {
+                    p->save();
+                    renderer.render(p, boundingRect());
+                    paintSvgSelectionFrame(p, boundingRect(), isSelected());
+                    paintSvgNameLabel(p, boundingRect(), m_name, makeGlyphTheme().text);
+                    p->restore();
+                    return;
+                }
+                return;
             }
 
         private:
@@ -759,7 +1064,17 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawThreeWayValveGlyph(p, boundingRect(), m_name, isSelected(), makeGlyphTheme());
+                static QSvgRenderer renderer(QStringLiteral(":/hmi/three-way-valve.svg"));
+                if (renderer.isValid())
+                {
+                    p->save();
+                    renderer.render(p, boundingRect());
+                    paintSvgSelectionFrame(p, boundingRect(), isSelected());
+                    paintSvgNameLabel(p, boundingRect(), m_name, makeGlyphTheme().text);
+                    p->restore();
+                    return;
+                }
+                return;
             }
 
         private:
@@ -814,19 +1129,62 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawSensorGlyph(
-                    p,
-                    boundingRect(),
-                    m_name,
-                    m_value,
-                    m_displayDecimals,
-                    m_unit,
-                    m_typeColor,
-                    isSelected(),
-                    true,
-                    makeGlyphTheme(),
-                    m_auxText,
-                    m_auxColor);
+                static QSvgRenderer renderer(QStringLiteral(":/hmi/pressure-sensor.svg"));
+                if (!renderer.isValid())
+                {
+                    GuiGlyph::drawSensorGlyph(
+                        p,
+                        boundingRect(),
+                        m_name,
+                        m_value,
+                        m_displayDecimals,
+                        m_unit,
+                        m_typeColor,
+                        isSelected(),
+                        true,
+                        makeGlyphTheme(),
+                        m_auxText,
+                        m_auxColor);
+                    return;
+                }
+
+                p->save();
+                renderer.render(p, boundingRect());
+
+                const auto theme = makeGlyphTheme();
+                paintSvgSelectionFrame(p, boundingRect(), isSelected());
+
+                // 覆盖 SVG 中的示例文本区域，所有实时内容由 C++ 统一绘制。
+                p->setPen(Qt::NoPen);
+                p->setBrush(QColor("#0E141C"));
+                p->drawRoundedRect(QRectF(-30.0, -12.0, 60.0, 21.0), 4.0, 4.0);
+
+                p->setPen(theme.text);
+                QFont nameFont = p->font();
+                nameFont.setPointSize(8);
+                nameFont.setBold(true);
+                nameFont.setFamily("Consolas");
+                p->setFont(nameFont);
+                p->drawText(QRectF(-58.0, -43.0, 116.0, 12.0), Qt::AlignCenter,
+                            m_unit.isEmpty() ? m_name : QString("%1 (%2)").arg(m_name, m_unit));
+
+                p->setPen(QColor(245, 248, 255));
+                QFont valueFont = p->font();
+                valueFont.setPointSize(15);
+                valueFont.setBold(true);
+                p->setFont(valueFont);
+                p->drawText(QRectF(-28.0, -10.0, 56.0, 14.0), Qt::AlignCenter,
+                            QString::number(m_value, 'f', m_displayDecimals));
+
+                p->setPen(m_auxColor.isValid() ? m_auxColor : theme.cyan);
+                QFont auxFont = p->font();
+                auxFont.setPointSize(8);
+                auxFont.setBold(true);
+                auxFont.setFamily("Consolas");
+                p->setFont(auxFont);
+                p->drawText(QRectF(-28.0, 2.0, 56.0, 10.0), Qt::AlignCenter,
+                            m_auxText.isEmpty() ? QString::fromUtf8("↑ -- kPa") : m_auxText);
+                p->restore();
             }
 
         private:
@@ -898,17 +1256,65 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawFlowMeterGlyph(
-                    p,
-                    boundingRect(),
-                    m_name,
-                    m_flow,
-                    m_unit,
-                    m_hasAlarm,
-                    m_emptyPipeAlarm,
-                    m_excitationAlarm,
-                    isSelected(),
-                    makeGlyphTheme());
+                static QSvgRenderer renderer(QStringLiteral(":/hmi/flowmeter.svg"));
+                if (!renderer.isValid())
+                {
+                    GuiGlyph::drawFlowMeterGlyph(
+                        p,
+                        boundingRect(),
+                        m_name,
+                        m_flow,
+                        m_unit,
+                        m_hasAlarm,
+                        m_emptyPipeAlarm,
+                        m_excitationAlarm,
+                        isSelected(),
+                        makeGlyphTheme());
+                    return;
+                }
+
+                p->save();
+                renderer.render(p, boundingRect());
+
+                const auto theme = makeGlyphTheme();
+                const bool activeAlarm = m_hasAlarm && (m_emptyPipeAlarm != 0 || m_excitationAlarm != 0);
+                paintSvgSelectionFrame(p, boundingRect(), isSelected());
+
+                p->setPen(activeAlarm ? QColor(255, 90, 90) : theme.orange);
+                QFont valueFont = p->font();
+                valueFont.setPointSize(12);
+                valueFont.setBold(true);
+                p->setFont(valueFont);
+                p->drawText(QRectF(5, -12, 39, 13), Qt::AlignLeft | Qt::AlignVCenter,
+                            QString::number(m_flow, 'f', 2));
+
+                p->setPen(theme.textDim);
+                QFont unitFont = p->font();
+                unitFont.setPointSize(7);
+                unitFont.setBold(false);
+                p->setFont(unitFont);
+                p->drawText(QRectF(5, 0, 39, 11), Qt::AlignLeft | Qt::AlignVCenter, m_unit);
+
+                p->setPen(theme.text);
+                QFont nameFont = p->font();
+                nameFont.setPointSize(9);
+                nameFont.setBold(true);
+                p->setFont(nameFont);
+                p->drawText(QRectF(-70, 32, 140, 16), Qt::AlignCenter, m_name);
+
+                if (activeAlarm)
+                {
+                    p->setPen(Qt::NoPen);
+                    p->setBrush(QColor(255, 90, 90));
+                    p->drawEllipse(QRectF(46, -28, 8, 8));
+                    p->setPen(QColor(255, 90, 90));
+                    p->setFont(unitFont);
+                    const QString alarmText = (m_emptyPipeAlarm != 0 && m_excitationAlarm != 0)
+                                                  ? "空管/激磁报警"
+                                                  : (m_emptyPipeAlarm != 0 ? "空管报警" : "激磁报警");
+                    p->drawText(QRectF(-44, 48, 88, 12), Qt::AlignCenter, alarmText);
+                }
+                p->restore();
             }
 
         private:
@@ -989,7 +1395,17 @@ namespace WaterTest
 
             void paint(QPainter *p, const QStyleOptionGraphicsItem *, QWidget *) override
             {
-                GuiGlyph::drawLoopGlyph(p, boundingRect(), m_name, isSelected(), makeGlyphTheme());
+                static QSvgRenderer renderer(QStringLiteral(":/hmi/loop.svg"));
+                if (renderer.isValid())
+                {
+                    p->save();
+                    renderer.render(p, boundingRect());
+                    paintSvgSelectionFrame(p, boundingRect(), isSelected());
+                    paintSvgNameLabel(p, boundingRect(), m_name, makeGlyphTheme().text);
+                    p->restore();
+                    return;
+                }
+                return;
             }
 
         private:
@@ -1235,7 +1651,7 @@ namespace WaterTest
 
         m_flowTimer = new QTimer(this);
         connect(m_flowTimer, &QTimer::timeout, this, &Station1Panel::updatePipeFlowAnimation);
-        m_flowTimer->start(1000);
+        m_flowTimer->start(50);
 
         m_dataTimer = new QTimer(this);
         connect(m_dataTimer, &QTimer::timeout, this, [this]() { updateSensorValues(); });
@@ -1894,7 +2310,7 @@ namespace WaterTest
         if (m_flowTimer)
         {
             if (enabled)
-                m_flowTimer->start(1000);
+                m_flowTimer->start(50);
             else
                 m_flowTimer->stop();
         }
@@ -4958,7 +5374,7 @@ namespace WaterTest
             if (!it)
                 return;
             it->setTransformOriginPoint(it->boundingRect().center());
-            it->setScale(kDeviceItemScale);
+            it->setScale(dynamic_cast<SensorItem *>(it) ? kPressureSensorScale : kDeviceItemScale);
             it->setZValue(2);
             m_scene->addItem(it);
         };
@@ -5139,24 +5555,25 @@ namespace WaterTest
         path.lineTo(end);
         addHmiPipeWithArrow(m_scene, path, end, start, 1);
         alignSensorAnchorToPipeMid(ps3, start, end);
+
+        constexpr qreal pressureGaugeYOffset = -18.0;
+        for (SensorItem *pressureGauge : {ps3, ps4, ps5, ps6, ps7, ps8})
+        {
+            if (pressureGauge)
+                pressureGauge->setY(pressureGauge->y() + pressureGaugeYOffset);
+        }
+
         connectPorts(m_scene, v1->mapToScene(ElectricValveItem::outletPortLocal()), v2->mapToScene(ElectricValveItem::inletPortLocal()), 2);
         connectPorts(m_scene, v2->mapToScene(ElectricValveItem::outletPortLocal()), vReg->mapToScene(RegulatingValveItem::inletPortLocal()), 3);
 
-        // 管路 2：上排到下排的跨排过渡线
-        // 路径：电动调压阀出口 ->（向右预留）->（垂直下行）-> 流量计入口侧。
-        // 描述：该段负责完成上排主线到下排测试回路的“换行”连接；
-        //       走线采用“水平 -> 垂直 -> 水平”折线，确保跨排连接无斜线。
-        //       其中 +50 为预留水平过渡段长度，用于避免与设备本体过近。
+        // 管路 2：电动调压阀1出口到流量计入口的完整水平管道。
+        // 流量计在上面已经按 vReg 出口的 y 坐标对齐，因此这里不再插入中间拐点。
         {
             const QPointF start = vReg->mapToScene(RegulatingValveItem::outletPortLocal());
             const QPointF end = fm->mapToScene(flowMeterLeftPortLocal);
             QPainterPath path(start);
-            const QPointF p1(start.x() + fmTopTransitionPipeLen, start.y());
-            const QPointF p2(p1.x(), end.y());
-            path.lineTo(p1);
-            path.lineTo(p2);
             path.lineTo(end);
-            addHmiPipeWithArrow(m_scene, path, end, p2, 4);
+            addHmiPipeWithArrow(m_scene, path, end, start, 4);
         }
 
         // 管路 3：下排测试主线
@@ -5187,9 +5604,9 @@ namespace WaterTest
                                       path,
                                       end,
                                       p2,
-                                      kPipeOuterWidth + 3.0,
-                                      kPipeInnerWidth + 2.0,
-                                      kPipeFlowWidth + 1.0,
+                                      kPipeOuterWidth,
+                                      kPipeInnerWidth,
+                                      kPipeFlowWidth,
                                       5);
 
         }
@@ -5217,10 +5634,10 @@ namespace WaterTest
             if (!it || it->data(0).toString() != "hmi_pipe_flow")
                 continue;
 
-            if (auto *pathItem = dynamic_cast<QGraphicsPathItem *>(it))
+            if (auto *flowItem = dynamic_cast<SvgPipeFlowItem *>(it))
             {
-                pathItem->setVisible(true);
-                m_flowPipeItems.push_back(pathItem);
+                flowItem->setVisible(true);
+                m_flowPipeItems.push_back(flowItem);
             }
         }
 
@@ -5294,15 +5711,19 @@ namespace WaterTest
             }
         };
 
-        for (auto *pathItem : m_flowPipeItems)
+        for (auto *sceneItem : m_scene->items())
         {
-            if (!pathItem)
+            if (!sceneItem)
                 continue;
 
-            const int segmentId = pathItem->data(1).isValid() ? pathItem->data(1).toInt() : -1;
+            const QString tag = sceneItem->data(0).toString();
+            if (tag != "hmi_pipe_flow")
+                continue;
+
+            const int segmentId = sceneItem->data(1).isValid() ? sceneItem->data(1).toInt() : -1;
             const bool visible = segmentFlowVisible(segmentId);
-            if (pathItem->isVisible() != visible)
-                pathItem->setVisible(visible);
+            if (sceneItem->isVisible() != visible)
+                sceneItem->setVisible(visible);
         }
     }
 
@@ -5322,19 +5743,7 @@ namespace WaterTest
         if (m_flowPipeItems.empty())
             return;
 
-        m_flowDashOffset += 5.0;
-        if (m_flowDashOffset < -10000.0)
-            m_flowDashOffset = 0.0;
-
-        for (auto *pathItem : m_flowPipeItems)
-        {
-            if (!pathItem)
-                continue;
-
-            QPen pen = pathItem->pen();
-            pen.setDashOffset(m_flowDashOffset);
-            pathItem->setPen(pen);
-        }
+        m_scene->update();
     }
 
     /**

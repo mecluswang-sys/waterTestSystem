@@ -3,5 +3,41 @@
     <file>styles/industrial_10inch_graphite.qss</file>
     <file>styles/industrial_10inch_light.qss</file>
     <file>styles/industrial_10inch_ocean.qss</file>
+    <file alias="hmi/valve-open.svg">../PLC-HMI/VALVE-open.svg</file>
+    <file alias="hmi/valve-close.svg">../PLC-HMI/VALVE-close.svg</file>
+    <file alias="hmi/regulating-valve-open.svg">../PLC-HMI/REGULATING-VALVE-open.svg</file>
+    <file alias="hmi/regulating-valve-close.svg">../PLC-HMI/REGULATING-VALVE-close.svg</file>
+    <file alias="hmi/pump-open.svg">../PLC-HMI/BUMP-open.svg</file>
+    <file alias="hmi/pump-close.svg">../PLC-HMI/BUMP-close.svg</file>
+    <file alias="hmi/pressure-sensor.svg">../PLC-HMI/PRESSURE-SENSOR.svg</file>
+    <file alias="hmi/flowmeter.svg">../PLC-HMI/FLOWMETER.svg</file>
+    <file alias="hmi/accumulator.svg">../PLC-HMI/accumulator.svg</file>
+    <file alias="hmi/three-way-valve.svg">../PLC-HMI/three-way-valve.svg</file>
+    <file alias="hmi/loop.svg">../PLC-HMI/loop.svg</file>
+    <file alias="hmi/tank.svg">../PLC-HMI/tank.svg</file>
+    <file alias="hmi/outdoor-pool.svg">../PLC-HMI/outdoor-pool.svg</file>
+    <file alias="hmi/pipe-open.svg">../PLC-HMI/pipe-open-100.svg</file>
+    <file alias="hmi/pipe-close.svg">../PLC-HMI/pipe-close-100.svg</file>
+      <file alias="hmi/pipe-open-150.svg">../PLC-HMI/pipe-open-150.svg</file>
+      <file alias="hmi/pipe-close-150.svg">../PLC-HMI/pipe-close-150.svg</file>
+      <file alias="hmi/pipe-open-300.svg">../PLC-HMI/pipe-open-300.svg</file>
+      <file alias="hmi/pipe-close-300.svg">../PLC-HMI/pipe-close-300.svg</file>
+    <file alias="hmi/pipe-flow.svg">../PLC-HMI/pipe-flow.svg</file>
+    <file alias="hmi/pipe-open-10.svg">../PLC-HMI/pipe-open-10.svg</file>
+    <file alias="hmi/pipe-close-10.svg">../PLC-HMI/pipe-close-10.svg</file>
+    <file alias="hmi/pipe-open-20.svg">../PLC-HMI/pipe-open-20.svg</file>
+    <file alias="hmi/pipe-close-20.svg">../PLC-HMI/pipe-close-20.svg</file>
+    <file alias="hmi/pipe-open-40.svg">../PLC-HMI/pipe-open-40.svg</file>
+    <file alias="hmi/pipe-close-40.svg">../PLC-HMI/pipe-close-40.svg</file>
+    <file alias="hmi/pipe-open-60.svg">../PLC-HMI/pipe-open-60.svg</file>
+    <file alias="hmi/pipe-close-60.svg">../PLC-HMI/pipe-close-60.svg</file>
+    <file alias="hmi/pipe-open-80.svg">../PLC-HMI/pipe-open-80.svg</file>
+    <file alias="hmi/pipe-close-80.svg">../PLC-HMI/pipe-close-80.svg</file>
+    <file alias="hmi/pipe-elbow-open.svg">../PLC-HMI/pipe-elbow-open.svg</file>
+    <file alias="hmi/pipe-elbow-close.svg">../PLC-HMI/pipe-elbow-close.svg</file>
+    <file alias="hmi/pipe-tee-open.svg">../PLC-HMI/pipe-tee-open.svg</file>
+    <file alias="hmi/pipe-tee-close.svg">../PLC-HMI/pipe-tee-close.svg</file>
+    <file alias="hmi/pipe-tee-split-open.svg">../PLC-HMI/pipe-tee-split-open.svg</file>
+    <file alias="hmi/pipe-tee-split-close.svg">../PLC-HMI/pipe-tee-split-close.svg</file>
   </qresource>
 </RCC>
