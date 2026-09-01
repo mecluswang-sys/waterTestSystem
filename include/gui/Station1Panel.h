@@ -129,6 +129,7 @@ namespace WaterTest
         std::vector<QPushButton *> m_relayBtns;
         QPushButton *m_startBtn;
         QPushButton *m_stopBtn;
+        QPushButton *m_lifeTestBtn = nullptr;
 
         QGroupBox *m_stageOverviewGroup;
         std::array<QFrame *, 5> m_stageCardFrames{{nullptr, nullptr, nullptr, nullptr, nullptr}};

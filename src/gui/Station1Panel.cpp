@@ -60,6 +60,7 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPathItem>
+#include <QGraphicsProxyWidget>
 #include <QVBoxLayout>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -1563,52 +1564,6 @@ namespace WaterTest
         layout->setContentsMargins(12, 10, 12, 12);
         layout->setSpacing(8);
 
-        auto *toolbarLayout = new QHBoxLayout();
-        toolbarLayout->setContentsMargins(0, 0, 0, 0);
-        toolbarLayout->setSpacing(8);
-        toolbarLayout->addStretch();
-
-        m_startBtn = new QPushButton("开始", this);
-        m_startBtn->setMinimumHeight(34);
-        m_startBtn->setProperty("tone", "accent");
-        connect(m_startBtn, &QPushButton::clicked, this, [this]() {
-            onStartButtonClicked("ui");
-        });
-        toolbarLayout->addWidget(m_startBtn);
-
-        m_stopBtn = new QPushButton("停止", this);
-        m_stopBtn->setMinimumHeight(34);
-        m_stopBtn->setProperty("tone", "bad");
-        connect(m_stopBtn, &QPushButton::clicked, this, [this]() {
-            onStopButtonClicked("ui");
-        });
-        toolbarLayout->addWidget(m_stopBtn);
-
-        m_selfCheckBtn = new QPushButton("系统自检", this);
-        m_selfCheckBtn->setMinimumHeight(34);
-        m_selfCheckBtn->setProperty("tone", "accent");
-        connect(m_selfCheckBtn, &QPushButton::clicked, this, &Station1Panel::onSelfCheck);
-        toolbarLayout->addWidget(m_selfCheckBtn);
-
-        // 仅在工具栏追加两个批量按钮，不改变中间工艺图区域的布局。
-        auto *openAllBtn = new QPushButton("全部打开", this);
-        openAllBtn->setMinimumHeight(34);
-        openAllBtn->setProperty("tone", "accent");
-        connect(openAllBtn, &QPushButton::clicked, this, [this]() {
-            controlAllRelayValves(true, "toolbar_all_open");
-        });
-        toolbarLayout->addWidget(openAllBtn);
-
-        auto *closeAllBtn = new QPushButton("全部关闭", this);
-        closeAllBtn->setMinimumHeight(34);
-        closeAllBtn->setProperty("tone", "bad");
-        connect(closeAllBtn, &QPushButton::clicked, this, [this]() {
-            controlAllRelayValves(false, "toolbar_all_close");
-        });
-        toolbarLayout->addWidget(closeAllBtn);
-
-        layout->addLayout(toolbarLayout);
-
         m_view = new QGraphicsView(this);
         m_view->setFrameShape(QFrame::NoFrame);
         m_view->setRenderHint(QPainter::Antialiasing, true);
@@ -1619,11 +1574,11 @@ namespace WaterTest
         m_view->setTransformationAnchor(QGraphicsView::AnchorViewCenter);
         m_view->setResizeAnchor(QGraphicsView::AnchorViewCenter);
 
-        // 预留下半部分的测试阶段区：固定高度约 220px，用于展示 5 个阶段及其参数。
+        // 预留下半部分的测试阶段区：固定高度约 232px，用于展示 5 个阶段及其参数。
         // 上半部分流程图保留为主视觉，下半部分用于阶段化测试信息。
         m_stageOverviewGroup = new QGroupBox("测试阶段概览", this);
-        m_stageOverviewGroup->setMinimumHeight(208);
-        m_stageOverviewGroup->setMaximumHeight(208);
+        m_stageOverviewGroup->setMinimumHeight(232);
+        m_stageOverviewGroup->setMaximumHeight(232);
         m_stageOverviewGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         // m_stageOverviewGroup->setStyleSheet(
         //     "QGroupBox {"
@@ -2021,7 +1976,7 @@ namespace WaterTest
             QString::fromUtf8("低压内泄露"),
             QString::fromUtf8("高压泄露"),
             QString::fromUtf8("流量测试"),
-            QString::fromUtf8("高压外泄漏")
+            QString::fromUtf8("寿命测试")
         }};
 
         const std::array<std::array<QString, 3>, 5> stageRowLabels{{
@@ -2029,7 +1984,7 @@ namespace WaterTest
             std::array<QString, 3>{{QString::fromUtf8("开阀时间"), QString::fromUtf8("关阀时间"), QString::fromUtf8("压力升高")}},
             std::array<QString, 3>{{QString::fromUtf8("阶段进度"), QString::fromUtf8("PS6/PS4监控"), QString::fromUtf8("泄露判定")}},
             std::array<QString, 3>{{QString::fromUtf8("阀门预开"), QString::fromUtf8("调压阀稳定"), QString::fromUtf8("阶段结果")}},
-            std::array<QString, 3>{{QString::fromUtf8("压力升降"), QString::fromUtf8("测试次数"), QString::fromUtf8("泄露值")}}
+            std::array<QString, 3>{{QString::fromUtf8("阀门状态"), QString::fromUtf8("工作压力"), QString::fromUtf8("判定结果")}}
         }};
 
         const std::array<std::array<QString, 3>, 5> stageRowValues{{
@@ -2054,7 +2009,7 @@ namespace WaterTest
 
             auto *rowLayout = new QHBoxLayout(rowFrame);
             rowLayout->setContentsMargins(10, 0, 10, 0);
-            rowLayout->setSpacing(6);
+            rowLayout->setSpacing(8);
 
             auto *label = new QLabel(labelText, rowFrame);
             label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -2092,7 +2047,7 @@ namespace WaterTest
             card->setObjectName("stageCard");
             card->setFrameShape(QFrame::NoFrame);
             card->setFrameShadow(QFrame::Plain);
-            card->setMinimumHeight(170);
+            card->setMinimumHeight(196);
             card->setStyleSheet(
                 "QFrame#stageCard {"
                 " border: 1px solid #dbe3ea;"
@@ -2101,7 +2056,7 @@ namespace WaterTest
                 " }");
 
             auto *cardLayout = new QVBoxLayout(card);
-            cardLayout->setContentsMargins(10, 8, 10, 10);
+            cardLayout->setContentsMargins(10, 6, 10, 8);
             cardLayout->setSpacing(6);
 
             const bool isActiveStage = (i == m_activeStageIndex);
@@ -2151,6 +2106,48 @@ namespace WaterTest
                 m_stageRowLabelLabels[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.first->findChild<QLabel *>();
                 m_stageRowFrames[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.first;
                 m_stageValueLabels[static_cast<size_t>(i)][static_cast<size_t>(row)] = rowPair.second;
+            }
+
+            if (i == 4)
+            {
+                m_lifeTestBtn = new QPushButton(QString::fromUtf8("手动开启寿命实验"), card);
+                m_lifeTestBtn->setMinimumHeight(16);
+                m_lifeTestBtn->setMinimumWidth(0);
+                m_lifeTestBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                m_lifeTestBtn->setStyleSheet(
+                    "QPushButton {"
+                    " color: #17334a;"
+                    " background: #ffffff;"
+                    " border: 1px solid #9db4c8;"
+                    " border-radius: 6px;"
+                    " padding: 0 10px;"
+                    " }"
+                    "QPushButton:hover {"
+                    " background: #f5f9ff;"
+                    " }");
+                connect(m_lifeTestBtn, &QPushButton::clicked, this, [this]() {
+                    if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+                    {
+                        QMessageBox::warning(this, QString::fromUtf8("寿命实验"), QString::fromUtf8("PLC 未连接，无法执行寿命实验。请先连接 PLC。"));
+                        return;
+                    }
+                    if (m_autoSequenceRunning)
+                    {
+                        QMessageBox::information(this, QString::fromUtf8("寿命实验"), QString::fromUtf8("实验正在运行中，请等待当前寿命实验结束。"));
+                        return;
+                    }
+
+                    if (m_lifeTestBtn)
+                        m_lifeTestBtn->setEnabled(false);
+                    const bool ok = autoHighPressureExternalLeak();
+                    if (m_lifeTestBtn)
+                        m_lifeTestBtn->setEnabled(true);
+
+                    if (ok)
+                        QMessageBox::information(this, QString::fromUtf8("寿命实验"), QString::fromUtf8("寿命实验已完成，开阀成功并已记录本轮次数。"));
+                });
+
+                paramLayout->addWidget(m_lifeTestBtn);
             }
 
             paramLayout->addStretch(1);
@@ -4012,37 +4009,222 @@ namespace WaterTest
 
     bool Station1Panel::autoHighPressureExternalLeak()
     {
-        // 高压外泄漏：与高压内泄露共用流程，但后端上升阈值更严格，用于区分外泄漏。
-        const int buildWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_external_leak_build_wait_ms", 3500);
-        const int holdWaitMs = ConfigManager::getInstance().getInt("selfcheck.station1.high_pressure_external_leak_hold_ms", 3500);
-        const float minBuildKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_min_kpa", 50.0f);
-        const float p4DropMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_p4_drop_kpa", 8.0f);
-        const float p5RiseMaxKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.high_pressure_external_leak_p5_rise_kpa", 1.0f);
+        // 寿命实验流程：
+        // 1. 打开全部阀门
+        // 2. 调整调压阀到指定工作压力
+        // 3. 开关待测阀，并观察后端压力传感器变化
+        // 4. 开阀成功则累计开阀次数；开阀失败则立即暂停实验
+        setStageOverviewState(4, QString::fromUtf8("寿命测试"), QString::fromUtf8("执行中…"), true);
+
+        if (!m_deviceManager || !m_deviceManager->isPlcConnected())
+        {
+            setStageOverviewState(4, QString::fromUtf8("寿命测试"), QString::fromUtf8("失败"), false);
+            appendStageOverviewIssue(4, QString::fromUtf8("寿命实验失败：PLC 未连接，无法执行实验。"));
+            return false;
+        }
+
+        const int workPressureSettleMs = ConfigManager::getInstance().getInt("selfcheck.station1.life_test_settle_ms", 3000);
+        const float targetWorkingPressureKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.life_test_working_pressure_kpa", 140.0f);
+        const float pressureToleranceKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.life_test_pressure_tolerance_kpa", 5.0f);
+        const float valveOpenThresholdKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.life_test_open_success_delta_kpa", 8.0f);
+        const float valveCloseThresholdKpa = ConfigManager::getInstance().getFloat("selfcheck.station1.life_test_close_success_delta_kpa", 6.0f);
+        const int valveCycleMs = ConfigManager::getInstance().getInt("selfcheck.station1.life_test_valve_cycle_ms", 1000);
+        const int maxPressureAdjustAttempts = ConfigManager::getInstance().getInt("selfcheck.station1.life_test_pressure_adjust_attempts", 20);
+        const int maxOpenCycles = ConfigManager::getInstance().getInt("selfcheck.station1.life_test_max_open_cycles", 10);
+
+        auto setStage4Value = [this](int row, const QString &text) {
+            if (row < 0 || row >= 3)
+                return;
+            auto *label = m_stageValueLabels[4][static_cast<size_t>(row)];
+            if (label)
+                label->setText(text);
+        };
+
+        auto waitMs = [](int delayMs) {
+            if (delayMs <= 0)
+                return;
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < delayMs)
+            {
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
+                QThread::msleep(5);
+            }
+        };
+
+        auto readPressureByPsNumber = [this](int psNumber, double &pressureKpa) -> bool {
+            const uint16_t configuredSensorId = configuredPressureSensorId(m_panelConfig, psNumber);
+            if (configuredSensorId == 0)
+                return false;
+            const size_t fallbackIndex = static_cast<size_t>(std::max(0, psNumber - 3));
+            return readPressureValueForDisplay(configuredSensorId, fallbackIndex, pressureKpa);
+        };
+
+        bool ok = true;
+        QString failureReason;
+        int openCount = 0;
+
+        // 1）全部阀门打开
+        for (int relayIndex : {0, 1, 2, 3})
+        {
+            if (!controlRelayState(static_cast<uint8_t>(relayIndex), true, "life_test_all_open", false))
+            {
+                ok = false;
+                failureReason = QString::fromUtf8("寿命实验失败：阀门 %1 打开失败").arg(relayIndex + 1);
+                break;
+            }
+        }
+        if (ok)
+            setStage4Value(0, QString::fromUtf8("阀门全部打开"));
+
+        // 2）通过调压阀逐步调到目标工作压力
+        if (ok)
+        {
+            float currentRegPercent = 0.0f;
+            double readbackPressureKpa = 0.0;
+            for (int attempt = 0; attempt < maxPressureAdjustAttempts && ok; ++attempt)
+            {
+                if (!m_deviceManager->setValveOpeningPercent(1, currentRegPercent))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：调压阀控制失败，当前开度 %1%").arg(QString::number(currentRegPercent, 'f', 1));
+                    break;
+                }
+
+                waitMs(250);
+                if (!readPressureByPsNumber(7, readbackPressureKpa))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：读取后端压力失败，无法调节工作压力");
+                    break;
+                }
+
+                const double pressureError = targetWorkingPressureKpa - readbackPressureKpa;
+                setStage4Value(1, QString::fromUtf8("调压阀 %1%，当前压力 %2 kPa / 目标 %3 kPa")
+                                      .arg(QString::number(currentRegPercent, 'f', 1))
+                                      .arg(QString::number(readbackPressureKpa, 'f', 1))
+                                      .arg(QString::number(targetWorkingPressureKpa, 'f', 1)));
+
+                if (qAbs(pressureError) <= pressureToleranceKpa)
+                {
+                    break;
+                }
+
+                currentRegPercent += static_cast<float>(pressureError / 12.0);
+                currentRegPercent = std::clamp(currentRegPercent, 0.0f, 100.0f);
+            }
+
+            if (ok)
+            {
+                waitMs(workPressureSettleMs);
+                if (!readPressureByPsNumber(7, readbackPressureKpa))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：工作压力稳定阶段读取 PS7 失败");
+                }
+                else
+                {
+                    setStage4Value(1, QString::fromUtf8("工作压力 %1 kPa").arg(QString::number(readbackPressureKpa, 'f', 1)));
+                }
+            }
+        }
+
+        // 3）循环开关待测阀，开阀成功计数，失败立即暂停实验
+        if (ok)
+        {
+            double ps7Before = 0.0;
+            if (!readPressureByPsNumber(7, ps7Before))
+            {
+                ok = false;
+                failureReason = QString::fromUtf8("寿命实验失败：读取 PS7 初始压力失败");
+            }
+
+            while (ok && openCount < maxOpenCycles)
+            {
+                // 打开待测阀
+                if (!controlRelayState(2, true, "life_test_open", false))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：待测阀开启失败，实验暂停");
+                    break;
+                }
+
+                waitMs(valveCycleMs);
+                double ps7AfterOpen = 0.0;
+                if (!readPressureByPsNumber(7, ps7AfterOpen))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：读取 PS7 开阀后压力失败");
+                    break;
+                }
+
+                const double deltaOpen = ps7AfterOpen - ps7Before;
+                if (deltaOpen < valveOpenThresholdKpa)
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：开阀判定失败，PS7 变化 %1 kPa，小于阈值 %2 kPa")
+                                        .arg(QString::number(deltaOpen, 'f', 1))
+                                        .arg(QString::number(valveOpenThresholdKpa, 'f', 1));
+                    break;
+                }
+
+                ++openCount;
+                setStage4Value(2, QString::fromUtf8("开阀成功，当前次数 %1").arg(openCount));
+
+                // 关闭待测阀
+                if (!controlRelayState(2, false, "life_test_close", false))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：待测阀关闭失败");
+                    break;
+                }
+
+                waitMs(valveCycleMs);
+                double ps7AfterClose = 0.0;
+                if (!readPressureByPsNumber(7, ps7AfterClose))
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：读取 PS7 关阀后压力失败");
+                    break;
+                }
+
+                const double deltaClose = ps7AfterOpen - ps7AfterClose;
+                if (deltaClose < valveCloseThresholdKpa)
+                {
+                    ok = false;
+                    failureReason = QString::fromUtf8("寿命实验失败：关阀判定失败，PS7 变化 %1 kPa，小于阈值 %2 kPa")
+                                        .arg(QString::number(deltaClose, 'f', 1))
+                                        .arg(QString::number(valveCloseThresholdKpa, 'f', 1));
+                    break;
+                }
+
+                setStage4Value(2, QString::fromUtf8("开阀成功，计数 %1，关阀成功").arg(openCount));
+            }
+
+            if (ok && openCount >= maxOpenCycles)
+            {
+                setStage4Value(2, QString::fromUtf8("寿命实验完成，累计开阀次数 %1").arg(openCount));
+            }
+        }
 
         setStageOverviewState(4,
-                              QString::fromUtf8("高压外泄漏"),
-                              QString::fromUtf8("执行中… 建压等待 %1 ms，保压 %2 ms，目标 %3 kPa")
-                                  .arg(buildWaitMs)
-                                  .arg(holdWaitMs)
-                                  .arg(QString::number(minBuildKpa, 'f', 1)),
-                              true);
-        const bool ok = runStation1AutoLeakTest(m_deviceManager.get(),
-                                       m_stationClient.get(),
-                                       {QString::fromUtf8("高压外泄漏"),
-                                        buildWaitMs,
-                                        holdWaitMs,
-                                        minBuildKpa,
-                                        p4DropMaxKpa,
-                                        p5RiseMaxKpa,
-                                        true,
-                                        6,
-                                        7});
-        setStageOverviewState(4, QString::fromUtf8("高压外泄漏"), ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"), ok);
+                              QString::fromUtf8("寿命测试"),
+                              ok ? QString::fromUtf8("完成") : QString::fromUtf8("失败"),
+                              ok);
+
         if (!ok)
+        {
             appendStageOverviewIssue(4,
-                                     QString::fromUtf8("高压外泄漏判定失败，请检查 PS6/PS7 压力变化，阈值：PS6 降幅 %1 kPa，PS7 升幅 %2 kPa")
-                                         .arg(QString::number(p4DropMaxKpa, 'f', 1))
-                                         .arg(QString::number(p5RiseMaxKpa, 'f', 1)));
+                                     failureReason.isEmpty()
+                                         ? QString::fromUtf8("寿命实验失败：请检查阀门状态、调压阀和后端压力传感器。")
+                                         : QString::fromUtf8("寿命实验失败：%1").arg(failureReason));
+        }
+        else
+        {
+            appendStageOverviewIssue(4,
+                                     QString::fromUtf8("本轮寿命实验已完成，累计开阀次数：%1").arg(openCount));
+        }
+
         return ok;
     }
 
@@ -5145,11 +5327,12 @@ namespace WaterTest
                 return;
             }
 
-            const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 4> actions{{
+            const std::array<std::pair<const char *, bool (Station1Panel::*)()>, 5> actions{{
                 {"开阀测试", &Station1Panel::autoLowPressureOpenValve},
                 {"低压内泄漏", &Station1Panel::autoLowPressureInternalLeakStage},
                 {"高压泄露", &Station1Panel::autoHighPressureLeakStage},
                 {"流量测试", &Station1Panel::autoFlowTestStage},
+                {"寿命测试", &Station1Panel::autoHighPressureExternalLeak},
             }};
 
             m_autoSequenceRunning = true;
@@ -5157,6 +5340,8 @@ namespace WaterTest
                 m_startBtn->setEnabled(false);
             if (m_stopBtn)
                 m_stopBtn->setEnabled(false);
+            if (m_lifeTestBtn)
+                m_lifeTestBtn->setEnabled(false);
 
             for (int i = 0; i < static_cast<int>(actions.size()); ++i)
             {
@@ -5190,6 +5375,8 @@ namespace WaterTest
                 m_startBtn->setEnabled(true);
             if (m_stopBtn)
                 m_stopBtn->setEnabled(true);
+            if (m_lifeTestBtn)
+                m_lifeTestBtn->setEnabled(true);
             m_autoSequenceRunning = false;
 
             // 不弹窗阻塞，直接显示结果在阶段概览中，避免事件循环重入导致崩溃
@@ -5639,6 +5826,51 @@ namespace WaterTest
                 flowItem->setVisible(true);
                 m_flowPipeItems.push_back(flowItem);
             }
+        }
+
+        // 将上方按钮嵌入到流程图中，作为一个小型控制面板挂在场景内。
+        if (m_scene)
+        {
+            auto *controlPanel = new QWidget();
+            controlPanel->setAttribute(Qt::WA_TranslucentBackground, true);
+            auto *controlLayout = new QHBoxLayout(controlPanel);
+            controlLayout->setContentsMargins(6, 2, 6, 2);
+            controlLayout->setSpacing(4);
+
+            auto makeControlButton = [controlPanel](const QString &text, const char *tone) {
+                auto *btn = new QPushButton(text, controlPanel);
+                btn->setMinimumHeight(24);
+                btn->setProperty("tone", tone);
+                btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+                return btn;
+            };
+
+            m_startBtn = makeControlButton(QString::fromUtf8("开始"), "accent");
+            connect(m_startBtn, &QPushButton::clicked, this, [this]() { onStartButtonClicked("ui"); });
+            controlLayout->addWidget(m_startBtn);
+
+            m_stopBtn = makeControlButton(QString::fromUtf8("停止"), "bad");
+            connect(m_stopBtn, &QPushButton::clicked, this, [this]() { onStopButtonClicked("ui"); });
+            controlLayout->addWidget(m_stopBtn);
+
+            m_selfCheckBtn = makeControlButton(QString::fromUtf8("系统自检"), "accent");
+            connect(m_selfCheckBtn, &QPushButton::clicked, this, &Station1Panel::onSelfCheck);
+            controlLayout->addWidget(m_selfCheckBtn);
+
+            auto *openAllBtn = makeControlButton(QString::fromUtf8("全部打开"), "accent");
+            connect(openAllBtn, &QPushButton::clicked, this, [this]() { controlAllRelayValves(true, "scene_all_open"); });
+            controlLayout->addWidget(openAllBtn);
+
+            auto *closeAllBtn = makeControlButton(QString::fromUtf8("全部关闭"), "bad");
+            connect(closeAllBtn, &QPushButton::clicked, this, [this]() { controlAllRelayValves(false, "scene_all_close"); });
+            controlLayout->addWidget(closeAllBtn);
+
+            auto *proxy = m_scene->addWidget(controlPanel);
+            proxy->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+            const QRectF sceneBounds = m_scene->sceneRect();
+            const QSize panelSize = controlPanel->sizeHint();
+            proxy->setPos(sceneBounds.right() - panelSize.width() - 12, 12);
+            proxy->setZValue(10);
         }
 
         // 让 fitInView 在控件完成布局（viewport 有真实尺寸）后执行
