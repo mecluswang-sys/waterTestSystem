@@ -34,12 +34,11 @@
  *   data(4) = int      继电器 index，将电磁阀图元与继电器状态联动
  *   data(6) = int      调压阀 ID，RegulatingValveItem 专用匹配键
  *
- * M100 Merker 写保护机制
- * ----------------------
- * 1号台前4路电磁阀映射到 PLC M100.0~M100.3，写操作有 700 ms 防抖锁（m_lastM100ToggleMs）
- * 和"预期保持"回读校验（m_expectM100Hold），防止 PLC 联锁复位逻辑导致误报弹窗。
+ * BaseCtrl 写保护机制
+ * ------------------
+ * 1号台前4路电磁阀写入 PLC BaseCtrl，写操作有 700 ms 防抖锁（m_lastM100ToggleMs）
+ * 和"预期保持"回读校验（m_expectM100Hold），用于识别 PLC 侧仲裁覆盖。
  */
-
 #include "gui/Station1Panel.h"
 #include "gui/ContainerGlyphRenderer.h"
 #include "gui/HmiGlyphTheme.h"
@@ -61,6 +60,7 @@
 #include <QGraphicsScene>
 #include <QGraphicsPathItem>
 #include <QGraphicsProxyWidget>
+#include <QGraphicsTextItem>
 #include <QVBoxLayout>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -123,13 +123,13 @@ namespace WaterTest
             QString type;
         };
 
-        /** @brief 判断 relay index 是否映射到 M100.0~M100.3（Merker 位）。 */
+        /** @brief 判断 relay index 是否使用 BaseCtrl 阀门控制路径。 */
         static bool isM100RelayIndex(uint8_t index)
         {
             return index <= 3;
         }
 
-        /** @brief 判断 relay index 是否映射到 M100.4。 */
+        /** @brief 判断 relay index 是否映射到 BaseCtrl 的 V5。 */
         static bool relayUsesM100_4(uint8_t index)
         {
             return index == 5;
@@ -143,11 +143,11 @@ namespace WaterTest
 
         // Station1 工作台 1（DN25）DQ 输出匹配表：仅保留 5 个电磁阀。
         static const std::array<RelayDef, 5> kStation1Relays{{
-            {0, "电磁阀1", "M100.0", "valve"},
-            {1, "电磁阀2", "M100.1", "valve"},
-            {2, "电磁阀3", "M100.2", "valve"},
-            {3, "电磁阀4", "M100.3", "valve"},
-            {5, "电磁阀5", "M100.4", "valve"},
+            {0, "电磁阀1", "BaseCtrl.V1", "valve"},
+            {1, "电磁阀2", "BaseCtrl.V2", "valve"},
+            {2, "电磁阀3", "BaseCtrl.V3", "valve"},
+            {3, "电磁阀4", "BaseCtrl.V4", "valve"},
+            {5, "电磁阀5", "BaseCtrl.V5", "valve"},
         }};
 
         /** @brief 返回 1 号操作台的继电器通道列表。 */
@@ -2678,7 +2678,11 @@ namespace WaterTest
                 }
             }
 
-            QTimer::singleShot(250, this, [this]() { updateRelayButtons(); });
+            // 单阀走 M 区时，PLC 需一个扫描周期将 M 位映射到 FinalOut；
+            // 延迟刷新避免立刻读到旧的 DB 状态导致界面闪回。
+            const bool merkerWrite = QString::fromStdString(ConfigManager::getInstance()
+                .getString("selfcheck.plc.base_ctrl.write_source", "merker")).toUpper() == "MERKER";
+            QTimer::singleShot(merkerWrite ? 900 : 250, this, [this]() { updateRelayButtons(); });
         }
 
         return true;
@@ -2767,83 +2771,39 @@ namespace WaterTest
 
     void Station1Panel::controlAllRelayValves(bool open, const char *source)
     {
-        struct BatchStep
+        const bool useRemote = (m_stationClient && m_stationClient->isConnected());
+        bool ok = false;
+        if (useRemote)
         {
-            enum class Kind
-            {
-                Relay,
-                RegulatingValve
-            };
+            ControlCommand cmd;
+            cmd.command_type = 8;
+            cmd.action = open ? 1 : 0;
+            ok = m_stationClient->sendCommand(cmd);
+        }
+        else if (m_deviceManager)
+        {
+            ok = m_deviceManager->triggerStation1BatchValves(open);
+        }
 
-            Kind kind;
-            uint16_t id;
-            QString name;
-        };
+        qInfo() << "[BatchValves][Station1Panel] request"
+                << "src=" << source
+                << "open=" << open
+                << "useRemote=" << useRemote
+                << "ok=" << ok;
+        if (!ok)
+        {
+            QMessageBox::warning(this,
+                                 "操作失败",
+                                 open ? "全部打开请求未发送，请检查 PLC 或主控机连接。"
+                                      : "全部关闭请求未发送，请检查 PLC 或主控机连接。");
+            return;
+        }
 
-        const std::vector<BatchStep> openSteps = {
-            {BatchStep::Kind::Relay, 0, QString::fromUtf8("电磁阀1")},
-            {BatchStep::Kind::Relay, 1, QString::fromUtf8("电磁阀2")},
-            {BatchStep::Kind::RegulatingValve, 1, QString::fromUtf8("电动调压阀1")},
-            {BatchStep::Kind::Relay, 2, QString::fromUtf8("待测电磁阀")},
-            {BatchStep::Kind::Relay, 3, QString::fromUtf8("电磁阀4")},
-            {BatchStep::Kind::RegulatingValve, 2, QString::fromUtf8("电动调压阀2")},
-            {BatchStep::Kind::Relay, 5, QString::fromUtf8("电磁阀5")},
-        };
-
-        std::vector<BatchStep> steps = open ? openSteps : std::vector<BatchStep>(openSteps.rbegin(), openSteps.rend());
-
-        auto state = std::make_shared<std::pair<size_t, bool>>(0, false);
-        auto runner = std::make_shared<std::function<void()>>();
-        *runner = [this, state, runner, steps = std::move(steps), open, source]() mutable {
-            if (state->first >= steps.size())
-            {
-                updateRelayButtons(true);
-                updateSensorValues(true);
-                if (state->second)
-                {
-                    QMessageBox::warning(this,
-                                         "操作失败",
-                                         open ? "部分阀门未能全部打开，请检查 PLC / 连接状态。"
-                                              : "部分阀门未能全部关闭，请检查 PLC / 连接状态。");
-                }
-                return;
-            }
-
-            const BatchStep &step = steps[state->first];
-            bool ok = false;
-            if (step.kind == BatchStep::Kind::Relay)
-            {
-                ok = controlRelayState(static_cast<uint8_t>(step.id), open, source, false);
-            }
-            else
-            {
-                ok = controlRegulatingValveState(step.id, open, source, false);
-            }
-
-            state->second = state->second || !ok;
-            ++state->first;
-
-            if (state->first < steps.size())
-            {
-                QTimer::singleShot(800, this, [runner]() { (*runner)(); });
-            }
-            else
-            {
-                updateRelayButtons(true);
-                updateSensorValues(true);
-                if (state->second)
-                {
-                    QMessageBox::warning(this,
-                                         "操作失败",
-                                         open ? "部分阀门未能全部打开，请检查 PLC / 连接状态。"
-                                              : "部分阀门未能全部关闭，请检查 PLC / 连接状态。");
-                }
-            }
-        };
-
-        (*runner)();
+        QTimer::singleShot(250, this, [this]() {
+            updateRelayButtons(true);
+            updateSensorValues(true);
+        });
     }
-
     namespace
     {
         struct AutoLeakTestConfig
@@ -5183,7 +5143,7 @@ namespace WaterTest
             if (!ok)
                 continue; // PLC 未连接时跳过，不改变显示
 
-            // 若 M100.0 ~ M100.3 在置位后短时间内被拉回 false，给出可视化提示。
+            // 若 BaseCtrl V1~V4 在置位后短时间内被拉回 false，提示 PLC 仲裁覆盖。
             if (isM100RelayIndex(relays[i].index) && m_expectM100Hold[relays[i].index])
             {
                 const qint64 elapsed = nowMs - m_expectM100SetMs[relays[i].index];
@@ -5193,15 +5153,16 @@ namespace WaterTest
                 }
                 else if (elapsed >= 200 && elapsed <= 3000)
                 {
-                    qWarning() << "[M100][Station1Panel] auto reset detected after set true"
+                    qWarning() << "[BaseCtrl][Station1Panel] command reset detected after set true"
                                << "index=" << relays[i].index
                                << "elapsedMs=" << elapsed;
-                    QMessageBox::information(this,
-                                             QString("%1 被自动复位").arg(relays[i].addr),
-                                             QString("已写入 %1=1，但很快回读到 0。\n")
-                                                 .arg(relays[i].addr) +
-                                                 QString("这通常表示 PLC 程序中有复位逻辑（如联锁条件不满足或 R 线圈）。"));
+                    // QMessageBox 会运行嵌套事件循环；先清标志，避免定时器重入后重复弹窗。
                     m_expectM100Hold[relays[i].index] = false;
+                    QMessageBox::information(this,
+                                             QString("%1 被 PLC 覆盖").arg(relays[i].addr),
+                                             QString("已写入 %1=1，但很快从 DB_WTS_BaseCtrl 回读到 0。\n")
+                                                 .arg(relays[i].addr) +
+                                                 QString("请核对 DB13.DBX0.%1 的实际块号/偏移，以及 PLC 中是否有其他网络覆盖 BaseCtrl。").arg(relays[i].index));
                 }
                 else if (elapsed > 3000)
                 {
@@ -5440,6 +5401,7 @@ namespace WaterTest
         m_pressureSensorItems.fill(nullptr);
         m_valveItems.fill(nullptr);
         m_regulatingValveItems.fill(nullptr);
+        m_regulatingValveOpeningTexts.fill(nullptr);
         m_flowMeterItem = nullptr;
 
         const auto relayGlyphMap = relayGlyphMapForStation(m_panelConfig.stationNumber);
@@ -5682,6 +5644,27 @@ namespace WaterTest
         v5->setFlag(QGraphicsItem::ItemIsSelectable, false);
         m_valveItems[5] = v5;
 
+        // 在调压阀上方叠加独立的 C++ 开度文本框（仅显示，不响应点击）。
+        auto makeRegValveOpeningText = [this](uint16_t regId, const QPointF &pos) {
+            if (regId >= m_regulatingValveOpeningTexts.size())
+                return;
+            auto *text = m_scene->addText(QString::fromUtf8("开度 --%"));
+            QFont font = text->font();
+            font.setPointSize(10);
+            font.setBold(true);
+            font.setFamily("Consolas");
+            text->setFont(font);
+            text->setDefaultTextColor(QColor(245, 248, 255));
+            text->setZValue(50);
+            text->setAcceptedMouseButtons(Qt::NoButton);
+            text->setAcceptHoverEvents(false);
+            text->setFlag(QGraphicsItem::ItemIsSelectable, false);
+            text->setPos(pos.x() - 36.0, pos.y() - 118.0);
+            m_regulatingValveOpeningTexts[regId] = text;
+        };
+        makeRegValveOpeningText(topRegValveId, QPointF(xVReg, yRow1 + row1AfterAccumulatorYOffset));
+        makeRegValveOpeningText(bottomRegValveId, QPointF(xVBackReg, yRow2 + row2AfterFlowMeterYOffset));
+
         auto alignSensorAnchorToPipeMid = [&](SensorItem *sensor, const QPointF &pipeStart, const QPointF &pipeEnd)
         {
             if (!sensor)
@@ -5906,7 +5889,7 @@ namespace WaterTest
 
         auto regulatingValveOpen = [&](uint16_t regId) -> bool {
             const auto rv = m_deviceManager->getRegulatingValve(regId);
-            return rv.openingPercent > 0.1f;
+            return rv.openingSetpoint > 0.1f;
         };
 
         const bool v1Open = relayOpen(0);
@@ -6030,14 +6013,20 @@ namespace WaterTest
             }
         };
 
-        auto updateRegulatingValveById = [&](uint16_t regId, double openingPercent) {
+        auto updateRegulatingValveById = [&](uint16_t regId, double openingSetpoint) {
             if (regId >= m_regulatingValveItems.size())
                 return;
             auto *valveItem = dynamic_cast<RegulatingValveItem *>(m_regulatingValveItems[regId]);
             if (!valveItem)
                 return;
-            valveItem->setOpen(openingPercent > 0.1);
-            valveItem->setDegree(openingPercent);
+            const double clampedSetpoint = qBound(0.0, openingSetpoint, 100.0);
+            valveItem->setOpen(clampedSetpoint > 0.1);
+            valveItem->setDegree(clampedSetpoint);
+            if (regId < m_regulatingValveOpeningTexts.size() && m_regulatingValveOpeningTexts[regId])
+            {
+                m_regulatingValveOpeningTexts[regId]->setPlainText(
+                    QString::fromUtf8("开度 %1%").arg(QString::number(clampedSetpoint, 'f', 1)));
+            }
         };
 
         auto updateFlowMeterItem = [&](double flowRate, const QString &unit, bool hasAlarm, int emptyPipeAlarm, int excitationAlarm) {
@@ -6079,9 +6068,9 @@ namespace WaterTest
             if (m_deviceManager)
             {
                 const auto topRv = m_deviceManager->getRegulatingValve(1);
-                updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));
+                updateRegulatingValveById(1, static_cast<double>(topRv.openingSetpoint));
                 const auto bottomRv = m_deviceManager->getRegulatingValve(2);
-                updateRegulatingValveById(2, qBound(0.0, static_cast<double>(bottomRv.openingPercent), 100.0));
+                updateRegulatingValveById(2, static_cast<double>(bottomRv.openingSetpoint));
             }
 
             updatePipeFlowVisibility();
@@ -6117,9 +6106,9 @@ namespace WaterTest
         }
 
         const auto topRv = m_deviceManager->getRegulatingValve(1);
-        updateRegulatingValveById(1, qBound(0.0, static_cast<double>(topRv.openingPercent), 100.0));
+        updateRegulatingValveById(1, static_cast<double>(topRv.openingSetpoint));
         const auto bottomRv = m_deviceManager->getRegulatingValve(2);
-        updateRegulatingValveById(2, qBound(0.0, static_cast<double>(bottomRv.openingPercent), 100.0));
+        updateRegulatingValveById(2, static_cast<double>(bottomRv.openingSetpoint));
 
         updatePipeFlowVisibility();
 

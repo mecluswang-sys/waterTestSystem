@@ -838,6 +838,8 @@ namespace WaterTest
                 valveCount = 8;
 
             m_regulatingValves.clear();
+            m_valveAoDbNumber.clear();
+            m_valveAoDbByteOffset.clear();
             m_valveAoMerkerByteOffset.clear();
             m_valveAiMerkerByteOffset.clear();
 
@@ -850,8 +852,24 @@ namespace WaterTest
                 regValve.name = "调节阀" + std::to_string(i);
                 m_regulatingValves[i] = regValve;
 
+                const std::string aoSource = toUpperAscii(trimAscii(cfg.getString(pfx + "ao.source", "merker_real")));
+                if (aoSource == "DB")
+                {
+                    m_valveAoDbNumber[i] = cfg.getInt(pfx + "ao.db_number",
+                                                       cfg.getInt("db.sensor.kpa.db_number", 1));
+                    m_valveAoDbByteOffset[i] = cfg.getInt(pfx + "ao.db.byte_offset", -1);
+                }
                 m_valveAoMerkerByteOffset[i] = cfg.getInt(pfx + "ao.merker_real.byte_offset", -1);
                 m_valveAiMerkerByteOffset[i] = cfg.getInt(pfx + "ai.merker_real.byte_offset", -1);
+
+                // ai.source=db 时从 DB_Sensor（db.sensor.kpa.db_number）按 REAL 读取反馈开度，
+                // 例如 valve.1.ai.db.byte_offset = 660（DBD660）。
+                const std::string aiSource = toUpperAscii(trimAscii(cfg.getString(pfx + "ai.source", "merker_real")));
+                if (aiSource == "DB")
+                {
+                    m_valveAiDbByteOffset[i] = cfg.getInt(pfx + "ai.db.byte_offset", -1);
+                }
+                m_valveClosedBitByteOffset[i] = cfg.getInt(pfx + "closed.byte_offset", -1);
             }
         }
         return true;
@@ -1149,6 +1167,59 @@ namespace WaterTest
         return writePlcSelfCheckCmdBit("selfcheck.plc.cmd.reset", true);
     }
 
+    bool DeviceManager::triggerStation1BatchValves(bool open)
+    {
+        if (!m_plcClient || !m_plcClient->isConnected())
+        {
+            qWarning() << "[BatchValves][DeviceManager] trigger failed: plc not connected"
+                       << "open=" << open;
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const int dbNumber = cfg.getInt("station1.batch.plc.db", 14);
+        const std::string keyPrefix = open ? "station1.batch.plc.cmd.open_all"
+                                           : "station1.batch.plc.cmd.close_all";
+        const auto address = loadPlcBitAddress(cfg, keyPrefix, 0, open ? 0 : 1);
+        if (!address.isValid())
+        {
+            qWarning() << "[BatchValves][DeviceManager] invalid command address"
+                       << "open=" << open
+                       << "db=" << dbNumber
+                       << "byteOffset=" << address.byteOffset
+                       << "bitOffset=" << address.bitOffset;
+            return false;
+        }
+
+        // Clear first so a previous interrupted command cannot hide the rising edge.
+        if (!writePlcBoolField(*m_plcClient, dbNumber, address, false))
+        {
+            qWarning() << "[BatchValves][DeviceManager] pre-clear failed"
+                       << "open=" << open
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            return false;
+        }
+        if (!writePlcBoolField(*m_plcClient, dbNumber, address, true))
+        {
+            qWarning() << "[BatchValves][DeviceManager] set-true failed"
+                       << "open=" << open
+                       << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+            return false;
+        }
+
+        const int pulseMs = std::max(20, cfg.getInt("station1.batch.plc.cmd.pulse_ms", 100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(pulseMs));
+        const bool ok = writePlcBoolField(*m_plcClient, dbNumber, address, false);
+        qInfo() << "[BatchValves][DeviceManager] trigger result"
+                << "open=" << open
+                << "db=" << dbNumber
+                << "byteOffset=" << address.byteOffset
+                << "bitOffset=" << address.bitOffset
+                << "pulseMs=" << pulseMs
+                << "ok=" << ok;
+        return ok;
+    }
+
     PlcSelfCheckStatus DeviceManager::getPlcSelfCheckStatus() const
     {
         std::lock_guard<std::mutex> lock(m_dataMutex);
@@ -1319,6 +1390,23 @@ namespace WaterTest
     {
         if (!m_plcClient || !m_plcClient->isConnected())
         {
+            return false;
+        }
+
+        if (id == 0 || id > 2 || !std::isfinite(frequency))
+        {
+            return false;
+        }
+
+        auto &cfg = ConfigManager::getInstance();
+        const std::string prefix = "pump." + std::to_string(id) + ".vfd.";
+        const float minFrequency = cfg.getFloat(prefix + "min_frequency_hz", 0.0f);
+        const float maxFrequency = cfg.getFloat(prefix + "max_frequency_hz", 50.0f);
+        if (minFrequency < 0.0f || maxFrequency < minFrequency ||
+            frequency < minFrequency || frequency > maxFrequency)
+        {
+            qWarning() << "[Pump] frequency rejected" << id << frequency
+                       << "allowed=" << minFrequency << "to" << maxFrequency << "Hz";
             return false;
         }
 
@@ -1689,21 +1777,37 @@ namespace WaterTest
         }
 
         const float clamped = std::max(0.0f, std::min(100.0f, percent));
-        auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
-        if (aoMkIt == m_valveAoMerkerByteOffset.end() || aoMkIt->second < 0)
-        {
-            qWarning() << "[Valve][DeviceManager] setValveOpeningPercent failed: missing AO merker mapping"
-                       << "id=" << id;
-            return false;
-        }
+        const auto aoDbOffsetIt = m_valveAoDbByteOffset.find(id);
+        const auto aoDbNumberIt = m_valveAoDbNumber.find(id);
+        const bool useDbCommand = aoDbOffsetIt != m_valveAoDbByteOffset.end() &&
+                                  aoDbNumberIt != m_valveAoDbNumber.end() &&
+                                  aoDbOffsetIt->second >= 0 && aoDbNumberIt->second > 0;
 
-        const S7PLCClient::Result res = m_plcClient->writeMerkerReal(aoMkIt->second, clamped);
+        S7PLCClient::Result res = S7PLCClient::Result::INVALID_PARAMS;
+        S7PLCClient::Result readRes = S7PLCClient::Result::INVALID_PARAMS;
+        float readback = 0.0f;
+        if (useDbCommand)
+        {
+            res = m_plcClient->writeReal(aoDbNumberIt->second, aoDbOffsetIt->second, clamped);
+            if (res == S7PLCClient::Result::SUCCESS)
+                readRes = m_plcClient->readReal(aoDbNumberIt->second, aoDbOffsetIt->second, readback);
+        }
+        else
+        {
+            const auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
+            if (aoMkIt == m_valveAoMerkerByteOffset.end() || aoMkIt->second < 0)
+            {
+                qWarning() << "[Valve][DeviceManager] setValveOpeningPercent failed: missing AO command mapping"
+                           << "id=" << id;
+                return false;
+            }
+            res = m_plcClient->writeMerkerReal(aoMkIt->second, clamped);
+            if (res == S7PLCClient::Result::SUCCESS)
+                readRes = m_plcClient->readMerkerReal(aoMkIt->second, readback);
+        }
 
         if (res == S7PLCClient::Result::SUCCESS)
         {
-            float readback = 0.0f;
-            const S7PLCClient::Result readRes = m_plcClient->readMerkerReal(aoMkIt->second, readback);
-
             std::lock_guard<std::mutex> lock(m_dataMutex);
             auto it = m_regulatingValves.find(id);
             if (it != m_regulatingValves.end())
@@ -1718,7 +1822,9 @@ namespace WaterTest
             qInfo() << "[Valve][DeviceManager] setValveOpeningPercent"
                     << "id=" << id
                     << "targetPercent=" << clamped
-                    << "aoMerkerByteOffset=" << aoMkIt->second
+                    << "commandSource=" << (useDbCommand ? "DB" : "MERKER")
+                    << "commandDb=" << (useDbCommand ? aoDbNumberIt->second : -1)
+                    << "commandByteOffset=" << (useDbCommand ? aoDbOffsetIt->second : m_valveAoMerkerByteOffset.at(id))
                     << "writeResult=" << static_cast<int>(res)
                     << "readbackResult=" << static_cast<int>(readRes)
                     << "readbackPercent=" << readback;
@@ -1728,7 +1834,9 @@ namespace WaterTest
         qWarning() << "[Valve][DeviceManager] setValveOpeningPercent write failed"
                    << "id=" << id
                    << "targetPercent=" << clamped
-                   << "aoMerkerByteOffset=" << aoMkIt->second
+                   << "commandSource=" << (useDbCommand ? "DB" : "MERKER")
+                   << "commandDb=" << (useDbCommand ? aoDbNumberIt->second : -1)
+                   << "commandByteOffset=" << (useDbCommand ? aoDbOffsetIt->second : m_valveAoMerkerByteOffset.at(id))
                    << "result=" << static_cast<int>(res)
                    << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
         return false;
@@ -1770,9 +1878,9 @@ namespace WaterTest
 
         auto &cfg = ConfigManager::getInstance();
 
-        // 特殊映射：
+        // Station1 单阀控制写入 BaseCtrl；自检空闲时 PLC 将该命令透传到 FinalOut。
         // - index=0~3 -> selfcheck.plc.base_ctrl.v1~v4
-        // - index=5   -> 过渡期双写：selfcheck.plc.base_ctrl.v5 + M100.4
+        // - index=5   -> selfcheck.plc.base_ctrl.v5
         if (index <= 3 || index == 5)
         {
             const std::array<std::pair<const char *, int>, 5> relayKeys{{
@@ -1787,16 +1895,19 @@ namespace WaterTest
             const size_t relayIdx = (index == 5) ? 4U : static_cast<size_t>(index);
             const auto &relayKey = relayKeys.at(relayIdx);
             const auto address = loadPlcBitAddress(cfg, relayKey.first, 0, relayKey.second);
-            const bool dbOk = writePlcBoolField(*m_plcClient, dbNumber, address, on);
-            if (dbOk)
+            const bool ok = writePlcBoolField(*m_plcClient, dbNumber, address, on);
+            if (ok)
             {
+                bool readBack = false;
+                const bool readBackOk = readPlcBoolField(*m_plcClient, dbNumber, address, readBack);
                 qInfo() << "[BaseCtrl][DeviceManager] setRelay base-control path"
                         << "index=" << index
                         << "db=" << dbNumber
                         << "byteOff=" << address.byteOffset
                         << "bit=" << address.bitOffset
-                        << "on=" << on
-                        << "result=" << dbOk;
+                    << "requested=" << on
+                    << "readBackOk=" << readBackOk
+                    << "readBack=" << readBack;
             }
             else
             {
@@ -1806,35 +1917,9 @@ namespace WaterTest
                            << "byteOff=" << address.byteOffset
                            << "bit=" << address.bitOffset
                            << "on=" << on
-                           << "result=" << dbOk
                            << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
             }
-
-            if (index == 5)
-            {
-                auto mRes = m_plcClient->writeMerkerBool(100, 4, on);
-                const bool mOk = (mRes == S7PLCClient::Result::SUCCESS);
-                if (!mOk)
-                {
-                    qWarning() << "[M100][DeviceManager] setRelay legacy M100.4 fallback write failed"
-                               << "index=" << index
-                               << "addr=M100.4"
-                               << "on=" << on
-                               << "result=" << static_cast<int>(mRes)
-                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
-                }
-                else
-                {
-                    qInfo() << "[M100][DeviceManager] setRelay legacy M100.4 fallback write ok"
-                            << "index=" << index
-                            << "addr=M100.4"
-                            << "on=" << on;
-                }
-
-                return dbOk || mOk;
-            }
-
-            return dbOk;
+            return ok;
         }
 
         // 其余 index 支持 Q0.1-Q1.7（index 1-15）：byteOffset = index/8，bit = index%8
@@ -1895,40 +1980,6 @@ namespace WaterTest
             const auto address = loadPlcBitAddress(cfg, relayKey.first, 0, relayKey.second);
             bool value = false;
             const bool dbOk = readPlcBoolField(*m_plcClient, dbNumber, address, value);
-            if (index == 5)
-            {
-                bool mValue = false;
-                auto mRes = m_plcClient->readMerkerBool(100, 4, mValue);
-                if (mRes == S7PLCClient::Result::SUCCESS)
-                {
-                    on = mValue;
-                    qInfo() << "[M100][DeviceManager] getRelayState legacy M100.4 path"
-                            << "index=" << index
-                            << "addr=M100.4"
-                            << "on=" << on;
-                    return true;
-                }
-
-                if (dbOk)
-                {
-                    on = value;
-                    qInfo() << "[BaseCtrl][DeviceManager] getRelayState base-control fallback path"
-                            << "index=" << index
-                            << "db=" << dbNumber
-                            << "byteOff=" << address.byteOffset
-                            << "bit=" << address.bitOffset
-                            << "on=" << on;
-                    return true;
-                }
-
-                qWarning() << "[M100][DeviceManager] getRelayState index=5 read failed on both paths"
-                           << "db=" << dbNumber
-                           << "dbByteOff=" << address.byteOffset
-                           << "dbBit=" << address.bitOffset
-                           << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
-                return false;
-            }
-
             if (dbOk)
             {
                 on = value;
@@ -2772,6 +2823,7 @@ namespace WaterTest
     {
         if (!m_plcClient)
             return false;
+        auto &cfg = ConfigManager::getInstance();
         std::lock_guard<std::mutex> lock(m_dataMutex);
 
         for (auto &pair : m_regulatingValves)
@@ -2780,8 +2832,32 @@ namespace WaterTest
             RegulatingValve &valve = pair.second;
             bool anyReadSuccess = false;
 
+            const auto aoDbNumberIt = m_valveAoDbNumber.find(id);
+            const auto aoDbOffsetIt = m_valveAoDbByteOffset.find(id);
+            const bool useDbAo = aoDbNumberIt != m_valveAoDbNumber.end() &&
+                                 aoDbOffsetIt != m_valveAoDbByteOffset.end() &&
+                                 aoDbNumberIt->second > 0 && aoDbOffsetIt->second >= 0;
             auto aoMkIt = m_valveAoMerkerByteOffset.find(id);
-            if (aoMkIt != m_valveAoMerkerByteOffset.end() && aoMkIt->second >= 0)
+            if (useDbAo)
+            {
+                float openingSetpoint = 0.0f;
+                const auto aoRes = m_plcClient->readReal(aoDbNumberIt->second, aoDbOffsetIt->second, openingSetpoint);
+                if (aoRes == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.openingSetpoint = std::max(0.0f, std::min(100.0f, openingSetpoint));
+                    anyReadSuccess = true;
+                }
+                else
+                {
+                    qWarning() << "[Valve][DeviceManager] readRegulatingValves AO(db) read failed"
+                               << "id=" << id
+                               << "db=" << aoDbNumberIt->second
+                               << "byteOffset=" << aoDbOffsetIt->second
+                               << "result=" << static_cast<int>(aoRes)
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                }
+            }
+            else if (aoMkIt != m_valveAoMerkerByteOffset.end() && aoMkIt->second >= 0)
             {
                 float openingSetpoint = 0.0f;
                 const auto aoRes = m_plcClient->readMerkerReal(aoMkIt->second, openingSetpoint);
@@ -2800,9 +2876,37 @@ namespace WaterTest
                 }
             }
 
-            // 最小化路径：反馈值来自 AI 对应的 MD 映射。
+            // 最小化路径：反馈值优先按 ai.source=db 从 DB_Sensor 读取 REAL。
             auto aiMkIt = m_valveAiMerkerByteOffset.find(id);
-            if (aiMkIt != m_valveAiMerkerByteOffset.end() && aiMkIt->second >= 0)
+            auto aiDbIt = m_valveAiDbByteOffset.find(id);
+            const bool useDbAi =
+                (aiDbIt != m_valveAiDbByteOffset.end() && aiDbIt->second >= 0);
+            if (useDbAi)
+            {
+                const int dbNumber = cfg.getInt("db.sensor.kpa.db_number", 1);
+                float openingPercent = 0.0f;
+                const auto aiRes = m_plcClient->readReal(dbNumber, aiDbIt->second, openingPercent);
+                if (aiRes == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.openingPercent = std::max(0.0f, std::min(100.0f, openingPercent));
+                    anyReadSuccess = true;
+                    qInfo() << "[Valve][DeviceManager] readRegulatingValves AI(db)"
+                            << "id=" << id
+                            << "db=" << dbNumber
+                            << "byteOffset=" << aiDbIt->second
+                            << "rawReal=" << openingPercent;
+                }
+                else
+                {
+                    qWarning() << "[Valve][DeviceManager] readRegulatingValves AI(db) read failed"
+                               << "id=" << id
+                               << "db=" << dbNumber
+                               << "byteOffset=" << aiDbIt->second
+                               << "result=" << static_cast<int>(aiRes)
+                               << "lastError=" << QString::fromStdString(m_plcClient->getLastError());
+                }
+            }
+            else if (aiMkIt != m_valveAiMerkerByteOffset.end() && aiMkIt->second >= 0)
             {
                 float openingPercent = 0.0f;
                 const auto aiRes = m_plcClient->readMerkerReal(aiMkIt->second, openingPercent);
@@ -2823,6 +2927,18 @@ namespace WaterTest
 
             valve.deviceStatus = anyReadSuccess ? DeviceStatus::ONLINE : DeviceStatus::OFFLINE;
 
+            // 读取 PLC 状态位（如 DB1.DBX664.0/674.0）。当前 PLC 程序中 true 表示反馈开度 >= 1%。
+            auto closedIt = m_valveClosedBitByteOffset.find(id);
+            if (closedIt != m_valveClosedBitByteOffset.end() && closedIt->second >= 0)
+            {
+                const int dbNumber = cfg.getInt("db.sensor.kpa.db_number", 1);
+                bool closed = true;
+                if (m_plcClient->readBool(dbNumber, closedIt->second, 0, closed) == S7PLCClient::Result::SUCCESS)
+                {
+                    valve.closedFlag = closed;
+                }
+            }
+
             if (valve.openingPercent > 1.0f)
                 valve.status = ValveStatus::OPENING;
             else
@@ -2836,6 +2952,9 @@ namespace WaterTest
                     << "openingPercent=" << valve.openingPercent
                     << "deviceStatus=" << static_cast<int>(valve.deviceStatus)
                     << "status=" << static_cast<int>(valve.status)
+                    << "aoSource=" << (useDbAo ? "DB" : "MERKER")
+                    << "aoDb=" << (useDbAo ? aoDbNumberIt->second : -1)
+                    << "aoDbByteOffset=" << (useDbAo ? aoDbOffsetIt->second : -1)
                     << "aoMerkerByteOffset=" << ((aoMkIt != m_valveAoMerkerByteOffset.end()) ? aoMkIt->second : -1)
                     << "aiMerkerByteOffset=" << ((aiMkIt != m_valveAiMerkerByteOffset.end()) ? aiMkIt->second : -1);
         }

@@ -321,6 +321,13 @@ namespace WaterTest
         bool resetPlcSelfCheck();
 
         /**
+         * @brief 触发 PLC 侧站1全部打开或全部关闭流程（脉冲）
+         * @param open true=全部打开，false=全部关闭
+         * @return 是否成功写入完整触发脉冲
+         */
+        bool triggerStation1BatchValves(bool open);
+
+        /**
          * @brief 获取最近一次读取到的 PLC 自检状态
          * @return 自检状态快照
          */
@@ -413,9 +420,13 @@ namespace WaterTest
         std::map<uint16_t, TemperatureSensor> m_tempSensors;
         std::map<uint16_t, RegulatingValve> m_regulatingValves;
 
-        // 电动调压阀最小化配置：仅保留开度命令 MD 和开度反馈 MD。
+        // 电动调压阀命令支持 DB REAL 或 MD REAL，反馈可来自 DB 或 MD。
+        std::map<uint16_t, int>  m_valveAoDbNumber;           // id -> 命令 DB 块号
+        std::map<uint16_t, int>  m_valveAoDbByteOffset;       // id -> 命令 DBD 偏移
         std::map<uint16_t, int>  m_valveAoMerkerByteOffset;   // id -> MD 偏移（命令）
         std::map<uint16_t, int>  m_valveAiMerkerByteOffset;   // id -> MD 偏移（反馈）
+        std::map<uint16_t, int>  m_valveAiDbByteOffset;      // id -> DB 字节偏移（反馈，ai.source=db 时使用）
+        std::map<uint16_t, int>  m_valveClosedBitByteOffset; // id -> 关闭位字节偏移（DB_Sensor，如 DBX664.0）
 
         SystemStatus m_systemStatus;
         std::vector<AlarmInfo> m_alarms;

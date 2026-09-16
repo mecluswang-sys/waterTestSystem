@@ -125,11 +125,13 @@ namespace WaterTest
         std::string name;          // Name
         float openingSetpoint;     // Commanded opening degree (0-100%)
         float openingPercent;      // Actual opening feedback (0-100%)
+        bool closedFlag;           // PLC 状态位：当前逻辑中 true 表示反馈开度 >= 1%（阀门已开启）
         ValveStatus status;        // Valve status
         DeviceStatus deviceStatus; // Device status
         std::chrono::system_clock::time_point timestamp;
 
         RegulatingValve() : id(0), openingSetpoint(0.0f), openingPercent(0.0f),
+                            closedFlag(true),
                             status(ValveStatus::CLOSED),
                             deviceStatus(DeviceStatus::OFFLINE) {}
     };
