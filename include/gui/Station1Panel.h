@@ -20,6 +20,7 @@ class QPushButton;
 class QFrame;
 class QColor;
 class QGraphicsItem;
+class QGraphicsTextItem;
 
 class QGraphicsView;
 class QGraphicsScene;
@@ -119,6 +120,7 @@ namespace WaterTest
         std::array<QGraphicsItem *, 16> m_pressureSensorItems{};
         std::array<QGraphicsItem *, 16> m_valveItems{};
         std::array<QGraphicsItem *, 3> m_regulatingValveItems{};
+        std::array<QGraphicsTextItem *, 3> m_regulatingValveOpeningTexts{};
         QGraphicsItem *m_flowMeterItem = nullptr;
         std::array<bool, 16> m_valveGlyphCacheInitialized{{false}};
         std::array<bool, 16> m_valveGlyphDisplayedOpen{{false}};

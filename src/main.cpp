@@ -264,6 +264,12 @@ int main(int argc, char *argv[])
                                          break;
                                      }
                                      break;
+                                 case 7:
+                                     ok = deviceManager->setPumpFrequency(static_cast<uint16_t>(cmd.index) + 1, cmd.value1);
+                                     break;
+                                 case 8:
+                                     ok = deviceManager->triggerStation1BatchValves(cmd.action != 0);
+                                     break;
                                  default:
                                      break;
                                  }

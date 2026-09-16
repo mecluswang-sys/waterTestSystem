@@ -8,10 +8,6 @@
   <path d="M -13 -36 H 13 M 0 -49 V -23" fill="none" stroke="#7A9DB5" stroke-width="1" opacity="0.65"/>
   <circle cx="0" cy="-36" r="3" fill="#8AA0B5"/>
   <line x1="0" y1="-18" x2="0" y2="0" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="-31" y1="-17" x2="0" y2="0" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="-31" y1="17" x2="0" y2="0" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="-31" y1="-17" x2="-31" y2="17" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="31" y1="-17" x2="0" y2="0" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="31" y1="17" x2="0" y2="0" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
-  <line x1="31" y1="-17" x2="31" y2="17" stroke="#4B5F73" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="0,0 -31,-17 -31,17" fill="#4B5F73" stroke="#0E1622" stroke-width="1.5" stroke-linejoin="round"/>
+  <polygon points="0,0 31,-17 31,17" fill="#4B5F73" stroke="#0E1622" stroke-width="1.5" stroke-linejoin="round"/>
 </svg>

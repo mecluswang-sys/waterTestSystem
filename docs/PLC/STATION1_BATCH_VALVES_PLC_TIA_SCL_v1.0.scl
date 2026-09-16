@@ -1,0 +1,201 @@
+(************************************************************)
+(* WaterTestSystem - Station1 "全部打开/全部关闭" 批量阀门包 *)
+(* Version : v1.0                                             *)
+(* Date    : 2026-09-09                                       *)
+(* Purpose : TIA Portal import template                       *)
+(*                                                             *)
+(* 设计目标：                                                 *)
+(* - 把"全部打开/全部关闭"的顺序执行逻辑从上位机 C++ 移到 PLC，*)
+(*   上位机与 HMI 只写 DB14 的请求脉冲位，不再自行分步下发。   *)
+(* - 顺序与既有 C++ 实现保持一致：                             *)
+(*   打开顺序：V1 -> V2 -> RV1(100%) -> VT -> V4 -> RV2(100%) *)
+(*             -> V5，每步间隔 800ms。                        *)
+(*   关闭顺序：反向执行（V5 -> RV2(0%) -> V4 -> VT -> RV1(0%) *)
+(*             -> V2 -> V1）。                                *)
+(* - V1/V2/VT(待测电磁阀)/V4 对应既有 DB13.DBX0.0~0.3；        *)
+(*   V5 对应既有 DB13.DBX0.4 并按现场约定双写 M100.4；         *)
+(*   RV1/RV2 给定对应既有 MD26 / MD36（0.0..100.0 百分比）。   *)
+(*   以上既有点位命名以现场工程实际符号为准，本文件不重复声明。*)
+(*                                                             *)
+(* 对应上位机映射：config/system.conf 中 station1.batch.plc.* *)
+(************************************************************)
+
+TYPE "UDT_WTS_ST1_BatchValves_Cmd"
+VERSION : 0.1
+   STRUCT
+      OpenAll  : BOOL;   // 上升沿触发"全部打开"（HMI/PC 均可置位后清零）
+      CloseAll : BOOL;   // 上升沿触发"全部关闭"
+      Abort    : BOOL;   // 上升沿中止当前批量流程
+   END_STRUCT;
+END_TYPE
+
+
+TYPE "UDT_WTS_ST1_BatchValves_Status"
+VERSION : 0.1
+   STRUCT
+      Busy      : BOOL;  // 批量流程运行中
+      Done      : BOOL;  // 上一次批量流程正常完成（保持1个扫描周期）
+      Failed    : BOOL;  // 上一次批量流程被中止/失败（保持1个扫描周期）
+      Direction : INT;   // 0=无, 1=正在/最近一次为全部打开, 2=全部关闭
+      Step      : INT;   // 当前/最近一次步骤序号 0..6
+   END_STRUCT;
+END_TYPE
+
+
+DATA_BLOCK "DB14_WTS_ST1_BatchValves"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+   VAR
+      Cmd    : "UDT_WTS_ST1_BatchValves_Cmd";
+      Status : "UDT_WTS_ST1_BatchValves_Status";
+   END_VAR
+BEGIN
+END_DATA_BLOCK
+
+
+FUNCTION_BLOCK "FB_ST1_BatchAllValves"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      SelfCheckBusy : BOOL;  // 接入既有自检 Busy 状态，自检运行期间拒绝新批量请求
+   END_VAR
+   VAR_IN_OUT
+      Db : "DB14_WTS_ST1_BatchValves";
+   END_VAR
+   VAR_OUTPUT
+      // 以下仅在 Db.Status.Busy = TRUE 的扫描周期内有效；
+      // 调用方应仅在 Busy = TRUE 时才把这些值写入实际输出点位，
+      // Busy = FALSE 时保留手动/自检逻辑原有的输出，不要用本 FB 覆盖。
+      V1          : BOOL;  // 电磁阀1 请求 -> DB13.DBX0.0
+      V2          : BOOL;  // 电磁阀2 请求 -> DB13.DBX0.1
+      VT          : BOOL;  // 待测电磁阀请求 -> DB13.DBX0.2
+      V4          : BOOL;  // 电磁阀4 请求 -> DB13.DBX0.3
+      V5          : BOOL;  // 电磁阀5 请求 -> DB13.DBX0.4（及 M100.4 双写）
+      RV1Setpoint : REAL;  // 电动调压阀1 给定百分比 -> MD26
+      RV2Setpoint : REAL;  // 电动调压阀2 给定百分比 -> MD36
+   END_VAR
+   VAR
+      EdgeOpen    : R_TRIG;
+      EdgeClose   : R_TRIG;
+      EdgeAbort   : R_TRIG;
+      T_StepDelay : TON;
+      RunState    : INT := 0; // 0=Idle, 1=Running, 2=Done, 3=Failed
+      Dir         : INT := 0; // 1=Open, 2=Close
+   END_VAR
+   VAR_TEMP
+      ActionIdx   : INT;
+      TargetOpen  : BOOL;
+   END_VAR
+BEGIN
+   EdgeOpen(CLK := Db.Cmd.OpenAll);
+   EdgeClose(CLK := Db.Cmd.CloseAll);
+   EdgeAbort(CLK := Db.Cmd.Abort);
+
+   // 仅在空闲且自检未运行时接受新的批量请求
+   IF (EdgeOpen.Q OR EdgeClose.Q) AND RunState = 0 AND NOT SelfCheckBusy THEN
+      IF EdgeClose.Q THEN
+         Dir := 2;
+      ELSE
+         Dir := 1;
+      END_IF;
+      Db.Status.Step := 0;
+      T_StepDelay(IN := FALSE, PT := T#800ms);
+      RunState := 1;
+   END_IF;
+
+   IF EdgeAbort.Q AND RunState = 1 THEN
+      RunState := 3;
+   END_IF;
+
+   CASE RunState OF
+      1: // 运行中：按 800ms 间隔逐步执行 7 个动作
+         Db.Status.Busy      := TRUE;
+         Db.Status.Done      := FALSE;
+         Db.Status.Failed    := FALSE;
+         Db.Status.Direction := Dir;
+
+         ActionIdx := Db.Status.Step;
+         IF Dir = 2 THEN
+            ActionIdx := 6 - Db.Status.Step; // 关闭时反向执行同一组动作
+         END_IF;
+         TargetOpen := (Dir = 1);
+
+         CASE ActionIdx OF
+            0: V1 := TargetOpen;
+            1: V2 := TargetOpen;
+            2:
+               IF TargetOpen THEN
+                  RV1Setpoint := 100.0;
+               ELSE
+                  RV1Setpoint := 0.0;
+               END_IF;
+            3: VT := TargetOpen;
+            4: V4 := TargetOpen;
+            5:
+               IF TargetOpen THEN
+                  RV2Setpoint := 100.0;
+               ELSE
+                  RV2Setpoint := 0.0;
+               END_IF;
+            6: V5 := TargetOpen;
+         END_CASE;
+
+         T_StepDelay(IN := TRUE, PT := T#800ms);
+         IF T_StepDelay.Q THEN
+            T_StepDelay(IN := FALSE, PT := T#800ms);
+            IF Db.Status.Step >= 6 THEN
+               RunState := 2;
+            ELSE
+               Db.Status.Step := Db.Status.Step + 1;
+            END_IF;
+         END_IF;
+
+      2: // 正常完成：保持1个周期的 Done 脉冲后回到空闲
+         Db.Status.Busy   := FALSE;
+         Db.Status.Done   := TRUE;
+         Db.Status.Failed := FALSE;
+         RunState := 0;
+
+      3: // 中止/失败：保持1个周期的 Failed 脉冲后回到空闲
+         Db.Status.Busy   := FALSE;
+         Db.Status.Done   := FALSE;
+         Db.Status.Failed := TRUE;
+         RunState := 0;
+
+      ELSE // 0 = 空闲
+         Db.Status.Busy := FALSE;
+   END_CASE;
+END_FUNCTION_BLOCK
+
+
+(************************************************************)
+(* 在 OB1（或主循环 FB）中的调用示例                          *)
+(*                                                            *)
+(* "FB_ST1_BatchAllValves_DB"(                                *)
+(*    SelfCheckBusy := "DB6_ST1_SelfCheck".Status.Busy,       *) (* 按实际自检状态DB/符号调整 *)
+(*    Db            := "DB14_WTS_ST1_BatchValves",            *)
+(*    V1            => #tmpV1,                                *)
+(*    V2            => #tmpV2,                                *)
+(*    VT            => #tmpVT,                                *)
+(*    V4            => #tmpV4,                                *)
+(*    V5            => #tmpV5,                                *)
+(*    RV1Setpoint   => #tmpRV1,                                *)
+(*    RV2Setpoint   => #tmpRV2);                               *)
+(*                                                            *)
+(* IF "DB14_WTS_ST1_BatchValves".Status.Busy THEN              *)
+(*    "DB13_ST1_BaseCtrl".DBX0.0 := #tmpV1;   (* 电磁阀1 *)   *)
+(*    "DB13_ST1_BaseCtrl".DBX0.1 := #tmpV2;   (* 电磁阀2 *)   *)
+(*    "DB13_ST1_BaseCtrl".DBX0.2 := #tmpVT;   (* 待测电磁阀 *) *)
+(*    "DB13_ST1_BaseCtrl".DBX0.3 := #tmpV4;   (* 电磁阀4 *)   *)
+(*    "DB13_ST1_BaseCtrl".DBX0.4 := #tmpV5;   (* 电磁阀5 *)   *)
+(*    %M100.4                    := #tmpV5;   (* 兼容既有双写点位 *) *)
+(*    %MD26                      := #tmpRV1;  (* 调压阀1给定 *) *)
+(*    %MD36                      := #tmpRV2;  (* 调压阀2给定 *) *)
+(* END_IF;                                                     *)
+(* (* Busy = FALSE 时不要执行上面的赋值，保留手动/自检逻辑原有输出。*) *)
+(*                                                            *)
+(* HMI 侧只需在按钮事件中对                                    *)
+(* "DB14_WTS_ST1_BatchValves".Cmd.OpenAll /                    *)
+(* "DB14_WTS_ST1_BatchValves".Cmd.CloseAll 置位后立即复位      *)
+(* （100ms 脉冲），即可与 PC 共用同一套 PLC 批量执行逻辑。      *)
+(************************************************************)

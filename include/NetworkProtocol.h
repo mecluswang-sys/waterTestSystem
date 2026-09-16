@@ -89,7 +89,7 @@ namespace WaterTest
      */
     struct ControlCommand
     {
-        uint8_t command_type = 0; // 0: Relay, 1: Pump, 2: Valve, 3: E3634A output, 4: E3634A setpoint, 5: Regulating valve setpoint, 6: PLC self-check control
+        uint8_t command_type = 0; // 0: Relay, 1: Pump, 2: Valve, 3: E3634A output, 4: E3634A setpoint, 5: Regulating valve setpoint, 6: PLC self-check control, 7: Pump frequency setpoint, 8: Station1 batch valves
         uint8_t index = 0;        // Device index
         uint8_t action = 0;       // 0: Off, 1: On
         uint8_t reserved = 0;     // Reserved for future use

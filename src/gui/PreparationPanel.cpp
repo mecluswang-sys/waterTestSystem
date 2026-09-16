@@ -1872,20 +1872,60 @@ namespace WaterTest
 
             if (devType == "pump")
             {
-                bool isRunning = false;
+                FrequencyPump pump;
                 if (m_deviceManager)
                 {
-                    const auto pump = m_deviceManager->getPump(static_cast<uint16_t>(devId));
-                    isRunning = pump.isRunning;
+                    pump = m_deviceManager->getPump(static_cast<uint16_t>(devId));
                 }
                 QDialog dialog(this);
-                dialog.setWindowTitle("泵控制");
+                const bool isP1DeltaVfd = devId == 1;
+                const QString model = isP1DeltaVfd
+                                          ? QString::fromStdString(ConfigManager::getInstance().getString("pump.1.vfd.model", "VFD370CP43B-21"))
+                                          : QString();
+                dialog.setWindowTitle(isP1DeltaVfd ? "P1 台达变频泵控制" : "泵控制");
                 dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
                 auto *mainLayout = new QVBoxLayout(&dialog);
                 mainLayout->addWidget(new QLabel(QString("P%1 当前状态: %2")
                                                      .arg(devId)
-                                                     .arg(isRunning ? "运行" : "停止"),
+                                                     .arg(pump.status == DeviceStatus::FAULT ? "故障" : (pump.isRunning ? "运行" : "停止")),
                                                  &dialog));
+                if (isP1DeltaVfd)
+                {
+                    const auto &cfg = ConfigManager::getInstance();
+                    const double minHz = cfg.getFloat("pump.1.vfd.min_frequency_hz", 0.0f);
+                    const double maxHz = cfg.getFloat("pump.1.vfd.max_frequency_hz", 50.0f);
+                    mainLayout->addWidget(new QLabel(QString("型号: %1 | 反馈: %2 Hz")
+                                                         .arg(model)
+                                                         .arg(pump.frequency, 0, 'f', 1),
+                                                     &dialog));
+                    auto *frequencySpin = new QDoubleSpinBox(&dialog);
+                    frequencySpin->setRange(minHz, maxHz);
+                    frequencySpin->setDecimals(1);
+                    frequencySpin->setSingleStep(0.1);
+                    frequencySpin->setSuffix(" Hz");
+                    frequencySpin->setValue(std::clamp(static_cast<double>(pump.frequency), minHz, maxHz));
+                    mainLayout->addWidget(frequencySpin);
+                    auto *applyFrequencyBtn = new QPushButton("设定频率", &dialog);
+                    mainLayout->addWidget(applyFrequencyBtn);
+                    connect(applyFrequencyBtn, &QPushButton::clicked, &dialog, [this, devId, frequencySpin]() {
+                        bool ok = false;
+                        const bool strictMode = ConfigManager::getInstance().getBool("station.strict_remote_mode", true);
+                        if (m_stationClient && strictMode)
+                        {
+                            ControlCommand cmd;
+                            cmd.command_type = 7;
+                            cmd.index = static_cast<uint8_t>(devId - 1);
+                            cmd.value1 = static_cast<float>(frequencySpin->value());
+                            ok = m_stationClient->sendCommand(cmd);
+                        }
+                        else if (m_deviceManager)
+                        {
+                            ok = m_deviceManager->setPumpFrequency(static_cast<uint16_t>(devId), static_cast<float>(frequencySpin->value()));
+                        }
+                        if (!ok)
+                            QMessageBox::warning(this, "P1 变频器", "频率设定失败，请检查台达变频器通讯、故障状态与频率限制。");
+                    });
+                }
                 auto *btnRow = new QHBoxLayout();
                 auto *startBtn = new QPushButton("启动", &dialog);
                 auto *stopBtn = new QPushButton("停止", &dialog);
@@ -3212,11 +3252,17 @@ namespace WaterTest
         bool ok = true;
         if (m_stationClient && strictRemoteMode)
         {
+            ControlCommand frequencyCmd;
+            frequencyCmd.command_type = 7;
+            frequencyCmd.index = 0;
+            frequencyCmd.value1 = m_pumpFrequency;
+            ok = m_stationClient->sendCommand(frequencyCmd);
+
             ControlCommand pumpCmd;
             pumpCmd.command_type = 1;
             pumpCmd.index = 0;
             pumpCmd.action = 1;
-            ok = m_stationClient->sendCommand(pumpCmd);
+            ok = ok && m_stationClient->sendCommand(pumpCmd);
 
             ControlCommand valveCmd;
             valveCmd.command_type = 2;
@@ -3226,13 +3272,14 @@ namespace WaterTest
         }
         else
         {
-            ok = m_deviceManager->controlPump(1, true);
+            // 台达 VFD370CP43B-21 要在运行命令前确认频率给定已写入，避免沿用旧给定值启动。
+            ok = m_deviceManager->setPumpFrequency(1, m_pumpFrequency);
             if (ok)
             {
-                if (!m_deviceManager->setPumpFrequency(1, m_pumpFrequency))
-                {
-                    QMessageBox::warning(this, "警告", "设置泵频率失败");
-                }
+                ok = m_deviceManager->controlPump(1, true);
+            }
+            if (ok)
+            {
                 ok = m_deviceManager->controlValve(1, true);
                 if (!ok)
                 {
