@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<DownloadTask xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ProjectInfo ProjectId="7720dbb3-3b45-4241-8752-0f07cfdd9b98" ESProjectName="电磁阀测试1" ESDeviceName="HMI_RT_1" RtProjectFolderName="电磁阀测试1.HMI_1[MTP1000 Unified Basic]" RtProjectName="电磁阀测试1.HMI_1[MTP1000 Unified Basic]" DeviceType="MTP1000 Unified Basic" DeviceVersion="20.0.0.0" CreationTime="08/18/2026 14:43:16" RuntimeAddonFolderName="UBP_4_12" FirmwareFileName="" RuntimeFileName="" PRCV="6.0.0.1" RTCV="18.0.0.3" RTReleaseNo="20.0.0.0" ImageReleaseNo="20.0.0.0" />
+  <FullDownload type="ADMINDATA">UMCData.json</FullDownload>
+  <FullDownload>User.pbb</FullDownload>
+  <FullDownload>{894AD6A7-6155-424B-AA9D-7E77FD174D24}.zip</FullDownload>
+  <FullDownload>{9BA2ACF0-39B3-465B-8E10-28301ED605C5}.zip</FullDownload>
+  <FullDownload>config\config.level</FullDownload>
+  <FullDownload>device\devicesettings.pbb</FullDownload>
+  <FullDownload>device\runtime.pbb</FullDownload>
+  <FullDownload>fonts\msyh0.ttf</FullDownload>
+  <FullDownload>fonts\msyh0.woff2</FullDownload>
+  <FullDownload>fonts\SISAN03.ttf</FullDownload>
+  <FullDownload>fonts\SISAN03.woff2</FullDownload>
+  <FullDownload>fonts\times.ttf</FullDownload>
+  <FullDownload>fonts\times.woff2</FullDownload>
+  <FullDownload>general\cds.rdf</FullDownload>
+  <FullDownload>general\ChromIdentification.rdf</FullDownload>
+  <FullDownload>general\config_AlertClass.rdf</FullDownload>
+  <FullDownload>general\config_AlertHandler.rdf</FullDownload>
+  <FullDownload>general\config_DistributionInfo.rdf</FullDownload>
+  <FullDownload>general\config_DpValue.rdf</FullDownload>
+  <FullDownload>general\config_HmiRuntime.rdf</FullDownload>
+  <FullDownload>general\config_InitialValue.rdf</FullDownload>
+  <FullDownload>general\config_LicenseCounter.rdf</FullDownload>
+  <FullDownload>general\config_PeripheralAddress.rdf</FullDownload>
+  <FullDownload>general\config_SecureConnAttributes.rdf</FullDownload>
+  <FullDownload>general\config_Smoothing.rdf</FullDownload>
+  <FullDownload>general\dpIdentification.rdf</FullDownload>
+  <FullDownload>general\fontLocatorList.rdf</FullDownload>
+  <FullDownload>general\main.rdf</FullDownload>
+  <FullDownload>general\ProcessDiagnosticsDnnData.rdf</FullDownload>
+  <FullDownload>general\style_143.rdf</FullDownload>
+  <FullDownload>general\style_243.rdf</FullDownload>
+  <FullDownload>general\style_46.rdf</FullDownload>
+  <FullDownload>general\SystemDiagnosticsDnnData.rdf</FullDownload>
+  <FullDownload>general\textLibrary_142_2052.rdf</FullDownload>
+  <FullDownload>general\textLibrary_2_2052.rdf</FullDownload>
+  <FullDownload>general\textListLibrary.rdf</FullDownload>
+  <FullDownload>graphics\imageLibrary_2052.rdf</FullDownload>
+  <FullDownload>screens\screen_250.rdf</FullDownload>
+  <FullDownload>screenwindowlayouts\screenWindowLayout_252.rdf</FullDownload>
+  <FullDownload>system\ES2RTID.rdf</FullDownload>
+  <FullDownload>system\ProjectCharacteristics.rdf</FullDownload>
+</DownloadTask>
